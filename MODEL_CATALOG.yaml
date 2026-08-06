@@ -1,7 +1,7 @@
-# Model catalog generated 2026-08-06T06:36:29+00:00
+# Model catalog generated 2026-08-06T07:02:44+00:00
 # root: /home/gentran1991/Data2/models
 root: /home/gentran1991/Data2/models
-generated_at: 2026-08-06T06:36:29+00:00
+generated_at: 2026-08-06T07:02:44+00:00
 
 huggingface:
   - name: "Qwen/Qwen-Image"
@@ -200,32 +200,6 @@ huggingface:
         filename: "Ornith-1.0-9B-UD-Q6_K_XL.gguf"
         path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Ornith-1.0-9B-GGUF/blobs/65d8cfb3b9b0063432408bbd9acef3a43b408aaf58beb8e08181015442507737"
         bytes: 8769512544
-  - name: "unsloth/Qwen3.6-27B-MTP-GGUF"
-    snapshot: 5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace
-    directory: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-27B-MTP-GGUF/snapshots/5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace"
-    total_bytes: 12971658944
-    pieces:
-      - role: main
-        filename: "Qwen3.6-27B-UD-Q2_K_XL.gguf"
-        path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-27B-MTP-GGUF/blobs/16fb3f81a522faaecfed0402890c3471e970e732c0e3e1914f1c0d9d9253be00"
-        bytes: 12040512640
-      - role: mmproj
-        filename: "mmproj-BF16.gguf"
-        path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-27B-MTP-GGUF/blobs/05353347512982ee62317b9d8c89372bc815f4b4043580e7ef3ad411ec1a1cd3"
-        bytes: 931146304
-  - name: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
-    snapshot: 5bc3e238d916f48a861bac2f8a1990a0e9b7e98d
-    directory: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/snapshots/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d"
-    total_bytes: 23756485536
-    pieces:
-      - role: main
-        filename: "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
-        path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/blobs/55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1"
-        bytes: 22853663008
-      - role: mmproj
-        filename: "mmproj-BF16.gguf"
-        path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/blobs/da63cb47a76763c712393f8a017070188a304fa39f8aeea6edc629ed7b975cfa"
-        bytes: 902822528
   - name: "unsloth/gemma-4-12B-it-qat-GGUF"
     snapshot: 980b060c40a8539ac159e0501a3e0f66a6365af3
     directory: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--gemma-4-12B-it-qat-GGUF/snapshots/980b060c40a8539ac159e0501a3e0f66a6365af3"
@@ -262,19 +236,6 @@ huggingface:
         bytes: 251939328
 
 lmstudio:
-  - name: "DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF"
-    publisher: DavidAU
-    directory: "/home/gentran1991/Data2/models/lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF"
-    total_bytes: 13967566880
-    pieces:
-      - role: main
-        filename: "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-IQ2_M.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-IQ2_M.gguf"
-        bytes: 12124626400
-      - role: mmproj
-        filename: "mmproj-F32.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF/mmproj-F32.gguf"
-        bytes: 1842940480
   - name: "LiquidAI/LFM2.5-2.6B-GGUF"
     publisher: LiquidAI
     directory: "/home/gentran1991/Data2/models/lmstudio/models/LiquidAI/LFM2.5-2.6B-GGUF"
@@ -287,12 +248,8 @@ lmstudio:
   - name: "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF"
     publisher: llmfan46
     directory: "/home/gentran1991/Data2/models/lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF"
-    total_bytes: 51953771040
+    total_bytes: 30173457792
     pieces:
-      - role: main
-        filename: "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
-        bytes: 21780313248
       - role: main
         filename: "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q6_K.gguf"
         path: "/home/gentran1991/Data2/models/lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q6_K.gguf"
@@ -327,17 +284,6 @@ lmstudio:
         filename: "gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-mmproj-BF16.gguf"
         path: "/home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-GGUF/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-mmproj-BF16.gguf"
         bytes: 1194827840
-  - name: "llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF"
-    publisher: llmfan46
-    directory: "/home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF"
-    total_bytes: 18924
-    notes:
-      - no model weights on disk
-    pieces:
-      - role: config
-        filename: chat_template.jinja
-        path: "/home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF/chat_template.jinja"
-        bytes: 18924
   - name: "lmstudio-community/Qwen3.6-35B-A3B-GGUF"
     publisher: "lmstudio-community"
     directory: "/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/Qwen3.6-35B-A3B-GGUF"
@@ -351,19 +297,6 @@ lmstudio:
         filename: "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
         path: "/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/Qwen3.6-35B-A3B-GGUF/mmproj-Qwen3.6-35B-A3B-BF16.gguf"
         bytes: 902822016
-  - name: "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF"
-    publisher: "lmstudio-community"
-    directory: "/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF"
-    total_bytes: 15634190528
-    pieces:
-      - role: main
-        filename: "gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
-        bytes: 14439362752
-      - role: mmproj
-        filename: "mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"
-        bytes: 1194827776
   - name: "unsloth/Qwen3.6-27B-MTP-GGUF"
     publisher: unsloth
     directory: "/home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-27B-MTP-GGUF"
@@ -377,16 +310,3 @@ lmstudio:
         filename: "mmproj-F32.gguf"
         path: "/home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-27B-MTP-GGUF/mmproj-F32.gguf"
         bytes: 1842940480
-  - name: "unsloth/Qwen3.6-35B-A3B-GGUF"
-    publisher: unsloth
-    directory: "/home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-35B-A3B-GGUF"
-    total_bytes: 24146761408
-    pieces:
-      - role: main
-        filename: "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
-        bytes: 22360456160
-      - role: mmproj
-        filename: "mmproj-F32.gguf"
-        path: "/home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-35B-A3B-GGUF/mmproj-F32.gguf"
-        bytes: 1786305248

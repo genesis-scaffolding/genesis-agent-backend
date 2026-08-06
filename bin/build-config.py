@@ -202,7 +202,18 @@ def build_cmd(
 
     if files.get("mmproj"):
         sections.append(f"  --mmproj {files['mmproj']} \\")
-        if files["weight_bytes"] > MMPROJ_OFFLOAD_OVER:
+        # Recipe can force offload on/off; otherwise use the weight-size
+        # threshold.
+        mmproj_offload = recipe.get("mmproj_offload")
+        if mmproj_offload is None and default_recipe:
+            mmproj_offload = default_recipe.get("mmproj_offload")
+        if mmproj_offload is True:
+            offload = True
+        elif mmproj_offload is False:
+            offload = False
+        else:
+            offload = files["weight_bytes"] > MMPROJ_OFFLOAD_OVER
+        if offload:
             sections.append("  --no-mmproj-offload \\")
 
     spec = _opt(recipe, default_recipe, "spec") or {}

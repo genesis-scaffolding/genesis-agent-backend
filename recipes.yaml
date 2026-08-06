@@ -1,18 +1,105 @@
 # recipes.yaml — family-level profiles for build_config.py.
 #
-# match: substring keyword, matched against the model name (the part after
-#        the slash). Case-insensitive; hyphens/underscores/dots stripped.
+# ============================================================================
+# Available fields
+# ============================================================================
 #
-# Multiple recipes with the same keyword => emit one entry per recipe
-# (alternatives). Recipes whose keyword is a strict substring of another
-# matched recipe's keyword are dropped (shadowing).
+# match:                     (required for non-default recipes)
+#   Substring keyword matched against the model name (the part after `/`).
+#   Case-insensitive; hyphens, underscores, and dots in the keyword are
+#   stripped before matching. Recipes whose match is a substring of another
+#   matched recipe's keyword are SHADOWED (only the longer/more specific one
+#   applies). Recipes that share a match keyword are SIBLINGS — all emit
+#   entries (e.g. qwen3.6-thinking + qwen3.6-instruct both match "qwen3.6").
 #
-# Cascade: any field a recipe doesn't set falls back to the `default`
-# recipe below. If `default` doesn't have it either, the flag is omitted
-# entirely. Use this to keep shared knobs (ctx_min, parallel, sampling
-# baseline) in one place. Resource thresholds (kv_quant_over,
-# mmproj_offload_over) live in build_config.py — they describe the host
-# machine, not the model.
+# binary:                    (optional; cascades from default)
+#   Path to llama-server. Absolute paths used as-is; relative paths resolved
+#   against the repo root.
+#
+# sampling:                  (optional; cascades from default)
+#   Dict of sampling knobs. Recognised keys (any subset):
+#     temp, top_p, top_k, min_p, presence_penalty, repeat_penalty.
+#   Each is emitted as `--<flag> <value>`. The recipe's whole sampling dict
+#   REPLACES the default's — there's no field-level merge. So if you set
+#   sampling, include all the knobs you want, not just the ones you want
+#   to override.
+#
+# chat_template_file:        (optional)
+#   Path to a Jinja chat template file. Overrides --jinja. Used by gemma-4
+#   recipes (Unsloth's Qwen3 templates work with --jinja).
+#
+# chat_template_kwargs:      (optional)
+#   Dict of kwargs passed as --chat-template-kwargs JSON. Used by Qwen3
+#   recipes for `preserve_thinking: true` / `enable_thinking: false`.
+#
+# parallel:                  (optional; cascades from default)
+#   Number of parallel slots. Usually 1.
+#
+# spec:                      (optional)
+#   MTP speculative decoding config. Example:
+#     spec: {type: draft-mtp, n_max: 2, p_min: 0.75}
+#   Only applied if the model actually has MTP (embedded or as a
+#   separate mtp-*.gguf piece in the catalog).
+#
+# kv_cache:                  (optional)
+#   Explicit KV cache dtype. "q8_0" or "q4_0". When set, ALWAYS emits
+#   -ctk/-ctv regardless of weight size, bypassing the auto-threshold.
+#   Use this to force q8_0 KV on a specific recipe (e.g. for tight VRAM).
+#
+# mmproj_offload:            (optional)
+#   Boolean. true = always emit --no-mmproj-offload (keep vision tower in
+#   RAM); false = never emit (keep on GPU). Unset = use the auto-threshold
+#   based on weight size (KV_QUANT_OVER / MMPROJ_OFFLOAD_OVER constants in
+#   bin/build-config.py).
+#
+# ctx_min:                   (optional; cascades from default; default 131072)
+#   Floor for llama.cpp's --fit-ctx. Recipes can raise the floor (Bonsai
+#   uses 150000 to keep ctx from dropping below its tuning point). Setting
+#   ctx_min lower than default doesn't override the default; the floor is
+#   always at least the default unless you also change the default.
+#
+# ============================================================================
+# Resolution order (per field)
+# ============================================================================
+#
+# Most fields cascade: recipe value -> default recipe value -> hardcoded
+# fallback (or omitted entirely if neither has it).
+#
+# `binary` is special: recipe -> CLI --binary -> default recipe -> hardcoded.
+#
+# `mmproj_offload` has three states:
+#   recipe.mmproj_offload (True/False) -> default.mmproj_offload ->
+#   threshold-based auto (weight_bytes > MMPROJ_OFFLOAD_OVER).
+#
+# `kv_cache` is a string ("q8_0"/"q4_0") or unset. When unset, falls back
+# to threshold-based auto (weight_bytes > KV_QUANT_OVER).
+#
+# ============================================================================
+# Examples
+# ============================================================================
+#
+# Shadow the general qwen3.6 recipe to force tighter VRAM settings on the
+# 27B variant (which is ~20 GB and would NOT auto-trigger the threshold):
+#
+#   qwen3.6-27b:
+#     match: "qwen3.6-27b"   # shadows qwen3.6 (because "qwen3.6" ⊂ "qwen3.6-27b")
+#     # Sampling inherits from default unless overridden here.
+#     kv_cache: q8_0          # always-on q8_0 KV (was threshold-gated)
+#     mmproj_offload: true    # always offload mmproj (was threshold-gated)
+#
+# Force q4_0 KV on a specific model and never offload mmproj:
+#
+#   myweirdmodel:
+#     match: "myweirdmodel"
+#     kv_cache: q4_0
+#     mmproj_offload: false
+#
+# Disable a feature that was inherited from default:
+#
+#   lightmodel:
+#     match: "lightmodel"
+#     kv_cache: q4_0          # explicit -- no longer threshold-gated
+# ============================================================================
 
 recipes:
 

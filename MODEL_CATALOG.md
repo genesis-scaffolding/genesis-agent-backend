@@ -1,17 +1,17 @@
 # Model Catalog
 
 - **Root:** `/home/gentran1991/Data2/models`
-- **Generated:** 2026-08-06T06:36:29+00:00
+- **Generated:** 2026-08-06T07:02:44+00:00
 
 ## Summary
 
 | Source | Count | Total Size |
 |--------|------:|-----------:|
-| HuggingFace | 12 | 148.1 GiB |
-| LM Studio | 10 | 170.2 GiB |
-| **All** | **22** | **318.3 GiB** |
+| HuggingFace | 10 | 113.9 GiB |
+| LM Studio | 6 | 99.9 GiB |
+| **All** | **16** | **213.7 GiB** |
 
-## HuggingFace (12 repos)
+## HuggingFace (10 repos)
 
 ### `Tongyi-MAI/Z-Image-Turbo` — 30.6 GiB
 
@@ -25,23 +25,11 @@
 - **Components:** main
 - **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--krea--Krea-2-Raw/snapshots/4ad9f4b627a647fad78b3dfeebb09f2654aeb494`
 
-### `unsloth/Qwen3.6-35B-A3B-MTP-GGUF` — 22.1 GiB
-
-- **Snapshot:** `5bc3e238d916`
-- **Components:** main, mmproj
-- **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/snapshots/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d`
-
 ### `unsloth/gemma-4-26B-A4B-it-qat-GGUF` — 14.6 GiB
 
 - **Snapshot:** `7b92b5b28818`
 - **Components:** main, mmproj, mtp
 - **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--gemma-4-26B-A4B-it-qat-GGUF/snapshots/7b92b5b28818151e8669af2e45e88d6086f490dd`
-
-### `unsloth/Qwen3.6-27B-MTP-GGUF` — 12.1 GiB
-
-- **Snapshot:** `5cb35eb3dcbf`
-- **Components:** main, mmproj
-- **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.6-27B-MTP-GGUF/snapshots/5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace`
 
 ### `ostris/Z-Image-De-Turbo` — 11.5 GiB
 
@@ -85,12 +73,12 @@
 - **Components:** vae
 - **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--Qwen--Qwen-Image/snapshots/75e0b4be04f60ec59a75f475837eced720f823b6`
 
-## LM Studio (10 models)
+## LM Studio (6 models)
 
-### `llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF` — 48.4 GiB
+### `llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF` — 28.1 GiB
 
 - **Publisher:** `llmfan46`
-- **Components:** main (2), mmproj
+- **Components:** main, mmproj
 - **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF`
 
 ### `lmstudio-community/Qwen3.6-35B-A3B-GGUF` — 27.4 GiB
@@ -98,12 +86,6 @@
 - **Publisher:** `lmstudio-community`
 - **Components:** main, mmproj
 - **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/Qwen3.6-35B-A3B-GGUF`
-
-### `unsloth/Qwen3.6-35B-A3B-GGUF` — 22.5 GiB
-
-- **Publisher:** `unsloth`
-- **Components:** main, mmproj
-- **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-35B-A3B-GGUF`
 
 ### `unsloth/Qwen3.6-27B-MTP-GGUF` — 18.4 GiB
 
@@ -117,18 +99,6 @@
 - **Components:** main, mmproj
 - **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-GGUF`
 
-### `lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF` — 14.6 GiB
-
-- **Publisher:** `lmstudio-community`
-- **Components:** main, mmproj
-- **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF`
-
-### `DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF` — 13.0 GiB
-
-- **Publisher:** `DavidAU`
-- **Components:** main, mmproj
-- **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF`
-
 ### `llmfan46/gemma-4-12B-it-qat-q4_0-uncensored-heretic-GGUF` — 7.2 GiB
 
 - **Publisher:** `llmfan46`
@@ -140,10 +110,3 @@
 - **Publisher:** `LiquidAI`
 - **Components:** main
 - **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/LiquidAI/LFM2.5-2.6B-GGUF`
-
-### `llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF` — 18.5 KiB
-
-- **Publisher:** `llmfan46`
-- **Components:** —
-- **Directory:** `/home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF`
-- ⚠️ _no model weights on disk_
