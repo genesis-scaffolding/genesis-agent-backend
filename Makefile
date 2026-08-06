@@ -7,7 +7,7 @@
 #
 # Targets:
 #   make catalog [ROOT=/path]   regenerate MODEL_CATALOG.{yaml,md}
-#   make config                 regenerate config.generated.yaml
+#   make config                 regenerate config.yaml
 #   make all [ROOT=/path]       catalog + config
 #   make up                     start llama-swap (delegates to bin/up)
 
@@ -21,7 +21,7 @@ ROOT ?= $(MODELS_ROOT)
 help:
 	@echo "Targets:"
 	@echo "  make catalog [ROOT=/path]   regenerate MODEL_CATALOG.{yaml,md}"
-	@echo "  make config                 regenerate config.generated.yaml"
+	@echo "  make config                 regenerate config.yaml"
 	@echo "  make all [ROOT=/path]       catalog + config"
 	@echo "  make up                     start llama-swap (delegates to bin/up)"
 
@@ -29,9 +29,9 @@ catalog:
 	@test -n "$(ROOT)" || { echo "error: MODELS_ROOT not set. Copy .env.example to .env and edit, or pass ROOT=/path" >&2; exit 1; }
 	python3 bin/catalog.py "$(ROOT)"
 
-config: config.generated.yaml
+config: config.yaml
 
-config.generated.yaml: recipes.yaml MODEL_CATALOG.yaml bin/build-config.py
+config.yaml: recipes.yaml MODEL_CATALOG.yaml bin/build-config.py
 	python3 bin/build-config.py
 
 all: catalog config

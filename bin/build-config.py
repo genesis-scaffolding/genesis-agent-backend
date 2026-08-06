@@ -415,8 +415,8 @@ def main() -> int:
     parser.add_argument(
         "-o",
         "--output",
-        default="config.generated.yaml",
-        help="Output path (default: config.generated.yaml in cwd).",
+        default="config.yaml",
+        help="Output path (default: config.yaml in cwd).",
     )
     parser.add_argument(
         "--binary",

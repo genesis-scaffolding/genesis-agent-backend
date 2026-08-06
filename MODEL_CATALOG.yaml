@@ -1,7 +1,7 @@
-# Model catalog generated 2026-08-06T03:46:27+00:00
+# Model catalog generated 2026-08-06T06:36:29+00:00
 # root: /home/gentran1991/Data2/models
 root: /home/gentran1991/Data2/models
-generated_at: 2026-08-06T03:46:27+00:00
+generated_at: 2026-08-06T06:36:29+00:00
 
 huggingface:
   - name: "Qwen/Qwen-Image"
