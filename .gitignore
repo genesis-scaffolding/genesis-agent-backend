@@ -2,6 +2,10 @@
 vendor/llama.cpp/
 vendor/prism-llama.cpp/
 
+# Python bytecode caches
+__pycache__/
+*.pyc
+
 # llama-swap runtime state
 llama-swap.log
 .cache/
