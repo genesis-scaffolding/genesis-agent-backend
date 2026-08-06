@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# bin/up — start llama-swap for this repo's config in a tmux session.
+#
+# What it does:
+#   - tears down any existing 'swap' tmux session,
+#   - kills any stray llama-server process so port 8080 is free for llama-swap
+#     (so llama-swap can manage the model itself),
+#   - starts llama-swap with ./config.yaml, bound to 127.0.0.1:8080,
+#     with -watch-config so edits to config.yaml auto-reload (2s poll),
+#   - waits up to 60s for /v1/models, then prints the registered model list.
+#
+# Override defaults with env vars:  SESSION=swap  LOGFILE=/tmp/llama-swap.log  LISTEN=host:port
+# LISTEN=0.0.0.0 exposes llama-swap to the LAN; 127.0.0.1 keeps it loopback-only.
+#
+# First request after start triggers model load (loading ~10 GB to GPU at
+# 150k ctx + q8_0 KV takes a few seconds). Until then /v1/models reports
+# status: "unloaded".
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG="$REPO_ROOT/config.yaml"
+SESSION="${SESSION:-swap}"
+LOGFILE="${LOGFILE:-/tmp/llama-swap.log}"
+LISTEN="${LISTEN:-0.0.0.0:8080}"
+
+if ! command -v llama-swap >/dev/null 2>&1; then
+    echo "llama-swap is not on PATH (expected ~/.local/bin/llama-swap)" >&2
+    exit 1
+fi
+if [[ ! -f "$CONFIG" ]]; then
+    echo "config not found: $CONFIG" >&2
+    exit 1
+fi
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux kill-session -t "$SESSION"
+fi
+# drop a leftover bare llama-server so port 8080 is free for llama-swap
+pkill -9 -f llama-server 2>/dev/null || true
+sleep 1
+
+tmux new-session -d -s "$SESSION" "llama-swap --config $CONFIG -listen $LISTEN -watch-config 2>&1 | tee -a $LOGFILE"
+
+echo "started: tmux session '$SESSION'   |   http://$LISTEN/v1/   |   log: $LOGFILE"
+echo "waiting for http://$LISTEN/v1/models ..."
+
+for i in $(seq 1 60); do
+    if curl -sf --max-time 1 "http://$LISTEN/v1/models" >/dev/null 2>&1; then
+        echo
+        echo "llama-swap is up after ${i}s"
+        echo
+        curl -s "http://$LISTEN/v1/models" | python3 -m json.tool
+        echo
+        echo "next: send a request to load the model:"
+        echo "  curl http://$LISTEN/v1/chat/completions -H 'Content-Type: application/json' \\"
+        echo "    -d '{\"model\":\"bonsai-27b-q2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":40}'"
+        echo
+        echo "tail logs:"
+        echo "  tmux attach -t $SESSION       # Ctrl-B then D to detach"
+        echo "  tail -f $LOGFILE"
+        exit 0
+    fi
+    sleep 1
+done
+
+echo
+echo "did not become ready in 60s — tail of $LOGFILE:"
+tail -40 "$LOGFILE" 2>/dev/null || true
+exit 1

@@ -1,0 +1,10 @@
+# llama.cpp forks — clones from upstream, not committed
+vendor/llama.cpp/
+vendor/prism-llama.cpp/
+
+# llama-swap runtime state
+llama-swap.log
+.cache/
+
+# local config (paths, secrets)
+.env

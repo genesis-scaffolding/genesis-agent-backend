@@ -1,0 +1,120 @@
+# recipes.yaml — family-level profiles for build_config.py.
+#
+# match: substring keyword, matched against the model name (the part after
+#        the slash). Case-insensitive; hyphens/underscores/dots stripped.
+#
+# Multiple recipes with the same keyword => emit one entry per recipe
+# (alternatives). Recipes whose keyword is a strict substring of another
+# matched recipe's keyword are dropped (shadowing).
+#
+# Cascade: any field a recipe doesn't set falls back to the `default`
+# recipe below. If `default` doesn't have it either, the flag is omitted
+# entirely. Use this to keep shared knobs (ctx_min, parallel, sampling
+# baseline) in one place. Resource thresholds (kv_quant_over,
+# mmproj_offload_over) live in build_config.py — they describe the host
+# machine, not the model.
+
+recipes:
+
+  # ---------------------------------------------------------------------
+  # default: applied when no family recipe matches; also the source of
+  # cascaded defaults for any field a recipe omits.
+  # ---------------------------------------------------------------------
+  default:
+    binary: "vendor/llama.cpp/build/bin/llama-server"   # stock llama.cpp
+    ctx_min: 131072                   # 128k floor for --fit-ctx (2^17)
+    parallel: 1
+    sampling:
+      temp: 0.8
+      top_p: 0.95
+      top_k: 40
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6 — emit both thinking and instruct variants per model.
+  # Both share match "qwen3.6" so any Qwen3.6 repo emits two entries.
+  # Inherits ctx_min / parallel from default.
+  # ---------------------------------------------------------------------
+  qwen3.6-thinking:
+    match: "qwen3.6"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    chat_template_kwargs:
+      preserve_thinking: true
+    spec:
+      type: draft-mtp
+      n_max: 2
+
+  qwen3.6-instruct:
+    match: "qwen3.6"
+    sampling:
+      temp: 0.7
+      top_p: 0.8
+      top_k: 20
+      presence_penalty: 1.5
+      min_p: 0.0
+    chat_template_kwargs:
+      enable_thinking: false
+    spec:
+      type: draft-mtp
+      n_max: 2
+      p_min: 0.75
+
+  # ---------------------------------------------------------------------
+  # Gemma 4 — all gemma-4-* quants share this. (Add gemma4-12b /
+  # gemma4-26b overrides later if 12B and 26B need different sampling.)
+  # Inherits ctx_min / parallel from default.
+  # ---------------------------------------------------------------------
+  gemma4:
+    match: "gemma4"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 64
+    chat_template_file: "/home/gentran1991/Documents/GitHub/my-agent-backend/templates/gemma-4-chat-template.jinja"
+    spec:
+      type: draft-mtp
+      n_max: 2
+
+  # ---------------------------------------------------------------------
+  # Ornith — small text-only reasoning model. Inherits all the rest.
+  # ---------------------------------------------------------------------
+  ornith:
+    match: "ornith"
+    sampling:
+      temp: 0.6
+      top_p: 0.95
+      top_k: 20
+
+  # ---------------------------------------------------------------------
+  # Bonsai — ternary Q2_0, tight on 16 GB; force q8_0 KV + 150k ctx floor.
+  # Inherits parallel from default.
+  # ---------------------------------------------------------------------
+  bonsai:
+    binary: "vendor/prism-llama.cpp/build/bin/llama-server"   # PrismML fork; ternary Q2_0 needs custom kernels
+    match: "bonsai"
+    sampling:
+      temp: 0.7
+      top_p: 0.95
+      top_k: 20
+    kv_cache: q8_0
+    ctx_min: 150000
+
+  # ---------------------------------------------------------------------
+  # LFM2 — LiquidAI LFM2.5 series. Recommended params: temp 0.1, top_k 50,
+  # repetition_penalty 1.1 (no top_p per upstream guidance). Max context
+  # 131072 = model's training context; pinned explicitly so it doesn't
+  # track any future change to the default --fit-ctx floor.
+  # Inherits parallel from default.
+  # ---------------------------------------------------------------------
+  lfm2:
+    match: "lfm2"
+    sampling:
+      temp: 0.1
+      top_k: 50
+      repeat_penalty: 1.1
+    ctx_min: 131072

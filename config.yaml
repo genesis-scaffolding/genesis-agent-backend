@@ -1,0 +1,255 @@
+# llama-swap config for my-agent-backend
+#
+# Listens on 0.0.0.0:8080 by default (override on the CLI with -listen addr:port).
+#
+# All entries use the PrismML/llama.cpp fork from ./vendor/prism-llama.cpp
+# (CUDA-built). The 4 newer entries keep the same proven settings:
+#   -c 262144  -ngl 99  -fa on  --jinja  --parallel 1 (set where needed)
+# no KV-cache quantization (KV_TYPE=f16). The 26B and 35B have MoE layers
+# whose expert weights spill off-GPU to fit 262k ctx in 16 GB.
+
+healthCheckTimeout: 60
+logLevel: info
+
+models:
+  # ---------------------------------------------------------------------
+  # Bonsai 27B (PrismML ternary Q2_0, kept at its tuned 150k ctx + q8_0 KV)
+  # ---------------------------------------------------------------------
+  bonsai-27b-q2:
+    name: "Ternary Bonsai 27B (Q2_0)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/Data2/models/huggingface/hub/models--prism-ml--Ternary-Bonsai-27B-gguf/snapshots/20e435f518bd5b882795954aba81e80a91894321/Ternary-Bonsai-27B-Q2_0.gguf \
+        --mmproj /home/gentran1991/Data2/models/huggingface/hub/models--prism-ml--Ternary-Bonsai-27B-gguf/snapshots/20e435f518bd5b882795954aba81e80a91894321/Ternary-Bonsai-27B-mmproj-Q8_0.gguf \
+        -c 150000 -ctk q8_0 -ctv q8_0 -ngl 99 --jinja --parallel 1 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 0.7 --top-p 0.95 --top-k 20
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6-35B-A3B (MoE, all experts on CPU)
+  # ---------------------------------------------------------------------
+  qwen3-35b-a3b:
+    name: "Qwen3.6-35B-A3B Instruct (UD-Q4_K_XL)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf \
+        --mmproj /home/gentran1991/Data2/models/lmstudio/models/unsloth/Qwen3.6-35B-A3B-GGUF/mmproj-F32.gguf \
+        -c 262144 -ngl 99 --jinja -fa on \
+        --n-cpu-moe 35 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 20 \
+        --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6-35B-A3B (MoE, all experts on CPU)
+  # ---------------------------------------------------------------------
+  qwen3-35b-a3b-Q6:
+    name: "Qwen3.6-35B-A3B Instruct (Q6_K)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q6_K.gguf \
+        --mmproj /home/gentran1991/Data2/models/lmstudio/models/lmstudio-community/Qwen3.6-35B-A3B-GGUF/mmproj-Qwen3.6-35B-A3B-BF16.gguf \
+        --no-mmproj-offload \
+        -c 262144 -ngl 99 -ctk q8_0 -ctv q8_0 --jinja -fa on \
+        --n-cpu-moe 30 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 20 \
+        --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6-35B-A3B (Q6_K) — MTP variant.
+  # Q6 is ~7.5 GB heavier than the Q4 we replaced; uses the same
+  # VRAM-saver stack as qwen3-35b-a3b-Q6: mmproj on CPU/RAM, q8_0 KV
+  # cache, 30+ MoE layers on CPU. 262k ctx confirmed working on the
+  # lmstudio-community Q6 sibling entry.
+  # MTP weights are embedded in the main GGUF (no separate draft file).
+  # Unsloth Qwen sampling recipe.
+  # ---------------------------------------------------------------------
+  qwen3-35b-a3b-heretic-mtp:
+    name: "Qwen3.6-35B-A3B Instruct (Q6_K, MTP, heretic)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/Data2/models/lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q6_K.gguf \
+        --mmproj /home/gentran1991/Data2/models/lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-mmproj-BF16.gguf \
+        --no-mmproj-offload \
+        --spec-type draft-mtp --spec-draft-n-max 2 \
+        -c 262144 -ngl 99 -ctk q8_0 -ctv q8_0 --jinja -fa on --parallel 1 \
+        --n-cpu-moe 35 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 20 \
+        --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0 \ 
+        --chat-template-kwargs '{"preserve_thinking":true}'
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6-35B-A3B (UD-Q4_K_XL) — MTP variant.
+  # Same MoE offload and ctx as the non-MTP entry above. MTP weights are
+  # embedded in the main GGUF (no separate draft file). Vision tower wired up.
+  # Unsloth Qwen sampling recipe.
+  # ---------------------------------------------------------------------
+  qwen3-35b-a3b-mtp:
+    name: "Qwen3.6-35B-A3B Instruct (UD-Q4_K_XL, MTP)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/snapshots/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf \
+        --mmproj /home/gentran1991/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-MTP-GGUF/snapshots/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/mmproj-BF16.gguf \
+        --spec-type draft-mtp --spec-draft-n-max 2 \
+        -c 262144 -ngl 99 --jinja -fa on --parallel 1 \
+        --n-cpu-moe 35 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 20 \
+        --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+
+  # ---------------------------------------------------------------------
+  # gemma-4-12B-it heretic (community uncensored, dense, with mmproj)
+  # ---------------------------------------------------------------------
+  gemma-4-12b-heretic:
+    name: "gemma-4-12B-it QAT heretic (uncensored)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-12B-it-qat-q4_0-uncensored-heretic-GGUF/gemma-4-12B-it-qat-q4_0-uncensored-heretic-Q4_0.gguf \
+        --mmproj /home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-12B-it-qat-q4_0-uncensored-heretic-GGUF/gemma-4-12B-it-qat-q4_0-uncensored-heretic-mmproj-BF16.gguf \
+        -c 262144 -ngl 99 --jinja \
+        --chat-template-file /home/gentran1991/Documents/GitHub/my-agent-backend/templates/gemma-4-chat-template.jinja \
+        -fa on \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 64
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # gemma-4-26B-it heretic (community uncensored, dense, with mmproj)
+  # ---------------------------------------------------------------------
+  gemma-4-26b-heretic:
+    name: "gemma-4-26B-it QAT heretic (uncensored)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-GGUF/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-Q4_0.gguf \
+        --mmproj /home/gentran1991/Data2/models/lmstudio/models/llmfan46/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-GGUF/gemma-4-26B-A4B-it-qat-q4_0-uncensored-heretic-mmproj-BF16.gguf \
+        -c 262144 -ngl 99 --jinja \
+        --chat-template-file /home/gentran1991/Documents/GitHub/my-agent-backend/templates/gemma-4-chat-template.jinja \
+        -fa on \
+        --n-cpu-moe 25 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 64
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # gemma-4-12B-it-qat (unsloth UD-Q4_K_XL) — MTP + mmproj
+  # ---------------------------------------------------------------------
+  gemma-4-12b-qat-unsloth:
+    name: "gemma-4-12B-it QAT (unsloth, MTP)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.cache/huggingface/hub/models--unsloth--gemma-4-12B-it-qat-GGUF/snapshots/980b060c40a8539ac159e0501a3e0f66a6365af3/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf \
+        --model-draft /home/gentran1991/.cache/huggingface/hub/models--unsloth--gemma-4-12B-it-qat-GGUF/snapshots/980b060c40a8539ac159e0501a3e0f66a6365af3/mtp-gemma-4-12B-it.gguf \
+        --mmproj   /home/gentran1991/.cache/huggingface/hub/models--unsloth--gemma-4-12B-it-qat-GGUF/snapshots/980b060c40a8539ac159e0501a3e0f66a6365af3/mmproj-BF16.gguf \
+        --spec-type draft-mtp --spec-draft-n-max 2 \
+        -c 262144 -ngl 99 --jinja \
+        --chat-template-file /home/gentran1991/Documents/GitHub/my-agent-backend/templates/gemma-4-chat-template.jinja \
+        -fa on --parallel 1 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 64
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # gemma-4-26B-A4B-it-qat (unsloth UD-Q4_K_XL) — MTP + mmproj (MoE: 20 experts to CPU)
+  # ---------------------------------------------------------------------
+  gemma-4-26b-qat-unsloth:
+    name: "gemma-4-26B-A4B-it QAT (unsloth, MTP)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.cache/huggingface/hub/models--unsloth--gemma-4-26B-A4B-it-qat-GGUF/snapshots/7b92b5b28818151e8669af2e45e88d6086f490dd/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf \
+        --model-draft /home/gentran1991/.cache/huggingface/hub/models--unsloth--gemma-4-26B-A4B-it-qat-GGUF/snapshots/7b92b5b28818151e8669af2e45e88d6086f490dd/mtp-gemma-4-26B-A4B-it.gguf \
+        --mmproj   /home/gentran1991/.cache/huggingface/hub/models--unsloth--gemma-4-26B-A4B-it-qat-GGUF/snapshots/7b92b5b28818151e8669af2e45e88d6086f490dd/mmproj-BF16.gguf \
+        --spec-type draft-mtp --spec-draft-n-max 2 \
+        -c 262144 -ngl 99 --jinja \
+        --chat-template-file /home/gentran1991/Documents/GitHub/my-agent-backend/templates/gemma-4-chat-template.jinja \
+        -fa on --parallel 1 \
+        --n-cpu-moe 20 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 64
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Ornith-1.0-9B Instruct (UD-Q6_K_XL) — text-only reasoning model
+  # No MTP, no mmproj. Recommended sampling: temp=0.6.
+  # ---------------------------------------------------------------------
+  ornith-9b:
+    name: "Ornith-1.0-9B Instruct (UD-Q6_K_XL)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.cache/huggingface/hub/models--unsloth--Ornith-1.0-9B-GGUF/snapshots/a674c5a128bb74049b1bb3619f1355073db5b48c/Ornith-1.0-9B-UD-Q6_K_XL.gguf \
+        -c 200000 -ngl 99 --jinja -fa on --parallel 1 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 0.6 --top-p 0.95 --top-k 20
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6-27B-MTP (UD-Q2_K_XL) — MTP is embedded in the GGUF, no draft file.
+  # Unsloth README: -np > 1 and --mmproj NOT yet supported with MTP.
+  # mmproj is downloaded but not passed.
+  # ---------------------------------------------------------------------
+  qwen3-27b-mtp:
+    name: "Qwen3.6-27B-MTP Instruct (UD-Q2_K_XL)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/prism-llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.cache/huggingface/hub/models--unsloth--Qwen3.6-27B-MTP-GGUF/snapshots/5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace/Qwen3.6-27B-UD-Q2_K_XL.gguf \
+        --spec-type draft-mtp --spec-draft-n-max 2 \
+        -c 60000 -ctk q8_0 -ctv q8_0 -ngl 99 --jinja -fa on --parallel 1 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 20 \
+        --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+    
+  # ---------------------------------------------------------------------
+  # Qwen3.6-27B Fable Fusion (DavidAU IQ2_M, MTP) — uncensored heretic.
+  # ---------------------------------------------------------------------
+  qwen3-27b-fable-mtp:
+    name: "Qwen3.6-27B Fable Fusion (DavidAU IQ2_M, MTP)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-IQ2_M.gguf \
+        # --mmproj /home/gentran1991/.lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF/mmproj-F32.gguf \
+        --spec-type draft-mtp --spec-draft-n-max 2 --spec-draft-p-min 0.75 \
+        -c 60000 -ctk q8_0 -ctv q8_0 -ngl 99 --jinja -fa on --parallel 1 \
+        # -c 65000 -ngl 99 --no-kv-offload --jinja -fa on --parallel 1 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0 \
+        --chat-template-kwargs '{"preserve_thinking":true}'
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+
+  # ---------------------------------------------------------------------
+  # Qwen3.6-27B Fable Fusion (DavidAU IQ2_M, MTP) — uncensored heretic. no thinking
+  # ---------------------------------------------------------------------
+  qwen3-27b-fable-mtp-no-thinking:
+    name: "Qwen3.6-27B Fable Fusion (DavidAU IQ2_M, MTP)"
+    cmd: |
+      /home/gentran1991/Documents/GitHub/my-agent-backend/vendor/llama.cpp/build/bin/llama-server \
+        --model /home/gentran1991/.lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-IQ2_M.gguf \
+        # --mmproj /home/gentran1991/.lmstudio/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF/mmproj-F32.gguf \
+        --spec-type draft-mtp --spec-draft-n-max 2 --spec-draft-p-min 0.75 \
+        -c 60000 -ctk q8_0 -ctv q8_0 -ngl 99 --jinja -fa on --parallel 1 \
+        # -c 65000 -ngl 99 --no-kv-offload --jinja -fa on --parallel 1 \
+        --port ${PORT} --host 127.0.0.1 \
+        --temp 0.7 --top-p 0.8 --top-k 20 --presence-penalty 1.5 --min-p 0.00 \
+        --chat-template-kwargs '{"enable_thinking":false}'
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
