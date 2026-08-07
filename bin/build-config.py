@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -268,7 +269,9 @@ def build_cmd(
 
     reasoning_budget_message = _opt(recipe, default_recipe, "reasoning_budget_message")
     if reasoning_budget_message:
-        runtime.extend(["--reasoning-budget-message", reasoning_budget_message])
+        # Quote so the message survives the shell as a single argv token;
+        # llama-server's parser does not understand shell-style quoting.
+        runtime.extend(["--reasoning-budget-message", shlex.quote(reasoning_budget_message)])
 
     runtime.extend(["--jinja", "-fa", "on"])
     sections.append("  " + " ".join(runtime) + " \\")
