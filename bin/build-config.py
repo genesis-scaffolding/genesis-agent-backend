@@ -262,6 +262,14 @@ def build_cmd(
     if parallel is not None:
         runtime.extend(["--parallel", str(parallel)])
 
+    reasoning_budget = _opt(recipe, default_recipe, "reasoning_budget")
+    if reasoning_budget is not None and reasoning_budget >= 0:
+        runtime.extend(["--reasoning-budget", str(reasoning_budget)])
+
+    reasoning_budget_message = _opt(recipe, default_recipe, "reasoning_budget_message")
+    if reasoning_budget_message:
+        runtime.extend(["--reasoning-budget-message", reasoning_budget_message])
+
     runtime.extend(["--jinja", "-fa", "on"])
     sections.append("  " + " ".join(runtime) + " \\")
 
