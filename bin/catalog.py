@@ -68,6 +68,25 @@ SKIP_FILENAMES = {
 }
 
 
+def _write_if_changed(path: Path, payload: str) -> bool:
+    """Write ``payload`` to ``path`` only if the existing contents differ.
+
+    Preserving the existing mtime when the content is unchanged is what
+    keeps llama-swap's -watch-config (and any other consumer that watches
+    these generated files) from reloading on a no-op rebuild. Returns
+    True when a write actually happened.
+    """
+    try:
+        existing = path.read_text()
+    except FileNotFoundError:
+        path.write_text(payload)
+        return True
+    if existing == payload:
+        return False
+    path.write_text(payload)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -483,9 +502,10 @@ def main() -> int:
     output = Path(args.output).expanduser()
     if not output.is_absolute():
         output = (Path.cwd() / output).resolve()
-    output.write_text(emit_yaml(data))
-
-    print(f"wrote {output}", file=sys.stderr)
+    if _write_if_changed(output, emit_yaml(data)):
+        print(f"wrote {output}", file=sys.stderr)
+    else:
+        print(f"unchanged {output}", file=sys.stderr)
     print(
         f"  {len(hf_entries)} HuggingFace repos, {len(lms_entries)} LM Studio models",
         file=sys.stderr,
@@ -493,8 +513,10 @@ def main() -> int:
 
     if not args.no_markdown:
         md_output = output.with_suffix(".md")
-        md_output.write_text(emit_markdown(data))
-        print(f"wrote {md_output}", file=sys.stderr)
+        if _write_if_changed(md_output, emit_markdown(data)):
+            print(f"wrote {md_output}", file=sys.stderr)
+        else:
+            print(f"unchanged {md_output}", file=sys.stderr)
 
     return 0
 

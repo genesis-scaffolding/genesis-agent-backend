@@ -1,17 +1,17 @@
 # Model Catalog
 
 - **Root:** `/home/gentran1991/Data2/models`
-- **Generated:** 2026-08-06T07:14:32+00:00
+- **Generated:** 2026-08-07T06:30:01+00:00
 
 ## Summary
 
 | Source | Count | Total Size |
 |--------|------:|-----------:|
-| HuggingFace | 10 | 113.9 GiB |
+| HuggingFace | 11 | 123.1 GiB |
 | LM Studio | 6 | 99.9 GiB |
-| **All** | **16** | **213.7 GiB** |
+| **All** | **17** | **223.0 GiB** |
 
-## HuggingFace (10 repos)
+## HuggingFace (11 repos)
 
 ### `Tongyi-MAI/Z-Image-Turbo` — 30.6 GiB
 
@@ -36,6 +36,12 @@
 - **Snapshot:** `9da355082d63`
 - **Components:** transformer (2)
 - **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--ostris--Z-Image-De-Turbo/snapshots/9da355082d6374634080361054e712a08cc54af1`
+
+### `unsloth/Qwen3.5-9B-MTP-GGUF` — 9.2 GiB
+
+- **Snapshot:** `9716a636ee4b`
+- **Components:** main, mmproj
+- **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.5-9B-MTP-GGUF/snapshots/9716a636ee4bddc3fed678220b7a33dd2a4160ae`
 
 ### `prism-ml/Ternary-Bonsai-27B-gguf` — 9.1 GiB
 

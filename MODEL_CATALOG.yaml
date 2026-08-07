@@ -1,7 +1,7 @@
-# Model catalog generated 2026-08-06T07:14:32+00:00
+# Model catalog generated 2026-08-07T06:30:01+00:00
 # root: /home/gentran1991/Data2/models
 root: /home/gentran1991/Data2/models
-generated_at: 2026-08-06T07:14:32+00:00
+generated_at: 2026-08-07T06:30:01+00:00
 
 huggingface:
   - name: "Qwen/Qwen-Image"
@@ -200,6 +200,19 @@ huggingface:
         filename: "Ornith-1.0-9B-UD-Q6_K_XL.gguf"
         path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Ornith-1.0-9B-GGUF/blobs/65d8cfb3b9b0063432408bbd9acef3a43b408aaf58beb8e08181015442507737"
         bytes: 8769512544
+  - name: "unsloth/Qwen3.5-9B-MTP-GGUF"
+    snapshot: 9716a636ee4bddc3fed678220b7a33dd2a4160ae
+    directory: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.5-9B-MTP-GGUF/snapshots/9716a636ee4bddc3fed678220b7a33dd2a4160ae"
+    total_bytes: 9909144384
+    pieces:
+      - role: main
+        filename: "Qwen3.5-9B-UD-Q6_K_XL.gguf"
+        path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.5-9B-MTP-GGUF/blobs/a6d6c0ace780ea91d59a3ef5050a96b6ebbf416d94e6b23c191d1f492a6276f0"
+        bytes: 8987439456
+      - role: mmproj
+        filename: "mmproj-BF16.gguf"
+        path: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--Qwen3.5-9B-MTP-GGUF/blobs/73c90471c349fec797f3969b59249259318ee3fa855a684da7ef35a46f063a9e"
+        bytes: 921704928
   - name: "unsloth/gemma-4-12B-it-qat-GGUF"
     snapshot: 980b060c40a8539ac159e0501a3e0f66a6365af3
     directory: "/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--gemma-4-12B-it-qat-GGUF/snapshots/980b060c40a8539ac159e0501a3e0f66a6365af3"

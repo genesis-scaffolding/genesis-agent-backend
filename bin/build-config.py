@@ -48,6 +48,25 @@ KV_QUANT_OVER = 25_000_000_000       # add -ctk q8_0 -ctv q8_0 above this
 MMPROJ_OFFLOAD_OVER = 25_000_000_000 # add --no-mmproj-offload above this
 
 
+def _write_if_changed(path: Path, payload: str) -> bool:
+    """Write ``payload`` to ``path`` only if the existing contents differ.
+
+    Preserving the existing mtime when the content is unchanged is what
+    keeps llama-swap's -watch-config from reloading the registry (and
+    killing any in-flight request) on a no-op rebuild. Returns True when
+    a write actually happened.
+    """
+    try:
+        existing = path.read_text()
+    except FileNotFoundError:
+        path.write_text(payload)
+        return True
+    if existing == payload:
+        return False
+    path.write_text(payload)
+    return True
+
+
 def _opt(recipe: dict, default_recipe: dict | None, key: str):
     """Resolve an option: recipe's value if set, else default recipe's,
     else None. Used so the `default` recipe in recipes.yaml acts as a
@@ -496,13 +515,15 @@ def main() -> int:
     output = Path(args.output).expanduser()
     if not output.is_absolute():
         output = (Path.cwd() / output).resolve()
-    output.write_text(emit_yaml(
+    payload = emit_yaml(
         entries,
         catalog.get("root", ""),
         datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    ))
-
-    print(f"wrote {output}", file=sys.stderr)
+    )
+    if _write_if_changed(output, payload):
+        print(f"wrote {output}", file=sys.stderr)
+    else:
+        print(f"unchanged {output}", file=sys.stderr)
     print(f"  {len(entries)} entries emitted, {skipped} skipped", file=sys.stderr)
     print("  recipe matches:", file=sys.stderr)
     for name in sorted(matched_counts):

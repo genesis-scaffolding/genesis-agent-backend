@@ -12,3 +12,6 @@ llama-swap.log
 
 # local config (paths, secrets)
 .env
+
+# generated pi-agent models (rebuild with make pi-models.json)
+pi-models.json
