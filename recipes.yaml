@@ -170,6 +170,7 @@ recipes:
       type: draft-mtp
       n_max: 2
     reasoning_budget: 12288
+    reasoning_budget_message: "Final answer:"
 
   qwen3.6-instruct:
     match: "qwen3.6"
@@ -211,6 +212,7 @@ recipes:
     kv_cache: q8_0
     mmproj_offload: true
     reasoning_budget: 16384
+    reasoning_budget_message: "Final answer:"
 
   qwen3.6-27b-instruct:
     match: "qwen3.6-27b"
@@ -246,6 +248,7 @@ recipes:
       type: draft-mtp
       n_max: 2
     reasoning_budget: 8192
+    reasoning_budget_message: "Final answer:"
 
   # ---------------------------------------------------------------------
   # Ornith — small text-only reasoning model. Inherits all the rest.
@@ -286,3 +289,4 @@ recipes:
       repeat_penalty: 1.1
     ctx_min: 131072
     reasoning_budget: 4096
+    reasoning_budget_message: "Final answer:"
