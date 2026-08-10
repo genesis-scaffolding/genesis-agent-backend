@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from genesis_worker.catalog.build import CatalogService
+from genesis_worker.settings import PathsSettings, Settings
+from genesis_worker.sources import HuggingFaceSource, LMSource, SourceRegistry
 
 
 @pytest.fixture
@@ -27,8 +29,17 @@ def fake_vault(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_rescan_merges_hf_and_lms(fake_vault: Path) -> None:
-    cat = CatalogService(fake_vault).rescan()
+@pytest.fixture
+def registry_for(fake_vault: Path) -> SourceRegistry:
+    """A SourceRegistry pointed at the fake vault via settings."""
+    return SourceRegistry(
+        Settings(paths=PathsSettings(vault_path=fake_vault)),
+        [HuggingFaceSource, LMSource],
+    )
+
+
+def test_rescan_merges_hf_and_lms(registry_for: SourceRegistry, fake_vault: Path) -> None:
+    cat = CatalogService(registry_for).rescan()
     assert len(cat.huggingface) == 1
     assert len(cat.lmstudio) == 1
     assert cat.huggingface[0].name == "acme/demo"
@@ -36,19 +47,23 @@ def test_rescan_merges_hf_and_lms(fake_vault: Path) -> None:
     assert cat.root == str(fake_vault)
 
 
-def test_rescan_populates_total_bytes(fake_vault: Path) -> None:
-    cat = CatalogService(fake_vault).rescan()
+def test_rescan_populates_total_bytes(registry_for: SourceRegistry) -> None:
+    cat = CatalogService(registry_for).rescan()
     assert cat.huggingface[0].total_bytes == 1024
     assert cat.lmstudio[0].total_bytes == 512
 
 
 def test_rescan_handles_empty_vault(tmp_path: Path) -> None:
-    cat = CatalogService(tmp_path).rescan()
+    registry = SourceRegistry(
+        Settings(paths=PathsSettings(vault_path=tmp_path)),
+        [HuggingFaceSource, LMSource],
+    )
+    cat = CatalogService(registry).rescan()
     assert cat.huggingface == []
     assert cat.lmstudio == []
 
 
-def test_rescan_records_source_label(fake_vault: Path) -> None:
-    cat = CatalogService(fake_vault).rescan()
+def test_rescan_records_source_label(registry_for: SourceRegistry) -> None:
+    cat = CatalogService(registry_for).rescan()
     assert cat.huggingface[0].source == "huggingface"
     assert cat.lmstudio[0].source == "lmstudio"

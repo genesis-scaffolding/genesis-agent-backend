@@ -156,3 +156,160 @@ The docstring even calls it a "mirror" of the source registry. Mirror, but also 
 - Exposes `.get(name)` and `.all()` returning service instances
 
 This could even be a shared mixin/base so both registries share the same bootstrap + instantiation logic.
+
+---
+
+## [srv] Missing _base.py and LlamaSwapService per spec-001
+
+**File:** `genesis_worker/services/` (package-level)
+
+**Problem:** Per spec-001's layout, the services package should have:
+
+```
+services/
+├── _base.py               # InferenceService protocol, dataclasses
+├── _registry.py           # exists
+└── llama_swap/
+    ├── service.py         # LlamaSwapService class
+    ├── lifecycle.py       # tmux + curl lifecycle
+    ├── agent_export.py    # pi-models.json emission
+    ├── recipes.py         # exists (Phase 3)
+    ├── config.py          # exists (Phase 4)
+    └── overrides.py       # exists (Phase 4)
+```
+
+But `services/_base.py` and `llama_swap/service.py` are **completely missing**.
+
+### What `_base.py` should contain (per spec-001 + plan-002):
+
+- **Dataclasses:** `ServiceState`, `ServiceCapabilities`, `ServiceResourceEstimate`, `ServiceStatus`, `StartResult`, `StopResult`
+- **Protocol:** `InferenceService` with methods for start/stop/status/capabilities
+
+### What `llama_swap/service.py` should contain (per plan-002, Phase 5):
+
+- **`LlamaSwapService`** class implementing `InferenceService` — the actual wrapper around llama-swap that exposes the lifecycle (start, stop, status), capabilities (GPU, memory, quantization support), and health-checking.
+
+The code currently has the config/recipe/override layer (Phase 3–4) but never got to the service lifecycle layer (Phase 5) or the base protocol. The llama-swap service is essentially "half-built" — it can generate config but doesn't have a class that orchestrates the running server.
+
+---
+
+## [svc] build_config hardcodes source keys instead of iterating catalog dynamically
+
+**File:** `genesis_worker/services/llama_swap/config.py`
+
+**Problem:** `build_config()` hardcodes the two known source types:
+
+```python
+for source_key in ("huggingface", "lmstudio"):
+    for entry in getattr(catalog, source_key, []):
+```
+
+It reads entries from `catalog.huggingface` and `catalog.lmstudio` by name. If a new source is added (e.g. ModelScope, Civitai) the catalog gains a new attribute like `catalog.modelscope` but `build_config` never visits it. Config generation silently skips it.
+
+**Suggested fix:** Instead of hardcoding source names, `build_config` should iterate over the catalog in a source-agnostic way. Options:
+
+1. **Catalog exposes a unified accessor:**
+   ```python
+   # In Catalog schema:
+   def by_source(self) -> dict[str, list[ModelEntry]]:
+       ...  # returns {"huggingface": [...], "lmstudio": [...], ...}
+   ```
+   Then `build_config` does:
+   ```python
+   for source_key, entries in catalog.by_source():
+       for entry in entries:
+```
+
+2. **Build a per-source lookup inside `build_config`:**
+   ```python
+   source_map: dict[str, list[ModelEntry]] = {}
+   for entry in catalog.huggingface:
+       source_map.setdefault("huggingface", []).append(entry)
+   # ... but this is basically the same as #1, just computed at runtime
+   ```
+
+Either way, the list of sources should come from the catalog itself, not from a hardcoded tuple. This keeps config generation from silently ignoring new model sources.
+
+---
+
+## [cat] schema.py: Catalog hardcodes source fields
+
+**File:** `genesis_worker/catalog/schema.py`
+
+**Problem:** The `Catalog` class has hardcoded fields:
+
+```python
+class Catalog(BaseModel):
+    root: str
+    generated_at: str
+    huggingface: list[ModelEntry] = Field(default_factory=list)
+    lmstudio: list[ModelEntry] = Field(default_factory=list)
+```
+
+Adding a third source (e.g. ModelScope) requires modifying this class — the schema itself is not open to new sources. The `source` field on `ModelEntry` is present but unused by `Catalog`'s structure; all entries from one source land in one hardcoded attribute.
+
+**Suggested fix:** Change `Catalog` to store entries by source dynamically:
+
+```python
+class Catalog(BaseModel):
+    root: str
+    generated_at: str
+    sources: dict[str, list[ModelEntry]] = Field(default_factory=dict)
+
+    def by_source(self, name: str) -> list[ModelEntry]:
+        return self.sources.get(name, [])
+```
+
+Or keep backwards-compat properties:
+
+```python
+    @property
+    def huggingface(self) -> list[ModelEntry]:
+        return self.sources.get("huggingface", [])
+```
+
+This way the schema is open for new sources, existing code accessing `.huggingface` still works, and downstream consumers can iterate `sources.keys()` to discover all available sources.
+
+---
+
+## [cat] build.py: _build_catalog and _override_source_local_path both hardcode sources
+
+**File:** `genesis_worker/catalog/build.py`
+
+**Problem:** Two functions duplicate the same hardcoded-source assumption:
+
+```python
+# _build_catalog:
+by_source: dict[str, list[ModelEntry]] = {"huggingface": [], "lmstudio": []}
+# ... then later:
+return Catalog(
+    ...
+    huggingface=by_source.get("huggingface", []),
+    lmstudio=by_source.get("lmstudio", []),
+)
+
+# _override_source_local_path:
+if source.name == "huggingface":
+    source._local_path = vault_path / "huggingface" / "hub"
+elif source.name == "lmstudio":
+    source._local_path = vault_path / "lmstudio" / "models"
+```
+
+Both are blind to new sources. `_override_source_local_path` especially — a new source gets `None` passed as its local path, causing it to walk the wrong directory or fail `is_available()`.
+
+**Suggested fix:**
+
+1. **`_build_catalog`** — if `Catalog` is changed to a dynamic `sources` dict (see above), this becomes trivial: just insert into the dict, no pre-seeding needed.
+
+2. **`_override_source_local_path`** — instead of hardcoding source→path mappings, use a convention or a registry lookup. Options:
+
+   - **Convention-based:** Sources declare their vault subdirectory as a class attribute:
+     ```python
+     class HuggingFaceSource:
+         vault_subdir = "huggingface/hub"
+     ```
+     Then the override just concatenates: `vault_path / source.vault_subdir`
+
+   - **Registry-based:** The source registry maps each source name to its vault path prefix.
+
+   This makes adding a new source a one-line change (add the class + register it) instead of requiring a second edit in `_override_source_local_path`.

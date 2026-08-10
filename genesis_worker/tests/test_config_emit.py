@@ -22,12 +22,19 @@ from genesis_worker.services.llama_swap.config import (
     write_config,
 )
 from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
+from genesis_worker.settings import PathsSettings, Settings
+from genesis_worker.sources import HuggingFaceSource, LMSource, SourceRegistry
 
 
 @pytest.fixture(scope="module")
 def real_catalog():
     """Build a catalog from the real vault. Module-scoped: expensive."""
-    return CatalogService(Path("/home/gentran1991/Data2/models")).rescan()
+    vault = Path("/home/gentran1991/Data2/models")
+    registry = SourceRegistry(
+        Settings(paths=PathsSettings(vault_path=vault)),
+        [HuggingFaceSource, LMSource],
+    )
+    return CatalogService(registry).rescan()
 
 
 @pytest.fixture(scope="module")

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..sources._base import ModelPiece
+from ..models import ModelPiece
 
 
 class ModelEntry(BaseModel):

@@ -1,49 +1,42 @@
 """Catalog build service.
 
-Iterates every registered source, asks each for its discovered models,
-merges them into one :class:`Catalog`. PyYAML emission (ADR-006) lives in
-the writer layer at :mod:`genesis_worker.catalog.emit`.
+Iterates every registered source via :class:`SourceRegistry`, asks each
+for its discovered models, merges them into one :class:`Catalog`.
+PyYAML emission (ADR-006) lives in the writer layer at
+:mod:`genesis_worker.catalog.emit`.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
-from ..sources._base import DiscoveredModel
-from ..sources._registry import all_sources
+from ..models import DiscoveredModel
+from ..sources._registry import SourceRegistry
 from .schema import Catalog, ModelEntry
 
 
 class CatalogService:
-    """Walks the vault and produces a unified catalog."""
+    """Walks the vault and produces a unified catalog.
 
-    def __init__(self, vault_path: Path) -> None:
-        self.vault_path = vault_path
+    The :class:`SourceRegistry` owns path resolution for every
+    registered source; this service just walks them in order. The
+    catalog's ``root`` is the registry's ``vault_path``.
+    """
+
+    def __init__(self, registry: SourceRegistry) -> None:
+        self._registry = registry
+
+    @property
+    def vault_path(self):
+        return self._registry.vault_path
 
     def rescan(self) -> Catalog:
         """Re-walk every source and merge results."""
         discovered: list[DiscoveredModel] = []
-        for source in all_sources():
-            source_local = _override_source_local_path(source, self.vault_path)
-            if source_local.is_available():
-                discovered.extend(source_local.walk())
-        return _build_catalog(discovered, root=str(self.vault_path))
-
-
-def _override_source_local_path(source, vault_path: Path):
-    """Temporarily point a source at a specific vault path.
-
-    The source classes' ``local_path()`` defaults are XDG dirs; this
-    helper sets ``_local_path`` so the source walks the vault the user
-    actually uses. The source's ``is_available()`` already checks
-    ``local_path()``, so this just routes to the right place.
-    """
-    if source.name == "huggingface":
-        source._local_path = vault_path / "huggingface" / "hub"
-    elif source.name == "lmstudio":
-        source._local_path = vault_path / "lmstudio" / "models"
-    return source
+        for source in self._registry.all():
+            if source.is_available():
+                discovered.extend(source.walk())
+        return _build_catalog(discovered, root=str(self._registry.vault_path))
 
 
 def _build_catalog(discovered: list[DiscoveredModel], *, root: str) -> Catalog:
