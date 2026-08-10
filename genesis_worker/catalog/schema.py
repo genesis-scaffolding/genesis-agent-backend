@@ -34,5 +34,25 @@ class Catalog(BaseModel):
     huggingface: list[ModelEntry] = Field(default_factory=list)
     lmstudio: list[ModelEntry] = Field(default_factory=list)
 
+    def by_source(self) -> dict[str, list[ModelEntry]]:
+        """Return entries grouped by source name.
+
+        Source-agnostic iteration over the catalog. Walks the model's
+        declared fields and returns any field whose value is a list of
+        :class:`ModelEntry` (works for empty lists too).
+
+        Adding a new source field (e.g. ``modelscope: list[ModelEntry]``)
+        automatically appears in this mapping — no second edit in
+        downstream consumers needed.
+        """
+        result: dict[str, list[ModelEntry]] = {}
+        for field_name in type(self).model_fields:
+            value = getattr(self, field_name)
+            if isinstance(value, list) and all(
+                isinstance(v, ModelEntry) for v in value
+            ):
+                result[field_name] = value
+        return result
+
 
 __all__ = ["Catalog", "ModelEntry"]

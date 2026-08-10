@@ -404,8 +404,8 @@ def build_config(
     entries: list[tuple[str, dict]] = []
     all_ids: set[str] = set()
 
-    for source_key in ("huggingface", "lmstudio"):
-        for entry in getattr(catalog, source_key, []):
+    for source_key, entries_for_source in catalog.by_source().items():
+        for entry in entries_for_source:
             if not _is_llm_candidate(entry, source_key):
                 continue
             resolved = recipes.resolve(entry.name)

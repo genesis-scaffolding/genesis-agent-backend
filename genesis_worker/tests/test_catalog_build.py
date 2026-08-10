@@ -38,6 +38,13 @@ def registry_for(fake_vault: Path) -> SourceRegistry:
     )
 
 
+def _empty_registry(p: Path) -> SourceRegistry:
+    return SourceRegistry(
+        Settings(paths=PathsSettings(vault_path=p)),
+        [HuggingFaceSource, LMSource],
+    )
+
+
 def test_rescan_merges_hf_and_lms(registry_for: SourceRegistry, fake_vault: Path) -> None:
     cat = CatalogService(registry_for).rescan()
     assert len(cat.huggingface) == 1
@@ -54,11 +61,7 @@ def test_rescan_populates_total_bytes(registry_for: SourceRegistry) -> None:
 
 
 def test_rescan_handles_empty_vault(tmp_path: Path) -> None:
-    registry = SourceRegistry(
-        Settings(paths=PathsSettings(vault_path=tmp_path)),
-        [HuggingFaceSource, LMSource],
-    )
-    cat = CatalogService(registry).rescan()
+    cat = CatalogService(_empty_registry(tmp_path)).rescan()
     assert cat.huggingface == []
     assert cat.lmstudio == []
 
@@ -67,3 +70,34 @@ def test_rescan_records_source_label(registry_for: SourceRegistry) -> None:
     cat = CatalogService(registry_for).rescan()
     assert cat.huggingface[0].source == "huggingface"
     assert cat.lmstudio[0].source == "lmstudio"
+
+
+# ---------------------------------------------------------------------------
+# Catalog.by_source() — source-agnostic iteration
+# ---------------------------------------------------------------------------
+
+
+def test_by_source_groups_entries(tmp_path: Path) -> None:
+    """``by_source()`` returns ``{field_name: [entries]}`` for every source field."""
+    cat = CatalogService(_empty_registry(tmp_path)).rescan()
+    grouped = cat.by_source()
+    assert set(grouped) == {"huggingface", "lmstudio"}
+    # Same object identity — accessor returns the field directly.
+    assert grouped["huggingface"] is cat.huggingface
+    assert grouped["lmstudio"] is cat.lmstudio
+
+
+def test_by_source_works_for_empty_catalog(tmp_path: Path) -> None:
+    """An empty catalog returns ``{huggingface: [], lmstudio: []}``."""
+    cat = CatalogService(_empty_registry(tmp_path)).rescan()
+    assert cat.by_source() == {"huggingface": [], "lmstudio": []}
+
+
+def test_by_source_after_population(registry_for: SourceRegistry) -> None:
+    """After rescan, ``by_source()`` returns the populated per-source lists."""
+    cat = CatalogService(registry_for).rescan()
+    grouped = cat.by_source()
+    assert len(grouped["huggingface"]) == 1
+    assert len(grouped["lmstudio"]) == 1
+    assert grouped["huggingface"][0].name == "acme/demo"
+    assert grouped["lmstudio"][0].name == "acme/demo-lm"
