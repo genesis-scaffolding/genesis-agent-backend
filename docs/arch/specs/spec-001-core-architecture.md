@@ -13,8 +13,9 @@ Both extension axes — model sources and inference services — follow the same
 - A **Protocol** declares the interface a concrete class must satisfy.
 - Each concrete implementation lives in its own subpackage under the axis's package, with the class in `source.py` / `service.py` and the package's `__init__.py` re-exporting it.
 - A **Registry facade** (`SourceRegistry`, `ServiceRegistry`) is the single point of construction. On construction it auto-discovers every subpackage under its axis, imports each, finds the concrete class by attribute pattern, resolves any framework-level wiring (paths, settings), and instantiates it.
+- A **Package-level facade** (`GenesisWorker` in `genesis_worker/facade.py`) sits on top of both registries and the catalog service. It is the single public entry point that CLI scripts, Streamlit pages, and external consumers (e.g. the orchestrator) use to drive the worker.
 
-There is **no decorator-based registration, no explicit class list, and no module-level state** — the registry walks the package and finds new implementations automatically. Adding a new source or service is one new subpackage.
+There is **no decorator-based registration, no explicit class list, and no module-level state** — the registries walk their packages and find new implementations automatically. Adding a new source or service is one new subpackage; the registries and the facade pick it up with no edits anywhere else.
 
 Sources and services are **pure logic**: they declare their wiring needs (`vault_subdir` for sources; `settings` for services) and the framework resolves those needs at construction time. Sources do not import `xdg_path`; services do not read settings on their own.
 
@@ -41,7 +42,7 @@ my-agent-backend/
 └── genesis_worker/                # NEW
     ├── __init__.py
     ├── models.py                  # DiscoveredModel, ModelPiece (hoisted from sources; shared with future axes)
-    ├── facade.py                  # Phase 8 (spec-003)
+    ├── facade.py                  # GenesisWorker — single public entry point for CLI / Streamlit / external consumers
     ├── settings.py                # Phase 0
     ├── paths.py                   # Phase 0
     ├── sources/
@@ -74,6 +75,7 @@ my-agent-backend/
     └── tests/
         ├── test_paths.py
         ├── test_settings.py
+        ├── test_facade.py            # GenesisWorker facade
         ├── test_sources_registry.py   # SourceRegistry facade contract
         ├── test_sources_huggingface.py
         ├── test_sources_lmstudio.py
@@ -240,6 +242,116 @@ class Settings(BaseSettings):
 ```
 
 Per-source `local_path` is `Path | None`: an absolute path overrides the default; `None` falls through to `vault_subdir`. (A future tightening to `str | None` would let users set portable relative paths — see plan-001 post-v1 notes.)
+
+### `genesis_worker/facade.py`
+
+The package-level facade. The single public entry point that CLI scripts, Streamlit pages, and external consumers use to drive the worker. Owns the settings, source registry, service registry, and catalog service; consumers ask the worker for what they need rather than reaching into the registries directly.
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from .catalog.build import CatalogService
+from .catalog.schema import Catalog
+from .services._base import ServiceCapabilities
+from .services._registry import ServiceRegistry
+from .sources._registry import SourceRegistry
+
+if TYPE_CHECKING:
+    from .settings import Settings
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    """Display-oriented view of one registered source."""
+
+    name: str
+    display_name: str
+    can_acquire: bool
+    is_available: bool
+
+
+@dataclass(frozen=True)
+class ServiceInfo:
+    """Display-oriented view of one registered service."""
+
+    name: str
+    display_name: str
+    capabilities: ServiceCapabilities
+
+
+class GenesisWorker:
+    """Top-level facade for the worker.
+
+    Construction wires together settings, source registry, service
+    registry, and catalog service. Consumers (CLI, Streamlit, tests)
+    ask the worker for what they need via the public methods; they do
+    not reach into the registries directly.
+
+    Methods that depend on spec-002 (acquire flows, lifecycle plumbing,
+    metrics collection) are intentionally absent here — they land in
+    plan-002/3 once ``AcquireSession`` and ``LlamaSwapService`` lifecycle
+    are implemented.
+    """
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings if settings is not None else _default_settings()
+        self._source_registry = SourceRegistry(self._settings)
+        self._service_registry = ServiceRegistry(self._settings)
+        self._catalog_service = CatalogService(self._source_registry)
+        self._catalog_cache: Catalog | None = None
+
+    # --- Settings / registries (escape hatches) ----------------------------
+
+    @property
+    def settings(self) -> Settings: ...
+    @property
+    def sources(self) -> SourceRegistry: ...
+    @property
+    def services(self) -> ServiceRegistry: ...
+    @property
+    def catalog_service(self) -> CatalogService: ...
+
+    # --- Catalog ------------------------------------------------------------
+
+    def rescan_catalog(self) -> Catalog:
+        """Re-walk the vault and return the unified catalog. Updates the cache."""
+        self._catalog_cache = self._catalog_service.rescan()
+        return self._catalog_cache
+
+    def catalog(self) -> Catalog:
+        """Return the most recently scanned catalog, scanning on first call."""
+        if self._catalog_cache is None:
+            self._catalog_cache = self._catalog_service.rescan()
+        return self._catalog_cache
+
+    # --- Inspection (for UI / CLI listings) ---------------------------------
+
+    def list_sources(self) -> list[SourceInfo]: ...
+    def list_services(self) -> list[ServiceInfo]: ...
+
+
+def _default_settings() -> Settings:
+    from .settings import Settings as _Settings
+    return _Settings()
+```
+
+Typical usage from a CLI script or Streamlit page:
+
+```python
+from genesis_worker import GenesisWorker
+
+worker = GenesisWorker()
+for info in worker.list_sources():
+    print(info.display_name, "available" if info.is_available else "missing")
+for info in worker.list_services():
+    print(info.display_name, info.capabilities.can_serve_llm)
+catalog = worker.rescan_catalog()
+```
+
+The facade's `__init__.py` re-exports `GenesisWorker`, `SourceInfo`, and `ServiceInfo` so the import line stays short.
 
 ### `genesis_worker/models.py`
 
@@ -1046,6 +1158,7 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 
 - `test_paths.py`: `repo_root()` returns a directory containing `Makefile` or `pyproject.toml`.
 - `test_settings.py`: instantiate `Settings()` with no env vars, assert defaults; set `GENESIS_PATHS__DATA_DIR=/custom/x` via `monkeypatch.setenv`, assert it wins; set `XDG_DATA_HOME=/custom/y`, assert `xdg_path("DATA", ".local/share")` returns `/custom/y/genesis-worker`.
+- `test_facade.py`: `GenesisWorker()` builds settings, registries, and catalog service end-to-end. `list_sources()` / `list_services()` return display info. `rescan_catalog()` walks the vault; `catalog()` caches the result. Construction accepts an explicit `Settings` and routes it through the registries.
 - `test_sources_registry.py`: `SourceRegistry(Settings())` auto-discovers both `huggingface/` and `lmstudio/` subpackages and returns both sources; `get("huggingface")` / `get("lmstudio")` work; `get("does_not_exist")` raises `KeyError`. Path-resolution contract: default → `vault_subdir`, explicit absolute → used as-is, explicit relative → joined to `vault_path`.
 - `test_sources_huggingface.py`: walk against a fixture tree (build a temp HF layout under `tmp_path` with `models--org--name/refs/main`, `snapshots/<sha>/...`), assert entry count + pieces + total_bytes.
 - `test_sources_lmstudio.py`: walk against a fixture `<publisher>/<model-dir>` tree, assert entry count.
@@ -1060,6 +1173,7 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 1. `uv sync` exits 0.
 2. `uv run pytest genesis_worker/tests/` passes.
 3. `uv run python -c "from genesis_worker.sources import SourceRegistry; from genesis_worker.settings import Settings; print(sorted(s.name for s in SourceRegistry(Settings()).all()))"` prints `['huggingface', 'lmstudio']`.
+3a. `uv run python -c "from genesis_worker import GenesisWorker; w = GenesisWorker(); print([s.name for s in w.list_services()])"` prints at least `llama_swap`.
 4. `uv run python -c "from genesis_worker.settings import Settings; print(Settings().paths)"` prints four XDG-defaulted paths.
 5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry; from genesis_worker.catalog.build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
 6. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; from genesis_worker.services.llama_swap.recipes import Recipes; from pathlib import Path; ...; print(len(entries))"` shows the same entry count as `wc -l config.yaml`.
