@@ -31,12 +31,12 @@ Implements [spec-002](../specs/spec-002-services-and-acquire.md).
 
 ### Agent export (chunk 2)
 
-11. **Write `genesis_worker/services/llama_swap/agent_export.py`** per spec-002.
-12. **Write `genesis_worker/tests/test_agent_export.py`** per spec-002. Use the current `config.yaml` and the current `pi-models.json` as fixtures; assert field-by-field equivalence.
+11. **Write `genesis_worker/services/llama_swap/export_pi_config.py`** per spec-002.
+12. **Write `genesis_worker/tests/test_export_pi_config.py`** per spec-002. Use the current `config.yaml` and the current `pi-models.json` as fixtures; assert field-by-field equivalence.
 13. **Run a real-fixture diff:**
     ```bash
     uv run python -c "
-    from genesis_worker.services.llama_swap.agent_export import build_provider
+    from genesis_worker.services.llama_swap.export_pi_config import build_provider
     from pathlib import Path
     import json
     print(json.dumps(build_provider(Path('config.yaml')), sort_keys=True, indent=2))

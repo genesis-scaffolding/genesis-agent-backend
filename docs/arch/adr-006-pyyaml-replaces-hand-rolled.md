@@ -25,7 +25,7 @@ Specific replacements:
 - `MODEL_CATALOG.yaml` emit: `yaml.dump(data, sort_keys=False, default_flow_style=False)` with a custom representer for `Path` objects.
 - `MODEL_CATALOG.md` emit: unchanged (it's markdown).
 - `config.yaml` emit: same `yaml.dump` with `default_flow_style=False` and explicit control over block style for the `cmd:` field (PyYAML's literal-block `|` is the right choice; configured via `default_style` or a representer).
-- `config.yaml` parsing in `agent_export.py`: `yaml.safe_load` (replaces regex-based `parse_models_section`).
+- `config.yaml` parsing in `export_pi_config.py`: `yaml.safe_load` (replaces regex-based `parse_models_section`).
 - `recipes.yaml` parsing: already PyYAML (`yaml.safe_load`); continues.
 - `pi-models.json` emit: `json.dumps(..., indent=2, sort_keys=True)` (was already this).
 
