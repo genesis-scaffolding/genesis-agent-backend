@@ -1,0 +1,48 @@
+[project]
+name = "my-agent-backend"
+version = "0.1.0"
+description = "Local AI infrastructure worker (llama-swap + Streamlit UI)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=5",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "pynvml>=11",
+    "pyyaml>=6",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["genesis_worker/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["**/dist", "**/build", "**/.venv", "vendor", "bin"]
+
+[tool.ruff.lint]
+extend-select = ["I", "B", "UP", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["genesis_worker"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**/*.py" = ["B", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pyright]
+typeCheckingMode = "standard"
+include = ["genesis_worker"]
+exclude = ["**/__pycache__", "**/dist", "**/build", "**/.venv", "vendor", "bin", ".venv"]

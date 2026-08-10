@@ -1,7 +1,7 @@
-# Model catalog generated 2026-08-07T06:30:01+00:00
+# Model catalog generated 2026-08-10T02:37:49+00:00
 # root: /home/gentran1991/Data2/models
 root: /home/gentran1991/Data2/models
-generated_at: 2026-08-07T06:30:01+00:00
+generated_at: 2026-08-10T02:37:49+00:00
 
 huggingface:
   - name: "Qwen/Qwen-Image"
@@ -62,6 +62,15 @@ huggingface:
         filename: vocab.json
         path: "/home/gentran1991/Data2/models/huggingface/hub/models--Qwen--Qwen3-VL-4B-Instruct/blobs/4783fe10ac3adce15ac8f358ef5462739852c569"
         bytes: 2776833
+  - name: "TheDrummer/Rocinante-XL-16B-v1-GGUF"
+    snapshot: f1669ca3266cd89245d49591abcab59ba581e0d9
+    directory: "/home/gentran1991/Data2/models/huggingface/hub/models--TheDrummer--Rocinante-XL-16B-v1-GGUF/snapshots/f1669ca3266cd89245d49591abcab59ba581e0d9"
+    total_bytes: 13187776288
+    pieces:
+      - role: main
+        filename: "Rocinante-XL-16B-v1a-Q6_K.gguf"
+        path: "/home/gentran1991/Data2/models/huggingface/hub/models--TheDrummer--Rocinante-XL-16B-v1-GGUF/blobs/43bf8ebbc1a492c0072d6987ca87a2550f3a6fed2d31810fe86b0de67bf18ac2"
+        bytes: 13187776288
   - name: "Tongyi-MAI/Z-Image-Turbo"
     snapshot: f332072aa78be7aecdf3ee76d5c247082da564a6
     directory: "/home/gentran1991/Data2/models/huggingface/hub/models--Tongyi-MAI--Z-Image-Turbo/snapshots/f332072aa78be7aecdf3ee76d5c247082da564a6"
@@ -144,6 +153,19 @@ huggingface:
         filename: raw.safetensors
         path: "/home/gentran1991/Data2/models/huggingface/hub/models--krea--Krea-2-Raw/blobs/f99bb0ff8e362b77342bc4994e0c50906fe7ef7074864b181b7d48d2fa6d03d7"
         bytes: 26283332608
+  - name: "llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF"
+    snapshot: ea0259bf66bcd33b5f3425eb223932abaa0f4f07
+    directory: "/home/gentran1991/Data2/models/huggingface/hub/models--llmfan46--gemma-4-26B-A4B-it-uncensored-heretic-GGUF/snapshots/ea0259bf66bcd33b5f3425eb223932abaa0f4f07"
+    total_bytes: 28054686432
+    pieces:
+      - role: main
+        filename: "gemma-4-26B-A4B-it-uncensored-heretic-Q8_0.gguf"
+        path: "/home/gentran1991/Data2/models/huggingface/hub/models--llmfan46--gemma-4-26B-A4B-it-uncensored-heretic-GGUF/blobs/669172f77a2af0c008cd207c765956faba1cf2fe1353f1c89214e1def4f32029"
+        bytes: 26859858432
+      - role: mmproj
+        filename: "gemma-4-26B-A4B-it-mmproj-BF16.gguf"
+        path: "/home/gentran1991/Data2/models/huggingface/hub/models--llmfan46--gemma-4-26B-A4B-it-uncensored-heretic-GGUF/blobs/b3ee6c97d5a5bb1ae9eb93bf14c1d1b51a0179a45ac1076b195931814c759e1e"
+        bytes: 1194828000
   - name: "ostris/Z-Image-De-Turbo"
     snapshot: 9da355082d6374634080361054e712a08cc54af1
     directory: "/home/gentran1991/Data2/models/huggingface/hub/models--ostris--Z-Image-De-Turbo/snapshots/9da355082d6374634080361054e712a08cc54af1"

@@ -1,23 +1,29 @@
 # Model Catalog
 
 - **Root:** `/home/gentran1991/Data2/models`
-- **Generated:** 2026-08-07T06:30:01+00:00
+- **Generated:** 2026-08-10T02:37:49+00:00
 
 ## Summary
 
 | Source | Count | Total Size |
 |--------|------:|-----------:|
-| HuggingFace | 11 | 123.1 GiB |
+| HuggingFace | 13 | 161.5 GiB |
 | LM Studio | 6 | 99.9 GiB |
-| **All** | **17** | **223.0 GiB** |
+| **All** | **19** | **261.4 GiB** |
 
-## HuggingFace (11 repos)
+## HuggingFace (13 repos)
 
 ### `Tongyi-MAI/Z-Image-Turbo` — 30.6 GiB
 
 - **Snapshot:** `f332072aa78b`
 - **Components:** transformer (3), text_encoder (3), vae
 - **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--Tongyi-MAI--Z-Image-Turbo/snapshots/f332072aa78be7aecdf3ee76d5c247082da564a6`
+
+### `llmfan46/gemma-4-26B-A4B-it-uncensored-heretic-GGUF` — 26.1 GiB
+
+- **Snapshot:** `ea0259bf66bc`
+- **Components:** main, mmproj
+- **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--llmfan46--gemma-4-26B-A4B-it-uncensored-heretic-GGUF/snapshots/ea0259bf66bcd33b5f3425eb223932abaa0f4f07`
 
 ### `krea/Krea-2-Raw` — 24.5 GiB
 
@@ -30,6 +36,12 @@
 - **Snapshot:** `7b92b5b28818`
 - **Components:** main, mmproj, mtp
 - **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--unsloth--gemma-4-26B-A4B-it-qat-GGUF/snapshots/7b92b5b28818151e8669af2e45e88d6086f490dd`
+
+### `TheDrummer/Rocinante-XL-16B-v1-GGUF` — 12.3 GiB
+
+- **Snapshot:** `f1669ca3266c`
+- **Components:** main
+- **Directory:** `/home/gentran1991/Data2/models/huggingface/hub/models--TheDrummer--Rocinante-XL-16B-v1-GGUF/snapshots/f1669ca3266cd89245d49591abcab59ba581e0d9`
 
 ### `ostris/Z-Image-De-Turbo` — 11.5 GiB
 
