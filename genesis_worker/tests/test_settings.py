@@ -65,12 +65,27 @@ def test_settings_unknown_env_var_ignored(monkeypatch: pytest.MonkeyPatch) -> No
     assert s is not None
 
 
-def test_settings_extra_settings_have_defaults() -> None:
+def test_plugin_option_slices_are_opaque_to_the_framework() -> None:
+    """Settings carries slices; it does not know what keys a plugin accepts (ADR-009)."""
+    s = Settings(services={"llama_swap": {"listen_addr": "0.0.0.0:1234"}})
+    assert s.options_for("services", "llama_swap") == {"listen_addr": "0.0.0.0:1234"}
+    assert s.options_for("services", "not_installed") == {}
+    assert s.options_for("sources", "huggingface") == {}
+
+
+def test_plugin_defaults_come_from_the_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from genesis_worker.services.llama_swap.options import LlamaSwapOptions
+    from genesis_worker.sources.huggingface.options import HuggingFaceOptions
+
+    assert HuggingFaceOptions().default_revision == "main"
+    assert LlamaSwapOptions().listen_addr == "127.0.0.1:8080"
+    assert LlamaSwapOptions().kv_quant_over_bytes == 25_000_000_000
+
+
+def test_nested_env_var_reaches_the_option_slice(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GENESIS_SERVICES", '{"llama_swap": {"listen_addr": "0.0.0.0:9999"}}')
     s = Settings()
-    assert s.sources.huggingface.default_revision == "main"
-    assert s.services.llama_swap.listen_addr == "127.0.0.1:8080"
-    assert s.services.llama_swap.session_name == "swap"
-    assert s.services.llama_swap.kv_quant_over_bytes == 25_000_000_000
+    assert s.options_for("services", "llama_swap")["listen_addr"] == "0.0.0.0:9999"
 
 
 def test_dev_env_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

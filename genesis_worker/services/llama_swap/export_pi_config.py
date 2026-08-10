@@ -1,4 +1,4 @@
-"""Build pi-agent ``models.json`` from a llama-swap ``config.yaml``."""
+"""Build the pi-agent ``models.json`` payload from a llama-swap ``config.yaml``."""
 
 from __future__ import annotations
 
@@ -74,15 +74,6 @@ def write_models_json(target: Path, provider: dict) -> bool:
     return True
 
 
-def default_target_path(base_url: str | None = None) -> Path:
-    """The default ``pi-models.json`` location used by the CLI.
-
-    Resolved relative to CWD so the CLI behaves the same as
-    ``bin/pi-models.py`` did (writing ``./pi-models.json``).
-    """
-    return Path.cwd() / "pi-models.json"
-
-
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
@@ -154,7 +145,6 @@ def _slug(name: str) -> str:
 __all__ = [
     "DEFAULT_BASE_URL",
     "build_provider",
-    "default_target_path",
     "write_models_json",
 ]
 

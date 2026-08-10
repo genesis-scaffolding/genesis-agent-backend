@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .catalog_build import CatalogService
-from .contracts import Catalog
+from .contracts import AcquireSession, Catalog, InferenceService, ModelSource
 from .models import ServiceInfo, SourceInfo
 from .registries import ServiceRegistry, SourceRegistry
 
@@ -78,6 +78,20 @@ class GenesisWorker:
         return self._catalog_cache
 
     # --- Source / service inspection (for UI / CLI listings) ---------------
+
+    def source(self, name: str) -> ModelSource:
+        return self._source_registry.get(name)
+
+    def service(self, name: str) -> InferenceService:
+        return self._service_registry.get(name)
+
+    def start_acquire(self, source_name: str, repo_id: str) -> AcquireSession:
+        """Begin acquiring ``repo_id`` from ``source_name``."""
+        return self._source_registry.get(source_name).start_acquire(repo_id)
+
+    def regenerate_service_config(self, service_name: str) -> bool:
+        """Regenerate one service's config against the current catalog."""
+        return self._service_registry.get(service_name).regenerate_config(self.catalog())
 
     def list_sources(self) -> list[SourceInfo]:
         """Return display info for every registered source."""

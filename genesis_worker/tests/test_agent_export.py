@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.services.llama_swap.agent_export import (
+from genesis_worker.services.llama_swap.export_pi_config import (
     DEFAULT_BASE_URL,
     FALLBACK_PROVIDER_NAME,
     build_provider,

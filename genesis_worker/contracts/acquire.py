@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -64,20 +64,25 @@ class AcquireState:
         self.last_step: AcquireStep | None = None
 
 
-@runtime_checkable
-class AcquireSession(Protocol):
+class AcquireSession(ABC):
     """State-machine acquisition for one repo on one source.
 
-        step = session.current_step()
-        step = session.submit(AcquireChoice(...))
-        session.cancel()
+    step = session.current_step(); step = session.submit(choice); session.cancel()
     """
 
     source_name: str
-    repo_id: str
 
+    @property
+    @abstractmethod
+    def repo_id(self) -> str: ...
+
+    @abstractmethod
     def current_step(self) -> AcquireStep: ...
+
+    @abstractmethod
     def submit(self, choice: AcquireChoice) -> AcquireStep: ...
+
+    @abstractmethod
     def cancel(self) -> None: ...
 
 

@@ -20,6 +20,8 @@ from .classify import (
     classify,
     role_sort_key,
 )
+from .context import PluginContext, ServiceContext, SourceContext
+from .plugin import Plugin
 from .service import (
     InferenceService,
     ServiceCapabilities,
@@ -47,10 +49,14 @@ __all__ = [
     "ModelEntry",
     "ModelPiece",
     "ModelSource",
+    "Plugin",
+    "PluginContext",
     "ServiceCapabilities",
+    "ServiceContext",
     "ServiceResourceEstimate",
     "ServiceState",
     "ServiceStatus",
+    "SourceContext",
     "StartResult",
     "StopResult",
     "classify",

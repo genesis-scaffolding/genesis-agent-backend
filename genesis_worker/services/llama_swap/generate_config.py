@@ -12,11 +12,7 @@ from typing import Any
 import yaml
 
 from ...contracts import Catalog, ModelEntry
-from ...paths import repo_root
 from .recipes import Recipe
-
-# Repo-root resolution so recipes can use paths like "vendor/llama.cpp/build/bin/llama-server".
-REPO_ROOT = repo_root()
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
 # one of these, the corresponding VRAM-saver flag is added. These are
@@ -28,9 +24,10 @@ DEFAULT_BINARY_REL = "vendor/llama.cpp/build/bin/llama-server"
 
 
 @dataclass(frozen=True)
-class BuildThresholds:
-    """Per-invocation thresholds. Defaults are the repo's historical values."""
+class BuildOptions:
+    """Per-invocation build policy. The service supplies these from its options."""
 
+    repo_root: Path = Path(".")
     kv_quant_over: int = DEFAULT_KV_QUANT_OVER
     mmproj_offload_over: int = DEFAULT_MMPROJ_OFFLOAD_OVER
     default_binary_rel: str = DEFAULT_BINARY_REL
@@ -68,11 +65,11 @@ def _opt(recipe: Recipe, default_recipe: Recipe | None, key: str) -> Any:
     return None
 
 
-def _resolve_binary(binary: str) -> str:
-    """Resolve a binary path: relative paths joined with REPO_ROOT."""
+def _resolve_binary(binary: str, repo_root: Path) -> str:
+    """Relative binaries resolve against the checkout root."""
     p = Path(binary)
     if not p.is_absolute():
-        p = REPO_ROOT / p
+        p = repo_root / p
     return str(p.resolve())
 
 
@@ -138,7 +135,7 @@ def build_cmd(
     *,
     default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    thresholds: BuildThresholds | None = None,
+    options: BuildOptions | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> str:
     """Compose the llama-server command line for one model entry.
@@ -148,17 +145,17 @@ def build_cmd(
     options present in ``overrides`` win over both.
 
     Binary resolution order: recipe.binary -> CLI --binary ->
-    default.binary -> thresholds.default_binary_rel.
+    default.binary -> options.default_binary_rel.
     """
     ovr = overrides or {}
-    thresholds = thresholds or BuildThresholds()
+    options = options or BuildOptions()
     binary_str = (
         recipe.binary
         or binary_override
         or (default_recipe.binary if default_recipe else None)
-        or thresholds.default_binary_rel
+        or options.default_binary_rel
     )
-    resolved_binary = _resolve_binary(binary_str)
+    resolved_binary = _resolve_binary(binary_str, options.repo_root)
 
     sections: list[str] = []
     sections.append(f"{resolved_binary} \\")
@@ -174,7 +171,7 @@ def build_cmd(
         elif mmproj_offload is False:
             offload = False
         else:
-            offload = files.weight_bytes > thresholds.mmproj_offload_over
+            offload = files.weight_bytes > options.mmproj_offload_over
         if offload:
             sections.append("  --no-mmproj-offload \\")
 
@@ -195,7 +192,7 @@ def build_cmd(
         kv_dtype = default_recipe.kv_cache
     if kv_dtype in ("q8_0", "q4_0"):
         runtime.extend(["-ctk", kv_dtype, "-ctv", kv_dtype])
-    elif files.weight_bytes > thresholds.kv_quant_over:
+    elif files.weight_bytes > options.kv_quant_over:
         runtime.extend(["-ctk", "q8_0", "-ctv", "q8_0"])
 
     ctx_min = ovr.get("ctx_min", recipe.ctx_min)
@@ -324,7 +321,7 @@ def build_entry(
     multi_match: bool,
     default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    thresholds: BuildThresholds | None = None,
+    options: BuildOptions | None = None,
     entry_id_override: str | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> tuple[str, dict]:
@@ -345,7 +342,7 @@ def build_entry(
         files,
         default_recipe=default_recipe,
         binary_override=binary_override,
-        thresholds=thresholds or BuildThresholds(),
+        options=options or BuildOptions(),
         overrides=overrides,
     )
     return entry_id, {
@@ -363,7 +360,7 @@ def build_config(
     overrides: dict[str, dict] | None = None,
     *,
     binary_override: str | None = None,
-    thresholds: BuildThresholds | None = None,
+    options: BuildOptions | None = None,
 ) -> list[tuple[str, dict]]:
     """Walk the catalog, match recipes, apply overrides, emit entries.
 
@@ -372,7 +369,7 @@ def build_config(
     ``{entry_id: {field: value}}`` dict from :class:`OverridesStore`.
     """
     overrides = overrides or {}
-    thresholds = thresholds or BuildThresholds()
+    options = options or BuildOptions()
     entries: list[tuple[str, dict]] = []
     all_ids: set[str] = set()
 
@@ -405,7 +402,7 @@ def build_config(
                     multi_match=multi,
                     default_recipe=recipes.default,
                     binary_override=binary_override,
-                    thresholds=thresholds,
+                    options=options,
                     entry_id_override=entry_id,
                     overrides=overrides.get(entry_id),
                 )
@@ -537,7 +534,7 @@ def is_config_stale(config_path: Path, *, catalog_generated_at: str) -> bool:
 
 
 __all__ = [
-    "BuildThresholds",
+    "BuildOptions",
     "DetectedFiles",
     "build_cmd",
     "build_config",

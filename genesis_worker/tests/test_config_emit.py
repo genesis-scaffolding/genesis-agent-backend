@@ -15,7 +15,7 @@ import yaml
 
 from genesis_worker.catalog_build import CatalogService
 from genesis_worker.registries import SourceRegistry
-from genesis_worker.services.llama_swap.config import (
+from genesis_worker.services.llama_swap.generate_config import (
     build_config,
     detect_files,
     make_display_name,

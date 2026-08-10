@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, cast
 
-from .contracts import InferenceService, ModelSource
+from .contracts import (
+    InferenceService,
+    ModelSource,
+    Plugin,
+    ServiceContext,
+    SourceContext,
+)
 
 if TYPE_CHECKING:
     from .settings import Settings
@@ -16,89 +24,115 @@ if TYPE_CHECKING:
 _SOURCES_PKG = "genesis_worker.sources"
 _SERVICES_PKG = "genesis_worker.services"
 
-
-def _find_extension_class(module: ModuleType, *required_attrs: str) -> type | None:
-    for attr_name in dir(module):
-        attr = getattr(module, attr_name, None)
-        if not isinstance(attr, type):
-            continue
-        if not all(hasattr(attr, a) for a in required_attrs):
-            continue
-        return attr
-    return None
+P = TypeVar("P", bound=Plugin)
 
 
-def _plugin_modules(package: str):
-    """Import each non-private subpackage of ``package`` and yield it."""
+def _plugin_classes(package: str, base: type[P]) -> Iterator[type[P]]:
+    """Yield each concrete ``base`` subclass exported by a subpackage of ``package``."""
     pkg = importlib.import_module(package)
     assert pkg.__path__ is not None
     for mod_info in pkgutil.iter_modules(pkg.__path__):
         name = mod_info.name
         if not name or name.startswith("_"):
             continue
-        yield importlib.import_module(f"{package}.{name}")
+        module = importlib.import_module(f"{package}.{name}")
+        cls = _find_plugin_class(module, base)
+        if cls is not None:
+            yield cls
 
 
-class SourceRegistry:
+def _find_plugin_class(module: ModuleType, base: type[P]) -> type[P] | None:
+    for _, attr in inspect.getmembers(module, inspect.isclass):
+        if issubclass(attr, base) and attr is not base and not inspect.isabstract(attr):
+            return attr
+    return None
+
+
+class _Registry:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._instances: dict[str, Plugin] = {}
+
+    def _dirs(self, cls: type[Plugin]) -> dict[str, Path]:
+        p = self._settings.paths
+        return {
+            "data_dir": p.data_dir / cls.dir_name,
+            "config_dir": p.config_dir / cls.dir_name,
+            "cache_dir": p.cache_dir / cls.dir_name,
+            "state_dir": p.state_dir / cls.dir_name,
+            "log_dir": p.log_dir / cls.dir_name,
+        }
+
+    def get(self, name: str):
+        return self._instances[name]
+
+    def all(self) -> list:
+        return list(self._instances.values())
+
+
+class SourceRegistry(_Registry):
     """Constructs and holds one instance of every discovered source plugin."""
 
     def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._instances: dict[str, ModelSource] = {}
-        self._discover()
+        super().__init__(settings)
+        for cls in _plugin_classes(_SOURCES_PKG, ModelSource):
+            build = cast("Callable[[SourceContext], ModelSource]", cls)
+            self._instances[cls.name] = build(self._context(cls))
 
-    def _discover(self) -> None:
-        for module in _plugin_modules(_SOURCES_PKG):
-            cls = _find_extension_class(module, "name", "vault_subdir")
-            if cls is None:
-                continue
-            self._instances[cls.name] = cls(local_path=self._resolve_path(cls))
+    def _context(self, cls: type[ModelSource]) -> SourceContext:
+        options = self._settings.options_for("sources", cls.name)
+        return SourceContext(
+            name=cls.name,
+            repo_root=self._settings.paths.resolved_repo_root,
+            options=options,
+            local_path=self._resolve_local_path(cls, options),
+            vault_path=self.vault_path,
+            **self._dirs(cls),
+        )
 
-    def _resolve_path(self, cls: type) -> Path:
+    def _resolve_local_path(self, cls: type[ModelSource], options: dict) -> Path:
         """Explicit absolute > explicit relative to vault > ``vault_subdir`` default."""
-        vault_root = self._settings.paths.resolved_vault_path
-        per_source = getattr(self._settings.sources, cls.name, None)
-        local_path: Path | None = None
-        if per_source is not None:
-            local_path = getattr(per_source, "local_path", None)
-        if local_path is not None:
+        raw = options.get("local_path")
+        if raw is not None:
+            local_path = Path(raw)
             if local_path.is_absolute():
                 return local_path
-            return vault_root / local_path
-        return vault_root / cls.vault_subdir
+            return self.vault_path / local_path
+        return self.vault_path / cls.vault_subdir
 
     def get(self, name: str) -> ModelSource:
-        return self._instances[name]
+        return self._instances[name]  # type: ignore[return-value]
 
     def all(self) -> list[ModelSource]:
-        return list(self._instances.values())
+        return list(self._instances.values())  # type: ignore[arg-type]
 
     @property
     def vault_path(self) -> Path:
         return self._settings.paths.resolved_vault_path
 
 
-class ServiceRegistry:
+class ServiceRegistry(_Registry):
     """Constructs and holds one instance of every discovered service plugin."""
 
     def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._instances: dict[str, InferenceService] = {}
-        self._discover()
+        super().__init__(settings)
+        for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
+            build = cast("Callable[[ServiceContext], InferenceService]", cls)
+            self._instances[cls.name] = build(self._context(cls))
 
-    def _discover(self) -> None:
-        for module in _plugin_modules(_SERVICES_PKG):
-            cls = _find_extension_class(module, "name", "display_name")
-            if cls is None:
-                continue
-            per_service = getattr(self._settings.services, cls.name, None)
-            self._instances[cls.name] = cls(settings=per_service)
+    def _context(self, cls: type[InferenceService]) -> ServiceContext:
+        return ServiceContext(
+            name=cls.name,
+            repo_root=self._settings.paths.resolved_repo_root,
+            options=self._settings.options_for("services", cls.name),
+            **self._dirs(cls),
+        )
 
     def get(self, name: str) -> InferenceService:
-        return self._instances[name]
+        return self._instances[name]  # type: ignore[return-value]
 
     def all(self) -> list[InferenceService]:
-        return list(self._instances.values())
+        return list(self._instances.values())  # type: ignore[arg-type]
 
 
 __all__ = ["ServiceRegistry", "SourceRegistry"]

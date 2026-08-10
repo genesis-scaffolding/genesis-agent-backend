@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from genesis_worker.sources.lmstudio import LMSource
+from genesis_worker.tests._factories import source_ctx
 
 
 def _build_layout(tmp_path: Path) -> Path:
@@ -20,7 +21,7 @@ def _build_layout(tmp_path: Path) -> Path:
 
 def test_walk_returns_one_entry_per_model_dir(tmp_path: Path) -> None:
     models_dir = _build_layout(tmp_path)
-    src = LMSource(local_path=models_dir)
+    src = LMSource(source_ctx(local_path=models_dir))
     models = src.walk()
     assert len(models) == 1
     m = models[0]
@@ -37,7 +38,7 @@ def test_walk_records_partial_download(tmp_path: Path) -> None:
     model_dir.mkdir(parents=True)
     (model_dir / "model.Q4.gguf").write_bytes(b"\x00" * 100)
     (model_dir / "model.Q4.gguf.part").write_bytes(b"\x00" * 50)
-    src = LMSource(local_path=models_dir)
+    src = LMSource(source_ctx(local_path=models_dir))
     m = src.walk()[0]
     assert any("partial download" in n for n in m.notes)
 
@@ -47,12 +48,12 @@ def test_walk_notes_when_no_weights(tmp_path: Path) -> None:
     model_dir = models_dir / "acme" / "demo-model"
     model_dir.mkdir(parents=True)
     (model_dir / "chat-template.jinja").write_text("hi")
-    src = LMSource(local_path=models_dir)
+    src = LMSource(source_ctx(local_path=models_dir))
     m = src.walk()[0]
     assert "no model weights on disk" in m.notes
 
 
 def test_walk_returns_empty_when_no_models_dir(tmp_path: Path) -> None:
-    src = LMSource(local_path=tmp_path / "nope")
+    src = LMSource(source_ctx(tmp_path, local_path=tmp_path / "nope"))
     assert src.walk() == []
     assert src.is_available() is False
