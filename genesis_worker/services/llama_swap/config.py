@@ -425,6 +425,12 @@ def emit_payload(
     emits them as ``|`` literal block scalars (matching the format
     produced by ``bin/build-config.py``'s hand-rolled emitter). The
     structure matches what llama-swap's config loader expects.
+
+    ``generated_at`` and ``root`` are embedded so the Streamlit config
+    editor can show "stale" when the catalog has changed since
+    ``config.yaml`` was last written (:func:`read_generated_at`). The
+    fields are extra metadata not consumed by llama-swap; harmless to
+    leave in place.
     """
     models = {}
     for entry_id, data in entries:
@@ -435,6 +441,8 @@ def emit_payload(
     return {
         "healthCheckTimeout": 60,
         "logLevel": "info",
+        "generated_at": generated_at,
+        "root": root,
         "models": models,
     }
 
@@ -480,6 +488,69 @@ def write_config(
     return True
 
 
+def read_generated_at(path: Path) -> str | None:
+    """Read the ``generated_at`` timestamp embedded by :func:`emit_payload`.
+
+    Two forms are recognized:
+
+    1. The new form written by :func:`emit_payload`:
+       ``generated_at: 'YYYY-MM-DDTHH:MM:SS+TZ'`` (YAML field).
+    2. The legacy form written by ``bin/build-config.py`` (still in use
+       via ``make all`` until Phase 10 retirement):
+       ``# llama-swap config generated YYYY-MM-DDTHH:MM:SS+TZ`` (header
+       comment).
+
+    Returns None if the file is missing, malformed, or contains no
+    timestamp in either form. The catalog-editor "stale" indicator
+    treats None as stale-by-default.
+    """
+    try:
+        text = path.read_text()
+    except (FileNotFoundError, OSError):
+        return None
+    # YAML field form first (newer writers, more reliable).
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError:
+        raw = None
+    if isinstance(raw, dict):
+        value = raw.get("generated_at")
+        if isinstance(value, str):
+            return value
+    # Legacy header comment form (bin/build-config.py, until Phase 10).
+    comment_match = re.search(
+        r"^#\s*llama-swap config generated (\S+)\s*$",
+        text,
+        re.MULTILINE,
+    )
+    if comment_match is not None:
+        return comment_match.group(1)
+    return None
+
+
+def is_config_stale(config_path: Path, *, catalog_generated_at: str) -> bool:
+    """True iff ``config.yaml`` is older than the current catalog.
+
+    "Stale" means: a catalog rescan would produce a different set of
+    entries than what ``config.yaml`` was last generated against. We
+    detect this by comparing the catalog's ``generated_at`` (an ISO
+    timestamp produced at rescan time) to the ``generated_at`` we
+    embedded in ``config.yaml`` when we last wrote it.
+
+    Files that predate the spec-002 ``generated_at`` embedding always
+    read back as stale — that's the right default for the dashboard
+    ("regenerate to refresh after spec-002 lands").
+
+    This is a pure helper: no Settings, no facade, no I/O beyond the
+    one file read. The facade is responsible for getting the catalog's
+    fresh timestamp and calling this.
+    """
+    embedded = read_generated_at(config_path)
+    if embedded is None:
+        return True
+    return embedded != catalog_generated_at
+
+
 __all__ = [
     "BuildThresholds",
     "DetectedFiles",
@@ -488,7 +559,9 @@ __all__ = [
     "build_entry",
     "detect_files",
     "emit_payload",
+    "is_config_stale",
     "make_display_name",
     "make_entry_id",
+    "read_generated_at",
     "write_config",
 ]

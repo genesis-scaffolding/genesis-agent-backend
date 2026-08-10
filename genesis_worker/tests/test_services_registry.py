@@ -141,27 +141,29 @@ def test_llama_swap_is_available_false_when_config_missing(tmp_path: Path) -> No
     assert svc.is_available() is False
 
 
-def test_llama_swap_lifecycle_methods_are_stubbed() -> None:
-    """Lifecycle methods raise NotImplementedError until plan-002 lands them.
+def test_llama_swap_lifecycle_methods_exist() -> None:
+    """Lifecycle methods are implemented by spec-002 chunk 1.
 
-    The structural shape (Protocol conformance) is in place; the runtime
-    plumbing (tmux + curl + psutil) ships in plan-002.
+    The runtime behavior (tmux + curl) is exercised in
+    ``test_lifecycle.py`` against a fake llama-swap shim; here we just
+    assert the surface is in place and returns the right shape.
     """
     svc = LlamaSwapService()
-    with pytest.raises(NotImplementedError):
-        svc.start()
-    with pytest.raises(NotImplementedError):
-        svc.stop()
-    with pytest.raises(NotImplementedError):
-        svc.status()
-    with pytest.raises(NotImplementedError):
-        svc.is_running()
-    with pytest.raises(NotImplementedError):
-        svc.runtime_endpoint()
-    with pytest.raises(NotImplementedError):
-        svc.wait_ready(1.0)
-    with pytest.raises(NotImplementedError):
-        svc.resource_estimate()
+    # Each method is callable with no arguments (besides wait_ready's timeout).
+    assert callable(svc.start)
+    assert callable(svc.stop)
+    assert callable(svc.status)
+    assert callable(svc.is_running)
+    assert callable(svc.runtime_endpoint)
+    assert callable(svc.wait_ready)
+    assert callable(svc.resource_estimate)
+
+    # resource_estimate returns the placeholder dataclass (spec value).
+    from genesis_worker.services._base import ServiceResourceEstimate
+
+    est = svc.resource_estimate()
+    assert isinstance(est, ServiceResourceEstimate)
+    assert est.vram_bytes_typical > 0  # spec-002 placeholder; not zeroed.
 
 
 def test_service_capabilities_is_a_dataclass() -> None:

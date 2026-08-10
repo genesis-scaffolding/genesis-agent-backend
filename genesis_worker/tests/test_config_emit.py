@@ -149,10 +149,13 @@ def test_write_config_writes_when_changed(tmp_path: Path) -> None:
 
 def test_write_config_preserves_mtime_on_noop(tmp_path: Path) -> None:
     out = tmp_path / "config.yaml"
-    # Pre-write the literal-block form PyYAML produces for cmd.
+    # Pre-write the literal-block form PyYAML produces for cmd, including
+    # the ``generated_at`` and ``root`` fields added in spec-002 chunk 1.
     out.write_text(
         "healthCheckTimeout: 60\n"
         "logLevel: info\n"
+        "generated_at: x\n"
+        "root: ''\n"
         "models:\n"
         "  x:\n"
         "    name: X\n"
