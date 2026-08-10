@@ -1,15 +1,30 @@
 # Spec 001: Core architecture — package, sources, catalog, recipes, config generation
 
 ## Goal
+
 Implement ADR-003, ADR-004, ADR-006, ADR-007. Stand up the `genesis_worker` package skeleton; implement the model-source extension axis with HuggingFace and LM Studio; build the unified catalog service with PyYAML emit; implement the recipe schema, longest-match resolver, override store, and `config.yaml` generation with write-if-changed. End-state: a content-equivalent `config.yaml` can be generated from the new modules.
 
 This spec covers Phases 0–4 of the master plan. The running `llama-swap` and the `bin/` scripts are untouched.
+
+## Extension axes and the facade pattern
+
+Both extension axes — model sources and inference services — follow the same pattern:
+
+- A **Protocol** declares the interface a concrete class must satisfy.
+- Each module under the axis's package defines one or more concrete classes that satisfy the Protocol.
+- A **Registry facade** (`SourceRegistry`, `ServiceRegistry`) is the single point of construction. The caller passes the concrete classes explicitly; the facade resolves any framework-level wiring (paths, settings) and instantiates them.
+
+There is **no decorator-based registration, no module-level auto-discovery, and no implicit state**. Adding a new source or service is one new module + adding the class to the consumer's list passed to the registry.
+
+Sources and services are **pure logic**: they declare their wiring needs (`vault_subdir` for sources; `settings` for services) and the framework resolves those needs at construction time. Sources do not import `xdg_path`; services do not read settings on their own.
+
+The facade pattern is the keystone of the architecture. See ADR-003 for the rationale.
 
 ## Layout
 
 ```
 my-agent-backend/
-├── pyproject.toml                 # created by `uv init`
+├── pyproject.toml
 ├── uv.lock
 ├── .python-version
 ├── Makefile                       # unchanged
@@ -25,38 +40,41 @@ my-agent-backend/
 │   └── arch/adr-003..008, specs/spec-001..003, plans/plan-001..003
 └── genesis_worker/                # NEW
     ├── __init__.py
+    ├── models.py                  # DiscoveredModel, ModelPiece (hoisted from sources; shared with future axes)
     ├── facade.py                  # Phase 8 (spec-003)
     ├── settings.py                # Phase 0
     ├── paths.py                   # Phase 0
     ├── sources/
-    │   ├── __init__.py
-    │   ├── _base.py               # ModelSource protocol, DiscoveredModel
-    │   ├── _registry.py           # @register_source, all_sources()
+    │   ├── __init__.py            # re-exports SourceRegistry, HuggingFaceSource, LMSource, ModelSource
+    │   ├── _base.py               # ModelSource Protocol
+    │   ├── _registry.py           # SourceRegistry facade
+    │   ├── _classify.py           # shared classification helpers (COMPONENT_DIRS, WEIGHT_EXTS, SKIP_FILENAMES, classify, role_sort_key)
     │   ├── huggingface.py         # Phase 1 walker (acquire in spec-002)
     │   └── lmstudio.py            # Phase 1 walker
     ├── services/
-    │   ├── __init__.py
-    │   ├── _base.py               # InferenceService protocol (capabilities/resource/status)
-    │   ├── _registry.py           # @register_service, all_services()
+    │   ├── __init__.py            # re-exports ServiceRegistry
+    │   ├── _registry.py           # ServiceRegistry facade
+    │   │                          # NOTE: services/_base.py (InferenceService Protocol) and
+    │   │                          #       services/llama_swap/service.py (LlamaSwapService) ship in plan-002.
     │   └── llama_swap/
     │       ├── __init__.py
-    │       ├── service.py         # Phase 5 (LlamaSwapService — spec-002)
     │       ├── recipes.py         # Phase 3
     │       ├── config.py          # Phase 4
     │       ├── overrides.py       # Phase 4
+    │       ├── service.py         # Phase 5 (spec-002)
     │       ├── lifecycle.py       # Phase 5 (spec-002)
     │       └── agent_export.py    # Phase 6 (spec-002)
     ├── catalog/
     │   ├── __init__.py
-    │   ├── schema.py              # Phase 2 (Catalog/ModelEntry/ModelPiece pydantic)
-    │   └── build.py               # Phase 2 (CatalogService)
+    │   ├── schema.py              # Phase 2 (Catalog, ModelEntry pydantic; Catalog.by_source())
+    │   └── build.py               # Phase 2 (CatalogService takes a SourceRegistry)
     └── tests/
-        ├── __init__.py            # empty (or absent)
         ├── test_paths.py
         ├── test_settings.py
-        ├── test_sources_registry.py
+        ├── test_sources_registry.py   # SourceRegistry facade contract
         ├── test_sources_huggingface.py
         ├── test_sources_lmstudio.py
+        ├── test_services_registry.py  # ServiceRegistry facade contract
         ├── test_catalog_build.py
         ├── test_recipes.py
         ├── test_overrides.py
@@ -94,16 +112,19 @@ XDG-aware path resolver + repo-root auto-detect.
 ```python
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 def repo_root() -> Path:
     """Auto-detect the repo root from this file's location.
 
-    Resolves upward until it finds a directory containing either
-    `pyproject.toml` or `Makefile`. Used as the default location for
-    legacy state files (`recipes.yaml`, `config.yaml`, etc.) when those
-    files have not yet been migrated to XDG.
+    Walks upward from ``Path(__file__).parent`` until it finds a directory
+    containing ``pyproject.toml`` or ``Makefile``. Used as the default
+    location for legacy state files until they are migrated to XDG.
+
+    Falls back to ``Path(__file__).parent`` if no marker is found (i.e.
+    the package was installed as a wheel outside the source tree).
     """
     here = Path(__file__).resolve().parent
     for candidate in (here, *here.parents):
@@ -112,10 +133,13 @@ def repo_root() -> Path:
     return here
 
 
-def _xdg_path(name: str, default_relative_to_home: str) -> Path:
-    """XDG-compliant toolkit path."""
-    import os
+def xdg_path(name: str, default_relative_to_home: str) -> Path:
+    """XDG-compliant toolkit path.
 
+    Honors ``$XDG_<name>_HOME`` if set; otherwise falls back to the
+    canonical default relative to ``$HOME``. Appends ``genesis-worker``
+    to whichever base is resolved.
+    """
     base = os.environ.get(f"XDG_{name}_HOME")
     root = Path(base) if base else Path.home() / default_relative_to_home
     return root / "genesis-worker"
@@ -126,23 +150,24 @@ def _xdg_path(name: str, default_relative_to_home: str) -> Path:
 ```python
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .paths import _xdg_path, repo_root
+from .paths import repo_root, xdg_path
+
+# --- Path fields -------------------------------------------------------------
 
 
-class PathsSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GENESIS_", extra="ignore")
+class PathsSettings(BaseModel):
+    """XDG-aware path fields, with optional legacy-repo-root fallback."""
 
-    data_dir: Path = Field(default_factory=lambda: _xdg_path("DATA", ".local/share"))
-    config_dir: Path = Field(default_factory=lambda: _xdg_path("CONFIG", ".config"))
-    cache_dir: Path = Field(default_factory=lambda: _xdg_path("CACHE", ".cache"))
-    state_dir: Path = Field(default_factory=lambda: _xdg_path("STATE", ".local/state"))
-    log_dir: Path = Field(default_factory=lambda: _xdg_path("STATE", ".local/state"))
+    data_dir: Path = Field(default_factory=lambda: xdg_path("DATA", ".local/share"))
+    config_dir: Path = Field(default_factory=lambda: xdg_path("CONFIG", ".config"))
+    cache_dir: Path = Field(default_factory=lambda: xdg_path("CACHE", ".cache"))
+    state_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state"))
+    log_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state"))
 
     vault_path: Path | None = None
 
@@ -157,6 +182,9 @@ class PathsSettings(BaseSettings):
         return repo_root()
 
 
+# --- Per-source settings -----------------------------------------------------
+
+
 class HuggingFaceSourceSettings(BaseModel):
     local_path: Path | None = None
     default_revision: str = "main"
@@ -167,8 +195,11 @@ class LMSourceSettings(BaseModel):
 
 
 class SourcesSettings(BaseModel):
-    huggingface: HuggingFaceSourceSettings = HuggingFaceSourceSettings()
-    lmstudio: LMSourceSettings = LMSourceSettings()
+    huggingface: HuggingFaceSourceSettings = Field(default_factory=HuggingFaceSourceSettings)
+    lmstudio: LMSourceSettings = Field(default_factory=LMSourceSettings)
+
+
+# --- Per-service settings ----------------------------------------------------
 
 
 class LlamaSwapServiceSettings(BaseModel):
@@ -184,12 +215,18 @@ class LlamaSwapServiceSettings(BaseModel):
 
 
 class ServicesSettings(BaseModel):
-    llama_swap: LlamaSwapServiceSettings = LlamaSwapServiceSettings()
+    llama_swap: LlamaSwapServiceSettings = Field(default_factory=LlamaSwapServiceSettings)
+
+
+# --- Top-level settings ------------------------------------------------------
 
 
 class Settings(BaseSettings):
+    """Runtime configuration for the Genesis Worker."""
+
     model_config = SettingsConfigDict(
         env_prefix="GENESIS_",
+        env_nested_delimiter="__",
         env_file=("dev.env", ".env"),
         extra="ignore",
     )
@@ -199,18 +236,23 @@ class Settings(BaseSettings):
     services: ServicesSettings = Field(default_factory=ServicesSettings)
 ```
 
-### `genesis_worker/sources/_base.py`
+Per-source `local_path` is `Path | None`: an absolute path overrides the default; `None` falls through to `vault_subdir`. (A future tightening to `str | None` would let users set portable relative paths — see plan-001 post-v1 notes.)
+
+### `genesis_worker/models.py`
+
+Hoisted from `sources/_base.py` so the entity types live at the framework level, not inside one extension axis. The `ModelSource` Protocol still imports `DiscoveredModel` from here; future axes (e.g. ComfyUI, AIToolkit) that emit discoveries use the same dataclasses.
 
 ```python
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
 class ModelPiece:
+    """One file in a model directory."""
+
     role: str  # "main", "mmproj", "mtp", "transformer", "vae", "config"
     filename: str
     path: Path
@@ -219,58 +261,114 @@ class ModelPiece:
 
 @dataclass(frozen=True)
 class DiscoveredModel:
-    source: str
-    native_id: str
+    """One model as discovered by a source."""
+
+    source: str  # "huggingface", "lmstudio"
+    native_id: str  # "org/repo" or "publisher/model-dir"
     pieces: list[ModelPiece]
     total_bytes: int
     directory: Path
     notes: list[str] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
-
-
-@runtime_checkable
-class ModelSource(Protocol):
-    name: str
-    display_name: str
-    can_acquire: bool
-
-    def is_available(self) -> bool: ...
-    def local_path(self) -> Path: ...
-    def walk(self) -> Iterable[DiscoveredModel]: ...
 ```
 
-### `genesis_worker/sources/_registry.py`
+These are intentionally frozen dataclasses, not Pydantic models. They are built up in walker loops and consumed in-memory; they are never serialized to JSON/YAML (the catalog's `ModelEntry` is the YAML-facing representation).
+
+### `genesis_worker/sources/_base.py`
 
 ```python
 from __future__ import annotations
 
-import importlib
-import pkgutil
-from typing import Type
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+from ..models import DiscoveredModel
+
+
+@runtime_checkable
+class ModelSource(Protocol):
+    """One kind of model repository.
+
+    Concrete sources declare:
+
+    - ``name``: short identifier (``"huggingface"``, ``"lmstudio"``).
+    - ``display_name``: human-readable name for UI.
+    - ``can_acquire``: whether ``AcquireSession`` is implemented (spec-002).
+    - ``vault_subdir``: subdirectory under ``vault_path`` where this source's
+      models live (``"huggingface/hub"``, ``"lmstudio/models"``). The
+      framework uses this to default ``local_path`` when settings don't
+      override it.
+    - ``local_path``: the resolved path the framework assigned at
+      construction. Sources do not compute this themselves.
+
+    The framework constructs each source with ``local_path=<resolved>`` at
+    registry-init time (see ``SourceRegistry``).
+    """
+
+    name: str
+    display_name: str
+    can_acquire: bool
+    vault_subdir: str
+    local_path: Path
+
+    def is_available(self) -> bool: ...
+    def walk(self) -> Sequence[DiscoveredModel]: ...
+```
+
+### `genesis_worker/sources/_registry.py`
+
+The single point of construction for sources. No decorator, no auto-discovery, no module-level state.
+
+```python
+from __future__ import annotations
+
+from collections.abc import Iterable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ._base import ModelSource
 
-_REGISTRY: dict[str, Type[ModelSource]] = {}
+if TYPE_CHECKING:
+    from ..settings import Settings
 
 
-def register_source(cls: Type[ModelSource]) -> Type[ModelSource]:
-    _REGISTRY[cls.name] = cls
-    return cls
+class SourceRegistry:
+    """Facade for constructing and looking up ModelSource instances.
 
+    Construction is explicit: callers pass the source classes they want
+    registered. Each source is constructed exactly once with ``local_path``
+    resolved from settings per the rules below.
 
-def all_sources() -> list[ModelSource]:
-    return [cls() for cls in _REGISTRY.values()]
+    Path resolution (highest priority first):
 
+    1. ``settings.sources.<name>.local_path`` is an absolute Path -> use as-is.
+    2. ``settings.sources.<name>.local_path`` is a relative Path ->
+       join with ``settings.paths.resolved_vault_path``.
+    3. No override -> ``settings.paths.resolved_vault_path / source.vault_subdir``.
 
-def _bootstrap() -> None:
-    package = __import__(__package__, fromlist=["_bootstrap"])  # genesis_worker.sources
-    for mod in pkgutil.iter_modules(package.__path__):
-        if mod.name.startswith("_"):
-            continue
-        importlib.import_module(f"{__package__}.{mod.name}")
+    Adding a new source is one new module + adding the class to the
+    consumer's list passed to this facade.
+    """
 
+    def __init__(self, settings: Settings, source_classes: Iterable[type]) -> None:
+        self._settings = settings
+        self._instances: dict[str, ModelSource] = {}
+        for cls in source_classes:
+            self._instances[cls.name] = cls(local_path=self._resolve_path(cls))
 
-_bootstrap()
+    def _resolve_path(self, cls: type) -> Path: ...
+
+    def get(self, name: str) -> ModelSource:
+        return self._instances[name]
+
+    def all(self) -> list[ModelSource]:
+        return list(self._instances.values())
+
+    @property
+    def vault_path(self) -> Path:
+        """The resolved vault root, derived from settings."""
+        return self._settings.paths.resolved_vault_path
 ```
 
 ### `genesis_worker/sources/huggingface.py`
@@ -282,37 +380,46 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..paths import _xdg_path
-from ._base import DiscoveredModel, ModelPiece, ModelSource
-from ._registry import register_source
-
-# Constants from bin/catalog.py — preserved exactly.
-COMPONENT_DIRS = {...}
-WEIGHT_EXTS = {...}
-SKIP_FILENAMES = {...}
+from ..models import DiscoveredModel, ModelPiece
+from ._classify import SKIP_FILENAMES, classify, role_sort_key
 
 
-@register_source
 class HuggingFaceSource:
+    """HuggingFace cache layout: ``<local_path>/models--org--repo/``."""
+
     name = "huggingface"
     display_name = "HuggingFace"
     can_acquire = True  # AcquireSession ships in spec-002
+    vault_subdir = "huggingface/hub"
+    local_path: Path  # framework-assigned at construction
 
-    def __init__(self, local_path: Path | None = None) -> None:
-        self._local_path = local_path
+    def __init__(self, local_path: Path) -> None:
+        self.local_path = local_path
 
     def is_available(self) -> bool:
-        return self.local_path().is_dir()
+        return self.local_path.is_dir()
 
-    def local_path(self) -> Path:
-        if self._local_path is not None:
-            return self._local_path
-        return _xdg_path("DATA", ".local/share") / "vault" / "huggingface" / "hub"
-
-    def walk(self) -> list[DiscoveredModel]: ...
+    def walk(self) -> list[DiscoveredModel]:
+        hub_dir = self.local_path
+        # ... lifted from bin/catalog.py:walk_huggingface ...
 ```
 
-(`lmstudio.py` follows the same pattern.)
+(`lmstudio.py` follows the same pattern, with `vault_subdir = "lmstudio/models"` and the LM Studio walker.)
+
+Note: the source has **no** `local_path()` method, **no** `xdg_path` import, and **no** `_local_path` private storage. The framework constructs the source with the resolved `local_path`; the source stores it on `self.local_path` and uses it directly. There is no path computation in the source module.
+
+### `genesis_worker/sources/_classify.py`
+
+Shared classification helpers used by both walkers. Keeps constants and logic in one place so a bug fix applies to both sources.
+
+```python
+COMPONENT_DIRS: set[str] = {"text_encoder", "transformer", "unet", ...}
+WEIGHT_EXTS: set[str] = {".gguf", ".safetensors", ".bin", ".pt", ".pth", ".ckpt"}
+SKIP_FILENAMES: set[str] = {".gitattributes", "README.md", "LICENSE", ...}
+
+def classify(path: Path) -> str: ...
+def role_sort_key(role: str) -> tuple[int, str]: ...
+```
 
 ### `genesis_worker/catalog/schema.py`
 
@@ -321,10 +428,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..sources._base import ModelPiece  # re-use the dataclass
+from ..models import ModelPiece
 
 
 class ModelEntry(BaseModel):
+    """One model in the catalog."""
+
     name: str
     source: str
     pieces: list[ModelPiece] = Field(default_factory=list)
@@ -335,10 +444,33 @@ class ModelEntry(BaseModel):
 
 
 class Catalog(BaseModel):
+    """The unified catalog. ``huggingface`` and ``lmstudio`` lists are kept
+    separate so the YAML output matches the existing artifact shape (ADR-008)."""
+
     root: str
     generated_at: str
     huggingface: list[ModelEntry] = Field(default_factory=list)
     lmstudio: list[ModelEntry] = Field(default_factory=list)
+
+    def by_source(self) -> dict[str, list[ModelEntry]]:
+        """Return entries grouped by source name.
+
+        Source-agnostic iteration over the catalog. Walks the model's
+        declared fields and returns any field whose value is a list of
+        ``ModelEntry`` (works for empty lists too).
+
+        Adding a new source field (e.g. ``modelscope: list[ModelEntry]``)
+        automatically appears in this mapping — no second edit in
+        downstream consumers needed.
+        """
+        result: dict[str, list[ModelEntry]] = {}
+        for field_name in type(self).model_fields:
+            value = getattr(self, field_name)
+            if isinstance(value, list) and all(
+                isinstance(v, ModelEntry) for v in value
+            ):
+                result[field_name] = value
+        return result
 ```
 
 ### `genesis_worker/catalog/build.py`
@@ -346,48 +478,95 @@ class Catalog(BaseModel):
 ```python
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
-import yaml
-
-from ..sources._base import DiscoveredModel, ModelPiece
-from ..sources._registry import all_sources
+from ..models import DiscoveredModel
+from ..sources._registry import SourceRegistry
 from .schema import Catalog, ModelEntry
 
 
 class CatalogService:
-    def __init__(self, vault_path: Path) -> None:
-        self.vault_path = vault_path
+    """Walks the vault and produces a unified catalog.
+
+    The SourceRegistry owns path resolution for every registered source;
+    this service just walks them in order. The catalog's ``root`` is the
+    registry's ``vault_path``.
+    """
+
+    def __init__(self, registry: SourceRegistry) -> None:
+        self._registry = registry
+
+    @property
+    def vault_path(self) -> Path:
+        return self._registry.vault_path
 
     def rescan(self) -> Catalog:
         discovered: list[DiscoveredModel] = []
-        for source in all_sources():
+        for source in self._registry.all():
             if source.is_available():
                 discovered.extend(source.walk())
-        return self._build(discovered)
+        return _build_catalog(discovered, root=str(self._registry.vault_path))
 
-    @staticmethod
-    def _build(items: list[DiscoveredModel]) -> Catalog:
-        hf: list[ModelEntry] = []
-        lms: list[ModelEntry] = []
-        for d in items:
-            entry = ModelEntry(
-                name=d.native_id,
-                source=d.source,
-                pieces=d.pieces,
-                total_bytes=d.total_bytes,
-                directory=str(d.directory),
-                notes=list(d.notes),
-                extra=dict(d.extra),
-            )
-            (hf if d.source == "huggingface" else lms).append(entry)
-        return Catalog(
-            root="",
-            generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            huggingface=hf,
-            lmstudio=lms,
+
+def _build_catalog(discovered: list[DiscoveredModel], *, root: str) -> Catalog:
+    by_source: dict[str, list[ModelEntry]] = {"huggingface": [], "lmstudio": []}
+    for d in discovered:
+        entry = ModelEntry(
+            name=d.native_id,
+            source=d.source,
+            pieces=list(d.pieces),
+            total_bytes=d.total_bytes,
+            directory=str(d.directory),
+            notes=list(d.notes),
+            extra=dict(d.extra),
         )
+        by_source.setdefault(d.source, []).append(entry)
+    return Catalog(
+        root=root,
+        generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        huggingface=by_source.get("huggingface", []),
+        lmstudio=by_source.get("lmstudio", []),
+    )
+```
+
+Note: `CatalogService` takes a `SourceRegistry`, not a `vault_path`. The registry already routed each source to its resolved path; the service does not mutate source internals (the old `_override_source_local_path` pattern is gone).
+
+### `genesis_worker/services/_registry.py`
+
+The single point of construction for inference services. Mirrors `SourceRegistry`: explicit class list, no decorators, no module-level state. The `InferenceService` Protocol itself (and `LlamaSwapService`) ship in plan-002 — this facade is the plan-001 scaffolding.
+
+```python
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..settings import Settings
+
+
+class ServiceRegistry:
+    """Facade for constructing and looking up service instances.
+
+    Construction is explicit: callers pass the service classes they want
+    registered. Each service is constructed with its per-service settings
+    slice (e.g. ``settings.services.llama_swap``) as the ``settings`` kwarg.
+    Services whose ``name`` does not appear under ``settings.services`` get
+    ``settings=None`` — they may accept None or require a settings slice.
+    """
+
+    def __init__(self, settings: Settings, service_classes: Iterable[type]) -> None:
+        self._settings = settings
+        self._instances: dict[str, Any] = {}
+        for cls in service_classes:
+            per_service = getattr(settings.services, cls.name, None)
+            self._instances[cls.name] = cls(settings=per_service)
+
+    def get(self, name: str) -> Any:
+        return self._instances[name]
+
+    def all(self) -> list:
+        return list(self._instances.values())
 ```
 
 ### `genesis_worker/services/llama_swap/recipes.py`
@@ -395,6 +574,7 @@ class CatalogService:
 ```python
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -403,6 +583,8 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class Recipe(BaseModel):
+    """One recipe entry, plus the recipe's name as a field."""
+
     name: str
     match: str | None = None
     binary: str | None = None
@@ -419,31 +601,46 @@ class Recipe(BaseModel):
 
 
 class Recipes(BaseModel):
+    """The full recipes.yaml: a default recipe plus matchable recipes."""
+
     default: Recipe | None = None
     matchable: list[Recipe] = Field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> "Recipes":
         raw = yaml.safe_load(path.read_text())
-        rec_dict = raw.get("recipes", {})
+        rec_dict = (raw or {}).get("recipes", {})
         default = None
         matchable: list[Recipe] = []
         for name, body in rec_dict.items():
-            r = Recipe(name=name, **body)
+            r = Recipe(name=name, **(body or {}))
             if r.match is None or not str(r.match).strip():
                 default = r
             else:
                 matchable.append(r)
         return cls(default=default, matchable=matchable)
 
-    def resolve(self, model_name: str) -> ResolvedRecipes: ...
+    def resolve(self, model_name: str) -> ResolvedRecipes:
+        """Return which recipes match this model and which keyword won.
+
+        Substring shadowing: only the longest keyword(s) win; siblings
+        sharing a keyword all emit one llama-swap entry each.
+        """
+        # ... longest-match resolver ...
 
 
 @dataclass(frozen=True)
 class ResolvedRecipes:
-    matched: list[Recipe]  # all recipes whose keyword matched
-    winner_keyword: str  # longest keyword that matched; "default" if none
-    winner_recipe: Recipe  # the winning Recipe (or self.default)
+    """Resolver output: which recipes matched, and which keyword won.
+
+    ``winner_recipe`` is the recipe whose cascade should be applied for
+    fields not overridden by the user. The Config Editor (spec-003)
+    uses ``winner_keyword`` to render "from recipe: <name>" badges in the UI.
+    """
+
+    matched: list[Recipe]
+    winner_keyword: str
+    winner_recipe: Recipe | None
 ```
 
 ### `genesis_worker/services/llama_swap/overrides.py`
@@ -457,6 +654,12 @@ import yaml
 
 
 class OverridesStore:
+    """Read/write ``overrides.yaml``.
+
+    Missing file = empty store. Removing a field from overrides.yaml
+    clears that override (no tombstone needed).
+    """
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -474,81 +677,133 @@ class OverridesStore:
 
 ### `genesis_worker/services/llama_swap/config.py`
 
-Lifts `bin/build-config.py` logic verbatim. Replaces hand-rolled YAML emit with `yaml.dump` (ADR-006). Adds `resolved_from: <recipe_name>` annotation to each emitted entry.
+Lifts `bin/build-config.py` logic verbatim. Replaces hand-rolled YAML emit with `yaml.dump` (ADR-006). Adds `resolved_from: <recipe_name>` annotation to each emitted entry. Iterates the catalog via `Catalog.by_source()` for source-agnostic build.
 
 ```python
 from __future__ import annotations
 
 import json
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 import yaml
 
+from ...catalog.schema import Catalog, ModelEntry
+from ...paths import repo_root
+from .recipes import Recipe
 
-SAMPLING_FLAGS = {
-    "temp": "--temp",
-    "top_p": "--top-p",
-    "top_k": "--top-k",
-    "min_p": "--min-p",
-    "presence_penalty": "--presence-penalty",
-    "repeat_penalty": "--repeat-penalty",
-}
+
+# Repo-root resolution so recipes can use paths like "vendor/llama.cpp/build/bin/llama-server".
+REPO_ROOT = repo_root()
+
+# Resource policy thresholds (bytes). When a model's weight size exceeds
+# one of these, the corresponding VRAM-saver flag is added. These are
+# machine-dependent (would change if you swapped GPUs), not model-
+# dependent, so they live in code rather than in recipes.yaml.
+DEFAULT_KV_QUANT_OVER = 25_000_000_000
+DEFAULT_MMPROJ_OFFLOAD_OVER = 25_000_000_000
+DEFAULT_BINARY_REL = "vendor/llama.cpp/build/bin/llama-server"
+
+
+@dataclass(frozen=True)
+class BuildThresholds:
+    kv_quant_over: int = DEFAULT_KV_QUANT_OVER
+    mmproj_offload_over: int = DEFAULT_MMPROJ_OFFLOAD_OVER
+    default_binary_rel: str = DEFAULT_BINARY_REL
+
+
+def _opt(recipe, default_recipe, key): ...
+def _resolve_binary(binary: str) -> str: ...
+
+def _is_llm_candidate(entry: ModelEntry, source: str) -> bool:
+    """Skip non-LLMs: image-gen / adapters / safetensors-only HF / empty.
+
+    Source-agnostic default (``any non-config piece``) covers future
+    sources without code change.
+    """
+    if any("no model weights on disk" in n for n in entry.notes):
+        return False
+    if not entry.pieces:
+        return False
+    if source == "huggingface":
+        return any(p.filename.lower().endswith(".gguf") for p in entry.pieces)
+    return any(p.role not in ("config",) for p in entry.pieces)
+
+
+@dataclass(frozen=True)
+class DetectedFiles:
+    main: Path | None
+    mmproj: Path | None
+    draft: Path | None
+    is_mtp: bool
+    weight_bytes: int
+
+
+def detect_files(entry: ModelEntry) -> DetectedFiles: ...
 
 
 def build_cmd(
     recipe: Recipe,
-    files: dict,
+    files: DetectedFiles,
     *,
-    default_recipe: Recipe | None,
+    default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    default_binary_rel: str,
-) -> str:
-    # ... lifted from bin/build-config.py:build_cmd ...
-    # Returns the same multi-line string with `\` continuations.
-    ...
+    thresholds: BuildThresholds | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> str: ...
+
+
+def make_entry_id(name, recipe, *, multi_match, all_ids, source) -> str: ...
+def make_display_name(name, recipe, multi_match) -> str: ...
 
 
 def build_config(
     catalog: Catalog,
-    recipes: Recipes,
-    overrides: dict[str, dict],
+    recipes,
+    overrides: dict[str, dict] | None = None,
     *,
     binary_override: str | None = None,
-    default_binary_rel: str,
-) -> tuple[dict, list[str]]:
-    """Return a dict suitable for yaml.dump, plus a list of `resolved_from`
-    annotations parallel to the model entries (for the Config Editor UI)."""
-    ...
+    thresholds: BuildThresholds | None = None,
+) -> list[tuple[str, dict]]:
+    """Walk the catalog via ``catalog.by_source()``, match recipes, apply
+    overrides, emit entries. ``recipes`` is a :class:`Recipes` object
+    (the ``default`` and ``matchable`` lists live there)."""
+    overrides = overrides or {}
+    thresholds = thresholds or BuildThresholds()
+    entries: list[tuple[str, dict]] = []
+    all_ids: set[str] = set()
+
+    for source_key, entries_for_source in catalog.by_source().items():
+        for entry in entries_for_source:
+            if not _is_llm_candidate(entry, source_key):
+                continue
+            # ... match recipes, apply overrides, emit ...
+    return entries
 
 
-def write_config(path: Path, payload: dict) -> bool:
+class _LiteralBlock(str):
+    """Marker subclass that triggers PyYAML's literal-block representer."""
+
+
+def emit_payload(entries, root, generated_at) -> dict: ...
+def write_config(path, entries, *, root, generated_at) -> bool:
     """Write iff content differs. Returns True iff a write happened."""
-    text = yaml.safe_dump(payload, sort_keys=False, default_flow_style=False, width=1000)
-    try:
-        existing = path.read_text()
-    except FileNotFoundError:
-        path.write_text(text)
-        return True
-    if existing == text:
-        return False
-    path.write_text(text)
-    return True
+    ...
 ```
-
-(`_opt`, `normalize`, `get_matching_recipes`, `_is_llm_candidate`, `detect_files`, `make_entry_id`, `make_display_name`, `build_entry` — all lifted from `bin/build-config.py`.)
 
 ## Tests
 
 Each test file uses pytest; the project root pytest config picks them up via `uv run pytest`.
 
 - `test_paths.py`: `repo_root()` returns a directory containing `Makefile` or `pyproject.toml`.
-- `test_settings.py`: instantiate `Settings()` with no env vars, assert defaults; set `GENESIS_PATHS__DATA_DIR=/custom/x` via `monkeypatch.setenv`, assert it wins; set `XDG_DATA_HOME=/custom/y`, assert `_xdg_path("DATA", ".local/share")` returns `/custom/y/genesis-worker`.
-- `test_sources_registry.py`: `all_sources()` returns at least `huggingface` and `lmstudio`; both are registered exactly once.
+- `test_settings.py`: instantiate `Settings()` with no env vars, assert defaults; set `GENESIS_PATHS__DATA_DIR=/custom/x` via `monkeypatch.setenv`, assert it wins; set `XDG_DATA_HOME=/custom/y`, assert `xdg_path("DATA", ".local/share")` returns `/custom/y/genesis-worker`.
+- `test_sources_registry.py`: `SourceRegistry(Settings(), [HuggingFaceSource, LMSource])` returns both sources; `get("huggingface")` / `get("lmstudio")` work; `get("does_not_exist")` raises `KeyError`. Path-resolution contract: default → `vault_subdir`, explicit absolute → used as-is, explicit relative → joined to `vault_path`. Empty class list yields an empty registry.
 - `test_sources_huggingface.py`: walk against a fixture tree (build a temp HF layout under `tmp_path` with `models--org--name/refs/main`, `snapshots/<sha>/...`), assert entry count + pieces + total_bytes.
 - `test_sources_lmstudio.py`: walk against a fixture `<publisher>/<model-dir>` tree, assert entry count.
-- `test_catalog_build.py`: build a Catalog with two sources, assert the merge.
+- `test_services_registry.py`: `ServiceRegistry(Settings(), [FakeService])` constructs services with `settings=<per-service slice or None>`; `get()` / `all()` work; `KeyError` on unknown.
+- `test_catalog_build.py`: build a Catalog via `CatalogService(SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault)), [HuggingFaceSource, LMSource]))`, assert the merge. `Catalog.by_source()` returns the same data as the explicit `huggingface` / `lmstudio` fields.
 - `test_recipes.py`: load current `recipes.yaml`; resolve a battery of model names; assert the winner matches `bin/build-config.py`'s behavior (qwen3.6-27b wins over qwen3.6; lfm2 → lfm2; rocinante → default; bonsai → bonsai).
 - `test_overrides.py`: write/load round-trip; missing file returns `{}`; clearing a field removes it.
 - `test_config_emit.py`: (a) no-overrides build → diff `cmd` strings against current `config.yaml` (byte-equal or whitespace-equal). (b) Apply an override to one entry → that entry's `cmd` reflects the override. (c) `write_config` is idempotent (mtime preserved on no-op).
@@ -557,9 +812,9 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 
 1. `uv sync` exits 0.
 2. `uv run pytest genesis_worker/tests/` passes.
-3. `uv run python -c "from genesis_worker.sources import all_sources; print([s.name for s in all_sources()])"` prints `['huggingface', 'lmstudio']` (order may vary).
+3. `uv run python -c "from genesis_worker.sources import SourceRegistry, HuggingFaceSource, LMSource; from genesis_worker.settings import Settings; print(sorted(s.name for s in SourceRegistry(Settings(), [HuggingFaceSource, LMSource]).all()))"` prints `['huggingface', 'lmstudio']`.
 4. `uv run python -c "from genesis_worker.settings import Settings; print(Settings().paths)"` prints four XDG-defaulted paths.
-5. `uv run python -c "from genesis_worker.catalog.build import CatalogService; from pathlib import Path; print(CatalogService(Path.home() / 'Data2/models').rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
+5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry, HuggingFaceSource, LMSource; from genesis_worker.catalog.build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s, [HuggingFaceSource, LMSource]); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
 6. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; from genesis_worker.services.llama_swap.recipes import Recipes; from pathlib import Path; ...; print(len(entries))"` shows the same entry count as `wc -l config.yaml`.
 7. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; ...; yaml.safe_dump(...)" | diff - <(grep -A 1000 '^models:' config.yaml)` shows content-equivalent entries (whitespace allowed to differ).
 8. `make all` still passes — `bin/catalog.py` and `bin/build-config.py` still produce their original output. The `config.yaml` on disk is untouched.
