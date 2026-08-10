@@ -22,6 +22,7 @@ All architectural decisions live in `docs/arch/`. Each decision is a Nygard-form
 | 006 | [PyYAML replaces hand-rolled YAML](arch/adr-006-pyyaml-replaces-hand-rolled.md) | One consistent YAML library across the codebase; byte-level diffs accepted; content must be equivalent. |
 | 007 | [Overrides in `overrides.yaml`; no SQLite in v1](arch/adr-007-overrides-yaml-no-sqlite.md) | Declarative per-model overrides; defer SQLite. |
 | 008 | [Migration strategy](arch/adr-008-migration-strategy.md) | `bin/`, `Makefile`, and state files retained through v1; retired post-v1 after each new module is validated equivalent. |
+| 009 | [Framework / plugin boundary](arch/adr-009-framework-plugin-boundary.md) | `contracts` is the only shared surface; plugins own their options schema; framework passes resolved contexts; ABCs replace Protocols. Supersedes parts of 003 and 004. |
 
 ## Implementation specs
 
