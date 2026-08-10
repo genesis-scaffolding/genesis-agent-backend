@@ -1,10 +1,16 @@
-"""Tests for the service registry facade."""
+"""Tests for the service registry facade and the InferenceService Protocol."""
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
-from genesis_worker.services import ServiceRegistry
+from genesis_worker.services import (
+    InferenceService,
+    ServiceRegistry,
+)
+from genesis_worker.services.llama_swap import LlamaSwapService
 from genesis_worker.settings import (
     LlamaSwapServiceSettings,
     ServicesSettings,
@@ -118,3 +124,105 @@ def test_registry_constructs_each_service_exactly_once() -> None:
     assert r1.get("llama_swap") is not r2.get("llama_swap")
     assert r1.get("llama_swap").settings.listen_addr == "a:1"
     assert r2.get("llama_swap").settings.listen_addr == "a:2"
+
+
+# ---------------------------------------------------------------------------
+# LlamaSwapService — concrete implementation
+# ---------------------------------------------------------------------------
+
+
+def test_llama_swap_service_is_constructible_via_registry() -> None:
+    """``LlamaSwapService`` plugs into ServiceRegistry just like sources plug into SourceRegistry."""
+    reg = ServiceRegistry(Settings(), [LlamaSwapService])
+    svc = reg.get("llama_swap")
+    assert isinstance(svc, LlamaSwapService)
+
+
+def test_llama_swap_service_satisfies_inference_service_protocol() -> None:
+    """LlamaSwapService is a runtime-checkable InferenceService."""
+    svc = ServiceRegistry(Settings(), [LlamaSwapService]).get("llama_swap")
+    assert isinstance(svc, InferenceService)
+
+
+def test_llama_swap_service_default_settings() -> None:
+    """Construction with no settings yields sensible defaults."""
+    svc = LlamaSwapService()
+    assert svc._settings.listen_addr == "127.0.0.1:8080"
+    assert svc._settings.session_name == "swap"
+
+
+def test_llama_swap_service_picks_up_settings_slice() -> None:
+    """When constructed via ServiceRegistry, the per-service slice is used."""
+    s = Settings(
+        services=ServicesSettings(
+            llama_swap=LlamaSwapServiceSettings(
+                listen_addr="0.0.0.0:9999",
+                session_name="custom-session",
+            ),
+        ),
+    )
+    svc = ServiceRegistry(s, [LlamaSwapService]).get("llama_swap")
+    assert svc._settings.listen_addr == "0.0.0.0:9999"
+    assert svc._settings.session_name == "custom-session"
+
+
+def test_llama_swap_capabilities_declares_llm_serving() -> None:
+    """LlamaSwapService reports the capabilities the dashboard relies on."""
+    svc = LlamaSwapService()
+    caps = svc.capabilities()
+    assert caps.can_serve_llm
+    assert caps.can_generate_config
+    assert caps.can_export_for_agent
+    assert not caps.can_serve_image
+    assert not caps.can_train_models
+    assert not caps.has_web_ui
+
+
+def test_llama_swap_is_available_when_binary_on_path() -> None:
+    """``is_available()`` checks for the ``llama-swap`` binary on PATH."""
+    svc = LlamaSwapService()
+    # The result depends on whether llama-swap is installed on the test
+    # machine. We assert the method runs without error and returns a bool.
+    result = svc.is_available()
+    assert isinstance(result, bool)
+    if shutil.which("llama-swap") is None:
+        assert result is False
+
+
+def test_llama_swap_is_available_false_when_config_missing(tmp_path: Path) -> None:
+    """``is_available()`` returns False when an explicit config_path doesn't exist."""
+    svc = LlamaSwapService(
+        settings=LlamaSwapServiceSettings(config_path=tmp_path / "missing.yaml"),
+    )
+    assert svc.is_available() is False
+
+
+def test_llama_swap_lifecycle_methods_are_stubbed() -> None:
+    """Lifecycle methods raise NotImplementedError until plan-002 lands them.
+
+    The structural shape (Protocol conformance) is in place; the runtime
+    plumbing (tmux + curl + psutil) ships in plan-002.
+    """
+    svc = LlamaSwapService()
+    with pytest.raises(NotImplementedError):
+        svc.start()
+    with pytest.raises(NotImplementedError):
+        svc.stop()
+    with pytest.raises(NotImplementedError):
+        svc.status()
+    with pytest.raises(NotImplementedError):
+        svc.is_running()
+    with pytest.raises(NotImplementedError):
+        svc.runtime_endpoint()
+    with pytest.raises(NotImplementedError):
+        svc.wait_ready(1.0)
+    with pytest.raises(NotImplementedError):
+        svc.resource_estimate()
+
+
+# ---------------------------------------------------------------------------
+# Imports for type annotations used above
+# ---------------------------------------------------------------------------
+
+
+from pathlib import Path  # noqa: E402

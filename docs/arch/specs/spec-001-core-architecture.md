@@ -52,16 +52,15 @@ my-agent-backend/
     │   ├── huggingface.py         # Phase 1 walker (acquire in spec-002)
     │   └── lmstudio.py            # Phase 1 walker
     ├── services/
-    │   ├── __init__.py            # re-exports ServiceRegistry
+    │   ├── __init__.py            # re-exports ServiceRegistry, InferenceService, dataclasses
+    │   ├── _base.py               # InferenceService Protocol + ServiceCapabilities / ServiceResourceEstimate / ServiceStatus / StartResult / StopResult / ServiceState
     │   ├── _registry.py           # ServiceRegistry facade
-    │   │                          # NOTE: services/_base.py (InferenceService Protocol) and
-    │   │                          #       services/llama_swap/service.py (LlamaSwapService) ship in plan-002.
     │   └── llama_swap/
-    │       ├── __init__.py
+    │       ├── __init__.py            # re-exports LlamaSwapService, Recipe, Recipes, ResolvedRecipes, OverridesStore
     │       ├── recipes.py         # Phase 3
     │       ├── config.py          # Phase 4
     │       ├── overrides.py       # Phase 4
-    │       ├── service.py         # Phase 5 (spec-002)
+    │       ├── service.py         # LlamaSwapService — read-only methods real; lifecycle methods (start/stop/status/etc.) stubbed until plan-002
     │       ├── lifecycle.py       # Phase 5 (spec-002)
     │       └── agent_export.py    # Phase 6 (spec-002)
     ├── catalog/
@@ -531,9 +530,94 @@ def _build_catalog(discovered: list[DiscoveredModel], *, root: str) -> Catalog:
 
 Note: `CatalogService` takes a `SourceRegistry`, not a `vault_path`. The registry already routed each source to its resolved path; the service does not mutate source internals (the old `_override_source_local_path` pattern is gone).
 
+### `genesis_worker/services/_base.py`
+
+The axis definition: the `InferenceService` Protocol and the result / status / capability dataclasses that any concrete service must produce. Lives at the axis level so consumers (UI, CLI, facade) reason about services without importing a concrete implementation. Mirrors `sources/_base.py`'s role.
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol, runtime_checkable
+
+
+class ServiceState(StrEnum):
+    """Coarse lifecycle state for an inference service."""
+
+    RUNNING = "running"
+    STOPPED = "stopped"
+    STARTING = "starting"
+    STOPPING = "stopping"
+    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class ServiceCapabilities:
+    """What the service can do. Drives capability-driven UI — no hardcoded
+    ``if service == "llama-swap"`` branches in the dashboard."""
+
+    can_generate_config: bool
+    can_export_for_agent: bool
+    can_serve_llm: bool
+    can_serve_image: bool
+    can_train_models: bool
+    has_web_ui: bool
+
+
+@dataclass(frozen=True)
+class ServiceResourceEstimate:
+    """Rough resource budget. Advisory — tells the dashboard what to render,
+    not what to enforce."""
+
+    vram_bytes_typical: int
+    vram_bytes_min: int
+    cpu_cores_recommended: int
+
+
+@dataclass(frozen=True)
+class ServiceStatus:
+    state: ServiceState
+    message: str = ""
+    pid: int | None = None
+    endpoint: str | None = None
+
+
+@dataclass(frozen=True)
+class StartResult:
+    ok: bool
+    message: str = ""
+    pid: int | None = None
+
+
+@dataclass(frozen=True)
+class StopResult:
+    ok: bool
+    message: str = ""
+
+
+@runtime_checkable
+class InferenceService(Protocol):
+    """One inference backend (llama-swap, ComfyUI, AIToolkit, vLLM, ...)."""
+
+    name: str
+    display_name: str
+
+    def is_available(self) -> bool: ...
+    def is_running(self) -> bool: ...
+    def runtime_endpoint(self) -> str | None: ...
+    def capabilities(self) -> ServiceCapabilities: ...
+    def resource_estimate(self) -> ServiceResourceEstimate: ...
+    def start(self) -> StartResult: ...
+    def stop(self) -> StopResult: ...
+    def status(self) -> ServiceStatus: ...
+    def wait_ready(self, timeout_s: float) -> bool: ...
+```
+
 ### `genesis_worker/services/_registry.py`
 
-The single point of construction for inference services. Mirrors `SourceRegistry`: explicit class list, no decorators, no module-level state. The `InferenceService` Protocol itself (and `LlamaSwapService`) ship in plan-002 — this facade is the plan-001 scaffolding.
+The single point of construction for inference services. Mirrors `SourceRegistry`: explicit class list, no decorators, no module-level state. Each service receives its per-service settings slice at construction.
 
 ```python
 from __future__ import annotations
@@ -568,6 +652,86 @@ class ServiceRegistry:
     def all(self) -> list:
         return list(self._instances.values())
 ```
+
+### `genesis_worker/services/llama_swap/service.py`
+
+The concrete `LlamaSwapService` — the one inference service we ship in spec-001. Mirrors the role of `sources/huggingface.py` for the services axis.
+
+The Protocol defines the contract; the read-only methods (`is_available`, `capabilities`) are implemented now because they don't need tmux or curl. The lifecycle methods (`start`, `stop`, `status`, `is_running`, `runtime_endpoint`, `wait_ready`, `resource_estimate`) raise `NotImplementedError` with a docstring pointer to plan-002 — that's where the tmux + curl + psutil plumbing lands.
+
+```python
+from __future__ import annotations
+
+import shutil
+
+from ...settings import LlamaSwapServiceSettings
+from .._base import (
+    InferenceService,
+    ServiceCapabilities,
+    ServiceResourceEstimate,
+    ServiceStatus,
+    StartResult,
+    StopResult,
+)
+
+
+class LlamaSwapService(InferenceService):
+    """Inference service for llama-swap.
+
+    Implements the read-only surface of :class:`InferenceService` now;
+    lifecycle hooks raise :class:`NotImplementedError` and are filled in by
+    plan-002 with the tmux + curl plumbing.
+    """
+
+    name = "llama_swap"
+    display_name = "llama-swap"
+
+    def __init__(self, settings: LlamaSwapServiceSettings | None = None) -> None:
+        self._settings = settings if settings is not None else LlamaSwapServiceSettings()
+
+    def is_available(self) -> bool:
+        """llama-swap binary on PATH and (if configured) its config file exists."""
+        if shutil.which("llama-swap") is None:
+            return False
+        config = self._settings.config_path
+        return config is None or config.is_file()
+
+    def capabilities(self) -> ServiceCapabilities:
+        """Static capability declaration. Drives dashboard tile rendering."""
+        return ServiceCapabilities(
+            can_generate_config=True,
+            can_export_for_agent=True,
+            can_serve_llm=True,
+            can_serve_image=False,
+            can_train_models=False,
+            has_web_ui=False,
+        )
+
+    # --- Lifecycle methods (plan-002) --------------------------------------
+
+    def resource_estimate(self) -> ServiceResourceEstimate:
+        raise NotImplementedError("lands in plan-002 (psutil + pynvml)")
+
+    def is_running(self) -> bool:
+        raise NotImplementedError("lands in plan-002 (tmux)")
+
+    def runtime_endpoint(self) -> str | None:
+        raise NotImplementedError("lands in plan-002")
+
+    def start(self) -> StartResult:
+        raise NotImplementedError("lands in plan-002 (tmux + curl)")
+
+    def stop(self) -> StopResult:
+        raise NotImplementedError("lands in plan-002 (tmux)")
+
+    def status(self) -> ServiceStatus:
+        raise NotImplementedError("lands in plan-002 (tmux + curl)")
+
+    def wait_ready(self, timeout_s: float) -> bool:
+        raise NotImplementedError("lands in plan-002 (curl polling)")
+```
+
+The structural symmetry with the sources axis is now in place: Protocol + facade + concrete class, plus shared result/status/capability types. Adding a future service (ComfyUI, AIToolkit, vLLM) follows the same pattern: one new module + implementing the Protocol + adding the class to the consumer's list passed to `ServiceRegistry`.
 
 ### `genesis_worker/services/llama_swap/recipes.py`
 
@@ -802,7 +966,7 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 - `test_sources_registry.py`: `SourceRegistry(Settings(), [HuggingFaceSource, LMSource])` returns both sources; `get("huggingface")` / `get("lmstudio")` work; `get("does_not_exist")` raises `KeyError`. Path-resolution contract: default → `vault_subdir`, explicit absolute → used as-is, explicit relative → joined to `vault_path`. Empty class list yields an empty registry.
 - `test_sources_huggingface.py`: walk against a fixture tree (build a temp HF layout under `tmp_path` with `models--org--name/refs/main`, `snapshots/<sha>/...`), assert entry count + pieces + total_bytes.
 - `test_sources_lmstudio.py`: walk against a fixture `<publisher>/<model-dir>` tree, assert entry count.
-- `test_services_registry.py`: `ServiceRegistry(Settings(), [FakeService])` constructs services with `settings=<per-service slice or None>`; `get()` / `all()` work; `KeyError` on unknown.
+- `test_services_registry.py`: `ServiceRegistry(Settings(), [LlamaSwapService])` constructs the service with the per-service settings slice; `LlamaSwapService` satisfies the `InferenceService` Protocol; `is_available()` / `capabilities()` return real values; lifecycle methods raise `NotImplementedError` until plan-002 lands them. The registry also accepts anonymous test classes for the construction contract (`get()` / `all()` / `KeyError`).
 - `test_catalog_build.py`: build a Catalog via `CatalogService(SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault)), [HuggingFaceSource, LMSource]))`, assert the merge. `Catalog.by_source()` returns the same data as the explicit `huggingface` / `lmstudio` fields.
 - `test_recipes.py`: load current `recipes.yaml`; resolve a battery of model names; assert the winner matches `bin/build-config.py`'s behavior (qwen3.6-27b wins over qwen3.6; lfm2 → lfm2; rocinante → default; bonsai → bonsai).
 - `test_overrides.py`: write/load round-trip; missing file returns `{}`; clearing a field removes it.
