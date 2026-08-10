@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -213,14 +214,33 @@ class LlamaSwapService(InferenceService):
         return Recipes.load(self.recipes_path())
 
     def export_for_agent(self, *, base_url: str | None = None) -> dict:
-        """Build the pi-agent ``models.json``-shaped dict from ``config.yaml``.
+        """Build the pi-agent ``models.json``-shaped dict from ``config.yaml``."""
+        from .agent_export import build_provider
 
-        Implementation lands in spec-002 chunk 2 with :mod:`agent_export`.
-        For now raises so callers don't silently get empty output.
+        return build_provider(self.config_path(), base_url=base_url)
+
+    def write_models_json(
+        self, target: Path, *, base_url: str | None = None
+    ) -> bool:
+        """Build + write ``target`` iff contents differ. Returns True iff a write happened."""
+        from .agent_export import write_models_json
+
+        provider = self.export_for_agent(base_url=base_url)
+        return write_models_json(target, provider)
+
+    def pi_install_target(self) -> Path:
+        """``~/.pi/agent/models.json`` — where pi-agent looks up models.
+
+        ``$PI_INSTALL_DIR`` overrides the parent directory (useful for
+        CI / dry-run installs); default is ``~/.pi/agent``.
         """
-        raise NotImplementedError(
-            "LlamaSwapService.export_for_agent lands in spec-002 chunk 2 (agent_export.py)"
-        )
+        from .agent_export import default_target_path
+
+        base = Path(os.environ.get("PI_INSTALL_DIR") or (Path.home() / ".pi" / "agent"))
+        # Caller's default-target helper returns ./pi-models.json; the
+        # install target is fixed at the agent's expected location.
+        del default_target_path  # not used here; reserved for CLI default
+        return base / "models.json"
 
     # --- config.yaml timestamp helpers -------------------------------------
 
