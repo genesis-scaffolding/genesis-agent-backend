@@ -25,9 +25,13 @@ DEFAULT_BINARY_REL = "vendor/llama.cpp/build/bin/llama-server"
 
 @dataclass(frozen=True)
 class BuildOptions:
-    """Per-invocation build policy. The service supplies these from its options."""
+    """Per-invocation build policy. The service supplies these from its context.
 
-    repo_root: Path = Path(".")
+    ``repo_root`` has no default on purpose: relative binary paths in recipes resolve
+    against it, and a plugin cannot know where the checkout lives. The framework does.
+    """
+
+    repo_root: Path
     kv_quant_over: int = DEFAULT_KV_QUANT_OVER
     mmproj_offload_over: int = DEFAULT_MMPROJ_OFFLOAD_OVER
     default_binary_rel: str = DEFAULT_BINARY_REL
@@ -135,7 +139,7 @@ def build_cmd(
     *,
     default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    options: BuildOptions | None = None,
+    options: BuildOptions,
     overrides: dict[str, Any] | None = None,
 ) -> str:
     """Compose the llama-server command line for one model entry.
@@ -148,7 +152,6 @@ def build_cmd(
     default.binary -> options.default_binary_rel.
     """
     ovr = overrides or {}
-    options = options or BuildOptions()
     binary_str = (
         recipe.binary
         or binary_override
@@ -321,7 +324,7 @@ def build_entry(
     multi_match: bool,
     default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    options: BuildOptions | None = None,
+    options: BuildOptions,
     entry_id_override: str | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> tuple[str, dict]:
@@ -342,7 +345,7 @@ def build_entry(
         files,
         default_recipe=default_recipe,
         binary_override=binary_override,
-        options=options or BuildOptions(),
+        options=options,
         overrides=overrides,
     )
     return entry_id, {
@@ -360,7 +363,7 @@ def build_config(
     overrides: dict[str, dict] | None = None,
     *,
     binary_override: str | None = None,
-    options: BuildOptions | None = None,
+    options: BuildOptions,
 ) -> list[tuple[str, dict]]:
     """Walk the catalog, match recipes, apply overrides, emit entries.
 
@@ -369,7 +372,6 @@ def build_config(
     ``{entry_id: {field: value}}`` dict from :class:`OverridesStore`.
     """
     overrides = overrides or {}
-    options = options or BuildOptions()
     entries: list[tuple[str, dict]] = []
     all_ids: set[str] = set()
 

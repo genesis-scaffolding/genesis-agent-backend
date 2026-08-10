@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from genesis_worker.paths import repo_root
 from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
 
 
@@ -141,6 +142,6 @@ def test_recipe_ignores_unknown_fields() -> None:
 
 def test_load_real_repo_recipes() -> None:
     """The real recipes.yaml in this repo loads cleanly and has at least one matchable recipe."""
-    r = Recipes.load(Path("recipes.yaml"))
+    r = Recipes.load(repo_root() / "recipes.yaml")
     assert r.default is not None
     assert len(r.matchable) > 0

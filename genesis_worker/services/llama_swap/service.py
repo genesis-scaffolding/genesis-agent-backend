@@ -23,8 +23,6 @@ from .options import LlamaSwapOptions
 from .overrides import OverridesStore
 from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
 
-PI_AGENT_DIR = Path.home() / ".pi" / "agent"
-
 
 class LlamaSwapService(InferenceService):
     """Inference service for llama-swap."""
@@ -142,8 +140,8 @@ class LlamaSwapService(InferenceService):
         return write_models_json(target, self.export_for_agent(base_url=base_url))
 
     def agent_config_target(self) -> Path:
-        base = Path(os.environ.get("PI_INSTALL_DIR") or PI_AGENT_DIR)
-        return base / "models.json"
+        base = os.environ.get("PI_INSTALL_DIR")
+        return (Path(base) if base else Path.home() / ".pi" / "agent") / "models.json"
 
 
 __all__ = ["LlamaSwapService"]

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from genesis_worker.paths import repo_root
 from genesis_worker.services.llama_swap.export_pi_config import (
     DEFAULT_BASE_URL,
     FALLBACK_PROVIDER_NAME,
@@ -328,9 +329,9 @@ def test_live_config_yields_field_equivalent_pi_models(
     hasn't regenerated; the test gates on schema, not on whether the
     user kept both files in sync.
     """
-    config_yaml = Path("config.yaml")
+    config_yaml = repo_root() / "config.yaml"
     if not config_yaml.is_file():
-        pytest.skip("live config.yaml not present in CWD")
+        pytest.skip("live config.yaml already retired")
 
     new = build_provider(config_yaml)
     assert "providers" in new
@@ -376,10 +377,10 @@ def test_new_emission_matches_old_emitter_against_real_config(
     import subprocess
     import sys
 
-    config_yaml = Path("config.yaml")
-    bin_script = Path("bin/pi-models.py")
+    config_yaml = repo_root() / "config.yaml"
+    bin_script = repo_root() / "bin" / "pi-models.py"
     if not (config_yaml.is_file() and bin_script.is_file()):
-        pytest.skip("live config.yaml or bin/pi-models.py not present")
+        pytest.skip("live config.yaml or bin/pi-models.py already retired")
 
     monkeypatch.setenv("PI_BASE_URL", "http://127.0.0.1:8080")
 
