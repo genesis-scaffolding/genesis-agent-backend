@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .catalog_build import CatalogService
-from .models import Catalog, ServiceInfo, SourceInfo
-from .services._registry import ServiceRegistry
-from .sources._registry import SourceRegistry
+from .contracts import Catalog
+from .models import ServiceInfo, SourceInfo
+from .registries import ServiceRegistry, SourceRegistry
 
 if TYPE_CHECKING:
     from .settings import Settings

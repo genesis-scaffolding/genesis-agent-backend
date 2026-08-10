@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from genesis_worker.catalog_build import CatalogService
+from genesis_worker.registries import SourceRegistry
 from genesis_worker.services.llama_swap.config import (
     build_config,
     detect_files,
@@ -23,7 +24,6 @@ from genesis_worker.services.llama_swap.config import (
 )
 from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
 from genesis_worker.settings import PathsSettings, Settings
-from genesis_worker.sources import SourceRegistry
 
 
 @pytest.fixture(scope="module")

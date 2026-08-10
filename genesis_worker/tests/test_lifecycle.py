@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.services._base import ServiceState
+from genesis_worker.contracts import ServiceState
 from genesis_worker.services.llama_swap import lifecycle
 
 # ---------------------------------------------------------------------------

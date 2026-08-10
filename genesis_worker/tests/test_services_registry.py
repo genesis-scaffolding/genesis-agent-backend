@@ -6,11 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.services import (
-    InferenceService,
-    ServiceCapabilities,
-    ServiceRegistry,
-)
+from genesis_worker.contracts import InferenceService, ServiceCapabilities
+from genesis_worker.registries import ServiceRegistry
 from genesis_worker.services.llama_swap import LlamaSwapService
 from genesis_worker.settings import (
     LlamaSwapServiceSettings,
@@ -159,7 +156,7 @@ def test_llama_swap_lifecycle_methods_exist() -> None:
     assert callable(svc.resource_estimate)
 
     # resource_estimate returns the placeholder dataclass (spec value).
-    from genesis_worker.services._base import ServiceResourceEstimate
+    from genesis_worker.contracts import ServiceResourceEstimate
 
     est = svc.resource_estimate()
     assert isinstance(est, ServiceResourceEstimate)

@@ -7,8 +7,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ...settings import LlamaSwapServiceSettings
-from .._base import (
+from ...contracts import (
     InferenceService,
     ServiceCapabilities,
     ServiceResourceEstimate,
@@ -16,12 +15,13 @@ from .._base import (
     StartResult,
     StopResult,
 )
+from ...settings import LlamaSwapServiceSettings
 from . import lifecycle
 from .config import build_config, write_config
 from .recipes import Recipes
 
 if TYPE_CHECKING:
-    from ...models import Catalog
+    from ...contracts import Catalog
 
 
 class LlamaSwapService(InferenceService):

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from genesis_worker.contracts import ModelSource
+from genesis_worker.registries import SourceRegistry
 from genesis_worker.settings import (
     HuggingFaceSourceSettings,
     LMSourceSettings,
@@ -13,7 +15,6 @@ from genesis_worker.settings import (
     Settings,
     SourcesSettings,
 )
-from genesis_worker.sources import ModelSource, SourceRegistry
 
 
 def test_huggingface_and_lmstudio_are_discovered() -> None:

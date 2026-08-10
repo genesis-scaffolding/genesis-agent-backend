@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from .models import Catalog, DiscoveredModel, ModelEntry
-from .sources._registry import SourceRegistry
+from .contracts import Catalog, DiscoveredModel, ModelEntry
+from .registries import SourceRegistry
 
 
 class CatalogService:

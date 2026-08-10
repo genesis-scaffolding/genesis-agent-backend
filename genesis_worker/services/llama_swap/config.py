@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from ...models import Catalog, ModelEntry
+from ...contracts import Catalog, ModelEntry
 from ...paths import repo_root
 from .recipes import Recipe
 

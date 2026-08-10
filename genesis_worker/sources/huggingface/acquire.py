@@ -11,7 +11,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi
 
-from .._base import (
+from ...contracts import (
     AcquireChoice,
     AcquireFileGroup,
     AcquireProgress,

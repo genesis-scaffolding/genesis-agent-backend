@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from ..models import DiscoveredModel
+from .catalog import DiscoveredModel
 
 
 @runtime_checkable

@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .._base import ServiceState, ServiceStatus, StartResult, StopResult
+from ...contracts import ServiceState, ServiceStatus, StartResult, StopResult
 
 _DEFAULT_HEALTH_POLL_S = 1.0
 _DEFAULT_HEALTH_TIMEOUT_S = 60.0

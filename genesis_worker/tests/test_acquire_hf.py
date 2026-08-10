@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from genesis_worker.sources._base import (
+from genesis_worker.contracts import (
     AcquireChoice,
     AcquireState,
 )
@@ -352,7 +352,7 @@ def test_cancel_mid_download_aborts_thread(tmp_path: Path) -> None:
 
 
 def test_session_satisfies_acquire_session_protocol(tmp_path: Path) -> None:
-    from genesis_worker.sources._base import AcquireSession
+    from genesis_worker.contracts import AcquireSession
 
     api = _make_api([])
     state = AcquireState("huggingface", "acme/demo")

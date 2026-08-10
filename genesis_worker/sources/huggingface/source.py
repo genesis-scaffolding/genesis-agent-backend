@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...models import DiscoveredModel, ModelPiece
-from .._classify import SKIP_FILENAMES, classify, role_sort_key
+from ...contracts import SKIP_FILENAMES, DiscoveredModel, ModelPiece, classify, role_sort_key
 
 
 class HuggingFaceSource:

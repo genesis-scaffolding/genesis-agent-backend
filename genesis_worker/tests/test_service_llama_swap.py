@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from genesis_worker.services.llama_swap import LlamaSwapService
 from genesis_worker.services.llama_swap.config import (
     is_config_stale,
@@ -226,7 +224,7 @@ def test_last_generated_at_returns_none_when_config_absent(tmp_path: Path) -> No
 
 def test_resource_estimate_returns_spec_placeholder() -> None:
     """Spec-002 placeholder values; not zeroed in v1."""
-    from genesis_worker.services._base import ServiceResourceEstimate
+    from genesis_worker.contracts import ServiceResourceEstimate
 
     svc = LlamaSwapService()
     est = svc.resource_estimate()
