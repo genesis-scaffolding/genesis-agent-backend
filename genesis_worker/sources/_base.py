@@ -71,13 +71,7 @@ class AcquireProgress:
 
 @dataclass(frozen=True)
 class AcquireStep:
-    """One state in the acquire flow.
-
-    The ``kind`` field is the state identifier; the other fields are
-    populated only when relevant to the step (e.g. ``file_groups`` is
-    only set on ``select_files``). ``can_cancel`` is False on terminal
-    states (complete/failed/cancelled).
-    """
+    """One state in the acquire flow."""
 
     kind: str  # "inspecting" | "select_files" | "confirm_storage" |
     # "downloading" | "complete" | "failed" | "cancelled"
@@ -94,12 +88,7 @@ class AcquireStep:
 
 @dataclass(frozen=True)
 class AcquireChoice:
-    """User input for one :class:`AcquireStep`.
-
-    Fields are 1-based into the file_groups list (or None for steps
-    that don't need them). ``confirm`` is True/False; None means "not
-    applicable to this step".
-    """
+    """User input for one :class:`AcquireStep`."""
 
     main_index: int | None = None
     aux_indexes: list[int] | None = None
@@ -107,12 +96,7 @@ class AcquireChoice:
 
 
 class AcquireState:
-    """Server-side state for one in-flight acquire session.
-
-    Held by the worker (in :attr:`GenesisWorker._acquire_sessions`).
-    The session implementation owns the transitions; the worker just
-    persists the AcquireState across reruns.
-    """
+    """Server-side state for one in-flight acquire session."""
 
     def __init__(self, source: str, repo_id: str) -> None:
         self.source = source

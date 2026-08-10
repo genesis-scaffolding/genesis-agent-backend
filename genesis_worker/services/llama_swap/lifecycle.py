@@ -1,26 +1,4 @@
-"""tmux + curl lifecycle for llama-swap.
-
-Lifts the semantics of ``bin/up`` into Python so the worker can start
-and stop llama-swap without shelling out. The bash script remains the
-source of truth for human-driven startup until Phase 10 retirement; this
-module is the programmatic equivalent.
-
-Behavior matches ``bin/up``:
-
-- Tears down any existing tmux session of the same name.
-- Kills stray ``llama-server`` so llama-swap owns the port.
-- Spawns a new tmux session running
-  ``llama-swap --config <cfg> -listen <addr> -watch-config`` with output
-  piped to a log file via ``tee -a``.
-- Polls ``http://<addr>/v1/models`` until it returns 200 or the timeout
-  elapses.
-- Returns a :class:`StartResult` / :class:`StopResult` so the caller
-  can branch on success without parsing stdout.
-
-The running llama-swap on ``:8080`` (started via ``bin/up``) is not
-touched by these helpers. Tests validate against a parallel instance on
-a different port.
-"""
+"""tmux + curl lifecycle for llama-swap."""
 
 from __future__ import annotations
 
@@ -74,8 +52,7 @@ def start_swap(
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = (
-        f"llama-swap --config {config} -listen {listen_addr} "
-        f"-watch-config 2>&1 | tee -a {log_file}"
+        f"llama-swap --config {config} -listen {listen_addr} -watch-config 2>&1 | tee -a {log_file}"
     )
     result = subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, cmd],
@@ -164,9 +141,7 @@ def _has_session(name: str) -> bool:
 def _probe_models(listen_addr: str) -> bool:
     """Single /v1/models probe. Returns True iff 200."""
     try:
-        with urllib.request.urlopen(
-            f"http://{listen_addr}/v1/models", timeout=1
-        ) as response:
+        with urllib.request.urlopen(f"http://{listen_addr}/v1/models", timeout=1) as response:
             return response.status == 200
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
         return False
@@ -179,3 +154,4 @@ __all__ = [
     "stop_swap",
     "wait_ready",
 ]
+

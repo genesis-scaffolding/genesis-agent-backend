@@ -1,29 +1,4 @@
-"""HuggingFace acquire session — state-machine-driven download wizard.
-
-Implements :class:`AcquireSession` for the HF source. The state
-machine mirrors ``bin/hf-model.py``:
-
-    inspecting  -> select_files  ->  confirm_storage  ->  downloading  ->  complete
-                                                                  \\
-                                                                   -> failed
-                                                                  /
-                                                       cancel() -> cancelled
-
-Inspection: ``HfApi.list_repo_tree(repo_id, repo_type='model', revision=..., recursive=True)``
-returns ``RepoFile`` entries (with size). We group sharded GGUFs by
-their base filename and classify each group by role (main/mmproj/mtp/
-unsupported), matching the rules the old ``bin/hf-model.py`` used.
-
-Download: per-file ``hf_hub_download(repo_id, filename, cache_dir=...)``
-called sequentially. The session checks the cancel event between
-files; the thread sets ``state.last_step`` to ``cancelled`` when it
-aborts, ``complete`` on success, ``failed`` on exception. Progress is
-tracked via a shared counter updated after each file.
-
-``log_tail`` is populated from a logging handler attached during the
-download; the dashboard renders the last N lines so the user can see
-what the underlying library is doing.
-"""
+"""HuggingFace acquire session — state-machine-driven download wizard."""
 
 from __future__ import annotations
 
@@ -423,7 +398,8 @@ class HfAcquireSession:
             can_cancel=True,
         )
         self._download_thread = threading.Thread(
-            target=self._download_worker, daemon=True,
+            target=self._download_worker,
+            daemon=True,
         )
         self._download_thread.start()
         return self._state.last_step  # type: ignore[return-value]
@@ -562,3 +538,4 @@ __all__ = [
     "classify_path",
     "group_files",
 ]
+

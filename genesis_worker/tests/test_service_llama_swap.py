@@ -5,7 +5,6 @@ llama-swap shim. This module covers:
 
 - path-resolution fallback chain (``config_path``, ``recipes_path``)
 - ``last_generated_at`` reads the timestamp embedded by ``emit_payload``
-- ``bind_worker`` enables ``regenerate_config`` (which uses the worker)
 - ``regenerate_config`` writes the embedded ``generated_at`` so
   ``is_config_stale`` flips correctly
 """
@@ -158,22 +157,13 @@ def test_is_config_stale_true_when_field_missing(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_regenerate_config_requires_bound_worker(tmp_path: Path) -> None:
-    """Without bind_worker, regenerate_config raises a clear error."""
-    svc = LlamaSwapService(
-        settings=LlamaSwapServiceSettings(
-            config_path=tmp_path / "config.yaml",
-            recipes_path=tmp_path / "recipes.yaml",
-            repo_root=tmp_path,
-            config_dir=tmp_path,
-        ),
-    )
-    with pytest.raises(RuntimeError, match="bind_worker"):
-        svc.regenerate_config()
-
-
 def test_regenerate_config_writes_generated_at_and_no_longer_stale(tmp_path: Path) -> None:
-    """End-to-end: regenerate against a fresh catalog -> not stale."""
+    """End-to-end: regenerate against a fresh catalog -> not stale.
+
+    The service is now a pure function — it receives catalog, paths,
+    and overrides from the caller and produces config. No worker
+    dependency, no path resolution inside the service.
+    """
     cfg = tmp_path / "config.yaml"
     recipes_path = tmp_path / "recipes.yaml"
     recipes_path.write_text(
@@ -183,21 +173,19 @@ def test_regenerate_config_writes_generated_at_and_no_longer_stale(tmp_path: Pat
         "    ctx_min: 1024\n"
     )
 
-    # Build a worker pointed at an empty vault.
+    # Build a worker pointed at an empty vault (to produce a catalog).
     settings = Settings(
         paths=PathsSettings(vault_path=tmp_path),
         sources=SourcesSettings(),
-        # Override per-service settings so they all point into tmp_path.
     )
-    # Patch the per-service settings after construction (the registry will
-    # pick up the slice via getattr on services.llama_swap).
     from genesis_worker import GenesisWorker
 
     worker = GenesisWorker(settings=settings)
-    # The service inside the registry was built with default settings.
-    # Re-bind its settings slice so config_path / recipes_path resolve
-    # into tmp_path. This is what the real facade wires up too.
-    worker.services.get("llama_swap").__init__(
+    catalog = worker.rescan_catalog()
+
+    # The service is now stateless regarding config generation — it
+    # receives everything it needs as parameters.
+    svc = LlamaSwapService(
         settings=LlamaSwapServiceSettings(
             config_path=cfg,
             recipes_path=recipes_path,
@@ -206,17 +194,19 @@ def test_regenerate_config_writes_generated_at_and_no_longer_stale(tmp_path: Pat
             log_dir=tmp_path,
         ),
     )
-    worker.services.get("llama_swap").bind_worker(worker)
+    assert svc.regenerate_config(
+        catalog=catalog,
+        config_path=cfg,
+        recipes_path=recipes_path,
+    ) is True
 
-    # regenerate against the (empty) catalog.
-    assert worker.services.get("llama_swap").regenerate_config() is True
     # The file must exist and contain the fresh timestamp.
     assert cfg.is_file()
     embedded = read_generated_at(cfg)
     assert embedded is not None
-    assert embedded == worker.rescan_catalog().generated_at
+    assert embedded == catalog.generated_at
     # And not stale against the same rescan.
-    assert worker.services.get("llama_swap").last_generated_at() == embedded
+    assert svc.last_generated_at() == embedded
     assert is_config_stale(cfg, catalog_generated_at=embedded) is False
 
 

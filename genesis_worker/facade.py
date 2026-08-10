@@ -14,24 +14,7 @@ if TYPE_CHECKING:
 
 
 class GenesisWorker:
-    """Top-level facade for the worker.
-
-    Construction wires together the four building blocks: settings,
-    source registry, service registry, catalog service. After that the
-    consumer (CLI, Streamlit, tests) asks for whatever it needs via the
-    public methods; it does not reach into the registries directly.
-
-    Example::
-
-        worker = GenesisWorker()
-        for info in worker.list_sources():
-            print(info.name, "available" if info.is_available else "missing")
-        catalog = worker.rescan_catalog()
-        for entry in catalog.huggingface:
-            print(entry.name, entry.total_bytes)
-        svc = worker.services().get("llama_swap")
-        print(svc.capabilities().can_serve_llm)
-    """
+    """Top-level facade for the worker."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         # Owned by the facade. Tests / CLIs pass a pre-built Settings

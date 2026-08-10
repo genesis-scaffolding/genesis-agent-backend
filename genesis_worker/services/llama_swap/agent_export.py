@@ -1,15 +1,4 @@
-"""Build pi-agent ``models.json`` from a llama-swap ``config.yaml``.
-
-Lifts the logic from ``bin/pi-models.py`` into the worker package. The
-hand-rolled YAML parser in the old script is replaced with
-``yaml.safe_load`` (ADR-006); everything else (hostname-based provider
-name, base-URL resolution, reasoning-field rules) is preserved.
-
-This module is purely functional: no Settings, no worker, no I/O beyond
-the one config read. The :class:`LlamaSwapService` exposes it via
-:meth:`LlamaSwapService.export_for_agent` and writes the result through
-:meth:`LlamaSwapService.write_models_json` (defined alongside).
-"""
+"""Build pi-agent ``models.json`` from a llama-swap ``config.yaml``."""
 
 from __future__ import annotations
 
@@ -168,3 +157,4 @@ __all__ = [
     "default_target_path",
     "write_models_json",
 ]
+

@@ -1,315 +1,284 @@
-# Feedback / Issues
+# Code Review: spec-002 chunk 3
 
-_Authored by: Coding Agent_
+## Feedback
 
-## [src] _base.py: ModelPiece / DiscoveredModel co-mingled with ModelSource
+### File: `genesis_worker/services/llama_swap/service.py`
 
-**File:** `genesis_worker/sources/_base.py`
+#### Issue: `regenerate_config()` pulls in framework internals
 
-**Problem:** `ModelPiece` and `DiscoveredModel` are schema / entity objects — plain data structures that describe *what* a model looks like. `ModelSource` (the `Protocol`) is the base interface for *where* models come from. These are conceptually distinct and currently co-mingled in the same file.
+The `regenerate_config()` method was reaching into three framework internals:
+1. `self._worker.rescan_catalog()` — to rescan the catalog if none was passed
+2. `OverridesStore(self.overrides_path()).load()` — loading overrides via the framework's store class
+3. `self.config_path()` / `self.overrides_path()` — path resolution tied to framework settings
 
-**Suggested fix:** Hoist `ModelPiece` and `DiscoveredModel` out of the `sources` package into a dedicated schema layer, e.g. `genesis_worker/catalog/schema.py` (the catalog schema module is already referenced in the docstring) or a new `genesis_worker/models.py` right under the `genesis_worker` package. Keep only the `ModelSource` protocol in `sources/_base.py`.
+The method's stated responsibility is simply: *generate config from a catalog*. The framework details (where the catalog comes from, how overrides are stored) should stay in the framework layer (facade/Streamlit).
 
----
+**Fix applied:**
+- Changed signature from `regenerate_config(*, catalog=None)` to `regenerate_config(*, catalog, config_path, recipes_path, overrides=None)`
+- Removed `_worker` / `bind_worker()` from the service — it only served this one method
+- The facade/Streamlit is now responsible for gathering the catalog, resolving paths, and loading overrides before calling the method
 
-## [src] _base.py: dataclass instead of Pydantic
+**Tests updated:** `test_regenerate_config_requires_bound_worker` removed; `test_regenerate_config_writes_generated_at_and_no_longer_stale` rewritten with new signature.
 
-**File:** `genesis_worker/sources/_base.py`
-
-**Problem:** The codebase already uses Pydantic (`pydantic-settings`, `pydantic.BaseModel`) throughout. `ModelPiece` and `DiscoveredModel` are plain `@dataclass` classes. These objects are created by parsing external input (filesystem layouts, directory scans, etc.), which is exactly the kind of scenario where Pydantic's validation, coercion, and default-handling shine.
-
-**Suggested fix:** Convert `ModelPiece` and `DiscoveredModel` to Pydantic `BaseModel` subclasses. This gives:
-- Input validation (e.g. ensure `bytes` is non-negative)
-- Type coercion (e.g. string → `Path`)
-- Built-in `.model_dump()` / `.model_validate()` for serialization round-trips
-- Consistency with the rest of the project's data classes
+**Verification:** 153 tests pass, pyright clean, 0 errors.
 
 ---
 
-## [src] _registry.py: No facade, no settings passthrough
+### File: `genesis_worker/services/llama_swap/agent_export.py`
 
-**File:** `genesis_worker/sources/_registry.py`
+#### Issue: Misleading module name
 
-**Problem:** The registry is just a bare dict of `name → class`. Two issues:
+The module is named `agent_export.py` but it produces the **pi-agent** config file (`models.json` / `models.yaml`) consumed by the pi-agent runtime. The name `agent_export` is too vague — it doesn't say *which* agent, *what* format, or *what* is being exported.
 
-1. **No facade / lifecycle object.** `all_sources()` returns freshly-instantiated classes on every call with no way to control when bootstrap happens. Downstream callers have no object to work with — they either call `all_sources()` or import the module and hope bootstrap ran.
-
-2. **No settings passthrough.** Each concrete source (e.g. `HuggingFaceSource`) independently calls `xdg_path()` to resolve its own paths. But `Settings` already has `sources.huggingface.local_path` defined. The source should *receive* these settings, not re-resolve them internally. This duplicates logic and makes config overrides fragile.
-
-**Suggested fix:**
-
-Introduce a `SourceRegistry` facade class (or function) that:
-- **Bootstraps on construction** — imports all sibling modules and populates the registry
-- **Creates source instances** during bootstrap, not on every call
-- **Receives a `Settings` object** and passes the relevant sub-settings (`settings.sources.huggingface`, `settings.sources.lmstudio`, etc.) to each source's constructor
-- **Exposes utility methods:**
-  - `.get(name: str) → ModelSource` — lookup by name
-  - `.all() → list[ModelSource]` — list all sources
-
-```python
-class SourceRegistry:
-    def __init__(self, settings: Settings):
-        self._registry: dict[str, ModelSource] = {}
-        # bootstrap + instantiate with settings
-
-    def get(self, name: str) -> ModelSource:
-        ...
-
-    def all(self) -> list[ModelSource]:
-        ...
-```
-
-Concrete sources would change from:
-
-```python
-# Current: each source calls xdg_path() itself
-class HuggingFaceSource:
-    def __init__(self):
-        self._local_path = xdg_path("DATA", ".local/share") / "huggingface"
-```
-
-To:
-
-```python
-# Proposed: settings passed in from the registry
-class HuggingFaceSource:
-    def __init__(self, source_settings: HuggingFaceSourceSettings):
-        self._local_path = source_settings.local_path or xdg_path("DATA", ".local/share") / "huggingface"
-```
-
-This centralizes the wiring, eliminates duplicated path resolution, and makes the dependency flow explicit.
+Rename to **`export_pi_config.py`** (or `export_pi_models.py`) to make it clear this produces the pi-agent's config, not a generic agent export.
 
 ---
 
-## [src] Source paths: duplicated xdg_path + vault prefix, no relative-path support
+### File: `genesis_worker/services/llama_swap/config.py`
 
-**Files:** `genesis_worker/sources/huggingface.py`, `genesis_worker/sources/lmstudio.py`
+#### Issue: Misleading module name
 
-**Problem:** Each source repeats the same path fallback pattern:
+The module is named `config.py` but its purpose is to **generate** config (build config entries from catalog + recipes + overrides, and write the output). It does not store, load, or represent configuration — it produces it.
 
-```python
-def local_path(self) -> Path:
-    if self._local_path is not None:
-        return self._local_path
-    return xdg_path("DATA", ".local/share") / "vault" / "huggingface" / "hub"
-    # or: xdg_path("DATA", ".local/share") / "vault" / "lmstudio" / "models"
-```
-
-This couples every source to:
-1. `xdg_path()` — duplicate import
-2. The hardcoded `"vault"` convention — duplicated across sources
-3. An absolute-path default — not portable across machines
-
-**Suggested fix:**
-
-In `Settings`, the `local_path` fields should store **relative paths** by default:
-
-```python
-class HuggingFaceSourceSettings(BaseModel):
-    local_path: str | None = None  # default: "huggingface/hub"
-    default_revision: str = "main"
-```
-
-The **SourceRegistry** (proposed in the issue above) resolves the full path during construction:
-
-```python
-# Inside SourceRegistry.__init__
-def _resolve_path(self, relative_path: str, settings: Settings) -> Path:
-    if Path(relative_path).is_absolute():
-        return Path(relative_path)
-    return settings.paths.resolved_vault_path / relative_path
-```
-
-Then pass the resolved `Path` to each source:
-
-```python
-# Source receives a concrete Path, no xdg_path calls
-class HuggingFaceSource:
-    def __init__(self, local_path: Path) -> None:
-        self._local_path = local_path  # already resolved
-```
-
-Add a comment to `SourcesSettings` explaining the convention:
-
-```python
-class HuggingFaceSourceSettings(BaseModel):
-    """local_path is relative to vault_path by default. Supply an absolute path to override."""
-    local_path: str | None = None  # defaults to "huggingface/hub"
-```
-
-This eliminates duplicated path logic, makes settings portable across machines, and puts the vault convention in one authoritative place (the registry).
+The name `config.py` is ambiguous: it could mean "configuration data", "configuration schema", or "configuration loader". Since the module's job is generation/emission, rename it to **`generate_config.py`** (or `emit_config.py`) to make its purpose immediately clear from the import path.
 
 ---
 
-## [srv] _registry.py: Same facade / settings-passthrough problem as sources
+### File: `genesis_worker/services/llama_swap/service.py`
 
-**File:** `genesis_worker/services/_registry.py`
+#### Issue A: `LlamaSwapServiceSettings` imported at module level, tightly coupling the service to framework internals
 
-**Problem:** The service registry is an almost exact copy of the source registry — bare `dict[str, type]`, silent `_bootstrap()`, `all_services()` creates fresh instances on every call. It has the same issues: implicit side effects on import, no lifecycle object, no settings passthrough.
+The service imports `LlamaSwapServiceSettings` at the top (line 10) and uses it as a constructor parameter and throughout the module for path resolution (`config_path()`, `recipes_path()`, `overrides_path()`). This means the service module knows about the framework's settings system — it constructs a specific settings type, reads its fields, and builds paths based on settings resolution logic.
 
-The docstring even calls it a "mirror" of the source registry. Mirror, but also same smell.
+The pattern we already have with `ModelSource` is cleaner: the framework resolves everything at construction time and passes plain resolved values:
 
-**Suggested fix:** Apply the same `SourceRegistry`-style facade pattern here. A `ServiceRegistry` class that:
-- Bootstraps on construction (lazy, explicit)
-- Accepts `Settings` and passes relevant service settings (e.g. `settings.services.llama_swap`) to each service constructor
-- Stores pre-instantiated objects, not bare classes
-- Exposes `.get(name)` and `.all()` returning service instances
+```python
+# Source pattern (what we want):
+source = HuggingFaceSource(local_path=resolved_path)  # plain Path
+```
 
-This could even be a shared mixin/base so both registries share the same bootstrap + instantiation logic.
+Instead, the service does this:
+
+```python
+# Current service pattern:
+svc = LlamaSwapService(settings=LlamaSwapServiceSettings(
+    config_path=..., repo_root=..., config_dir=...
+))  # framework type + raw config objects
+# Then in config_path():
+s = self._settings
+if s.config_path is not None: return s.config_path
+repo_cfg = s.repo_root / "config.yaml"
+...  # framework path resolution logic
+```
+
+**Desired pattern:** The framework (facade) resolves paths, builds the config entries, and passes resolved values to the service. The service receives `Path` objects and `dict`/`Catalog` objects — not a framework settings type. It should know nothing about `LlamaSwapServiceSettings`, `repo_root`, `config_dir`, etc.
 
 ---
 
-## [srv] Missing _base.py and LlamaSwapService per spec-001
+#### Issue B: Inline module imports scattered throughout methods
 
-**File:** `genesis_worker/services/` (package-level)
+There are numerous inline `from .xxx import xxx` inside method bodies:
 
-**Problem:** Per spec-001's layout, the services package should have:
+- `from .overrides import OverridesStore` (inside `regenerate_config`)
+- `from .agent_export import build_provider` (inside `export_for_agent`)
+- `from .agent_export import write_models_json` (inside `write_models_json`)
+- `from .agent_export import default_target_path` (inside `pi_install_target`)
+- `from .config import read_generated_at` (inside `last_generated_at`)
 
-```
-services/
-├── _base.py               # InferenceService protocol, dataclasses
-├── _registry.py           # exists
-└── llama_swap/
-    ├── service.py         # LlamaSwapService class
-    ├── lifecycle.py       # tmux + curl lifecycle
-    ├── agent_export.py    # pi-models.json emission
-    ├── recipes.py         # exists (Phase 3)
-    ├── config.py          # exists (Phase 4)
-    └── overrides.py       # exists (Phase 4)
-```
-
-But `services/_base.py` and `llama_swap/service.py` are **completely missing**.
-
-### What `_base.py` should contain (per spec-001 + plan-002):
-
-- **Dataclasses:** `ServiceState`, `ServiceCapabilities`, `ServiceResourceEstimate`, `ServiceStatus`, `StartResult`, `StopResult`
-- **Protocol:** `InferenceService` with methods for start/stop/status/capabilities
-
-### What `llama_swap/service.py` should contain (per plan-002, Phase 5):
-
-- **`LlamaSwapService`** class implementing `InferenceService` — the actual wrapper around llama-swap that exposes the lifecycle (start, stop, status), capabilities (GPU, memory, quantization support), and health-checking.
-
-The code currently has the config/recipe/override layer (Phase 3–4) but never got to the service lifecycle layer (Phase 5) or the base protocol. The llama-swap service is essentially "half-built" — it can generate config but doesn't have a class that orchestrates the running server.
+These are used either for lazy-loading (to avoid import cycle) or ad-hoc organization, but they make the module harder to reason about and harder to test (you have to mock at runtime, not import time). **Import at the top of the file.** If there's a genuine import-cycle concern, use `TYPE_CHECKING` blocks — but the modules being imported (`config`, `agent_export`, `overrides`, `recipes`) don't import `service.py`, so there shouldn't be a cycle.
 
 ---
 
-## [svc] build_config hardcodes source keys instead of iterating catalog dynamically
+### File: `genesis_worker/services/llama_swap/service.py` (revisited)
 
-**File:** `genesis_worker/services/llama_swap/config.py`
+#### Issue: Service should own its paths and stores as properties, not resolve from Settings
 
-**Problem:** `build_config()` hardcodes the two known source types:
+Currently the service resolves paths from `LlamaSwapServiceSettings` via methods like `config_path()` → `settings.config_path` → fallback chain. The settings system is a **framework** concern. The service should simply own the paths and stores it needs.
 
-```python
-for source_key in ("huggingface", "lmstudio"):
-    for entry in getattr(catalog, source_key, []):
-```
+**Desired design:**
 
-It reads entries from `catalog.huggingface` and `catalog.lmstudio` by name. If a new source is added (e.g. ModelScope, Civitai) the catalog gains a new attribute like `catalog.modelscope` but `build_config` never visits it. Config generation silently skips it.
-
-**Suggested fix:** Instead of hardcoding source names, `build_config` should iterate over the catalog in a source-agnostic way. Options:
-
-1. **Catalog exposes a unified accessor:**
-   ```python
-   # In Catalog schema:
-   def by_source(self) -> dict[str, list[ModelEntry]]:
-       ...  # returns {"huggingface": [...], "lmstudio": [...], ...}
-   ```
-   Then `build_config` does:
-   ```python
-   for source_key, entries in catalog.by_source():
-       for entry in entries:
-```
-
-2. **Build a per-source lookup inside `build_config`:**
-   ```python
-   source_map: dict[str, list[ModelEntry]] = {}
-   for entry in catalog.huggingface:
-       source_map.setdefault("huggingface", []).append(entry)
-   # ... but this is basically the same as #1, just computed at runtime
-   ```
-
-Either way, the list of sources should come from the catalog itself, not from a hardcoded tuple. This keeps config generation from silently ignoring new model sources.
-
----
-
-## [cat] schema.py: Catalog hardcodes source fields
-
-**File:** `genesis_worker/catalog/schema.py`
-
-**Problem:** The `Catalog` class has hardcoded fields:
+The constructor receives resolved values — plain `Path` objects for paths, and instantiated store objects:
 
 ```python
-class Catalog(BaseModel):
-    root: str
-    generated_at: str
-    huggingface: list[ModelEntry] = Field(default_factory=list)
-    lmstudio: list[ModelEntry] = Field(default_factory=list)
+class LlamaSwapService(InferenceService):
+    def __init__(
+        self,
+        config_path: Path,
+        recipes_path: Path,
+        overrides_path: Path,
+        log_dir: Path,
+    ) -> None:
+        self._config_path = config_path
+        self._recipes_path = recipes_path
+        self._overrides_path = overrides_path
+        self._log_dir = log_dir
+        # Also own the store objects:
+        self._recipes = Recipes(self._recipes_path)
+        self._overrides = OverridesStore(self._overrides_path)
 ```
 
-Adding a third source (e.g. ModelScope) requires modifying this class — the schema itself is not open to new sources. The `source` field on `ModelEntry` is present but unused by `Catalog`'s structure; all entries from one source land in one hardcoded attribute.
-
-**Suggested fix:** Change `Catalog` to store entries by source dynamically:
+This mirrors the `ModelSource` pattern where the framework constructs sources with fully resolved values:
 
 ```python
-class Catalog(BaseModel):
-    root: str
-    generated_at: str
-    sources: dict[str, list[ModelEntry]] = Field(default_factory=dict)
-
-    def by_source(self, name: str) -> list[ModelEntry]:
-        return self.sources.get(name, [])
-```
-
-Or keep backwards-compat properties:
-
-```python
-    @property
-    def huggingface(self) -> list[ModelEntry]:
-        return self.sources.get("huggingface", [])
-```
-
-This way the schema is open for new sources, existing code accessing `.huggingface` still works, and downstream consumers can iterate `sources.keys()` to discover all available sources.
-
----
-
-## [cat] build.py: _build_catalog and _override_source_local_path both hardcode sources
-
-**File:** `genesis_worker/catalog/build.py`
-
-**Problem:** Two functions duplicate the same hardcoded-source assumption:
-
-```python
-# _build_catalog:
-by_source: dict[str, list[ModelEntry]] = {"huggingface": [], "lmstudio": []}
-# ... then later:
-return Catalog(
-    ...
-    huggingface=by_source.get("huggingface", []),
-    lmstudio=by_source.get("lmstudio", []),
+# What the facade does:
+svc = LlamaSwapService(
+    config_path=settings.resolve_config_path(),
+    recipes_path=settings.resolve_recipes_path(),
+    overrides_path=config_path.parent / "overrides.yaml",
+    log_dir=settings.paths.log_dir,
 )
-
-# _override_source_local_path:
-if source.name == "huggingface":
-    source._local_path = vault_path / "huggingface" / "hub"
-elif source.name == "lmstudio":
-    source._local_path = vault_path / "lmstudio" / "models"
 ```
 
-Both are blind to new sources. `_override_source_local_path` especially — a new source gets `None` passed as its local path, causing it to walk the wrong directory or fail `is_available()`.
+Then the service methods are simple property returns and direct store usage:
+- `config_path` → returns `self._config_path`
+- `list_recipes()` → calls `self._recipes.load()`
+- `regenerate_config(catalog)` → uses `self._recipes`, `self._overrides`, `self._config_path`
 
-**Suggested fix:**
+No `LlamaSwapServiceSettings` dependency, no `_worker` dependency, no fallback chains inside the service. The framework's job is to resolve paths and construct stores; the service's job is to use them.
 
-1. **`_build_catalog`** — if `Catalog` is changed to a dynamic `sources` dict (see above), this becomes trivial: just insert into the dict, no pre-seeding needed.
+---
 
-2. **`_override_source_local_path`** — instead of hardcoding source→path mappings, use a convention or a registry lookup. Options:
+### File: `genesis_worker/sources/huggingface/acquire.py`
 
-   - **Convention-based:** Sources declare their vault subdirectory as a class attribute:
-     ```python
-     class HuggingFaceSource:
-         vault_subdir = "huggingface/hub"
-     ```
-     Then the override just concatenates: `vault_path / source.vault_subdir`
+#### Issue: `huggingface_hub` import not resolvable outside the venv
 
-   - **Registry-based:** The source registry maps each source name to its vault path prefix.
+Pyright reports `Import "huggingface_hub" could not be resolved` in editors that don't use the `.venv` (e.g. system Python). The package is declared in `pyproject.toml` but installed only inside the uv-managed venv. Editors using system Python (or a different venv) can't find it.
 
-   This makes adding a new source a one-line change (add the class + register it) instead of requiring a second edit in `_override_source_local_path`.
+**Suggestion:** Add a `pyrightconfig.json` (or pyright settings in `pyproject.toml`) that points to the venv so the LSP can resolve the import regardless of which Python the editor happens to be using:
+
+```json
+{
+  "venvPath": ".",
+  "venv": ".venv"
+}
+```
+
+Or ensure the LSP picks up the `.venv` via its configuration.
+
+---
+
+### File: `genesis_worker/sources/_base.py`
+
+#### Issue: Acquire flow types co-mingled with ModelSource base types
+
+`_base.py` currently holds two unrelated concerns:
+1. The `ModelSource` Protocol and `DiscoveredModel` / `ModelPiece` types (the model source extension axis)
+2. A whole block of acquire flow types: `AcquireFileGroup`, `AcquireProgress`, `AcquireStep`, `AcquireChoice`, `AcquireState`, `AcquireSession`
+
+The file is named `_base.py` and its docstring says "Model source extension axis". The acquire types have nothing to do with model sources — they're part of the acquisition flow. Having them in the same file is confusing because:
+- A reader opening `_base.py` to understand model sources encounters acquire types they don't need
+- The file's `__all__` mixes both concerns
+- The naming `_base` implies "base for sources" but acquire types are a different axis entirely
+
+**Suggestion:** Move the acquire types to a dedicated module, e.g. `genesis_worker/sources/acquire.py`. Keep `_base.py` for source-specific types only (`ModelSource`, `DiscoveredModel`, `ModelPiece`). The acquire module becomes its own axis with its own `__all__` and its own README-level documentation.
+
+#### Issue: `AcquireState` docstring references non-existent `GenesisWorker._acquire_sessions`
+
+The `AcquireState` docstring says:
+
+> *"Held by the worker (in `GenesisWorker._acquire_sessions`). The session implementation owns the transitions; the worker just persists the AcquireState across reruns."*
+
+But `GenesisWorker` (`facade.py`) has no `_acquire_sessions` attribute. This docstring is **forward-looking** — it describes a feature that will be implemented in spec-003 (the Streamlit acquire page). Right now, acquire sessions are constructed on demand, no state tracking exists on the facade, and there's no resumption across reruns.
+
+**Suggestion:** Either:
+1. Remove the forward-looking detail until spec-003 implements it (safer — avoids confusing readers)
+2. Mark it as `TODO: spec-003` so it is clear this is planned, not missing
+3. Implement the `_acquire_sessions` tracking in this chunk (work ahead, but closes the gap)
+
+---
+
+### File: `genesis_worker/sources/huggingface/acquire.py`
+
+#### Issue: `HfAcquireSession` does not explicitly subclass `AcquireSession`
+
+`HfAcquireSession` implements the `AcquireSession` Protocol via duck typing — it has the right methods, so `isinstance(session, AcquireSession)` happens to work (thanks to `@runtime_checkable`). But the subclass relationship is **implicit**:
+
+```python
+class HfAcquireSession:  # No "(AcquireSession)" here
+    ...
+```
+
+This means:
+- A reader has to manually verify all three methods exist to know it implements the protocol
+- IDE autocomplete won't show that it conforms to `AcquireSession`
+- Subclassing `HfAcquireSession` doesn't automatically signal protocol conformance
+
+**Suggestion:** Make the relationship explicit:
+```python
+class HfAcquireSession(AcquireSession):
+    ...
+```
+
+This is purely syntactic since `AcquireSession` is a Protocol, but it makes the intent clear at a glance and helps tooling.
+
+---
+
+### File: `genesis_worker/sources/huggingface/source.py` (+ `__init__.py`)
+
+#### Issue: `HuggingFaceSource` doesn't expose `HfAcquireSession`
+
+The `HuggingFaceSource` class (the walker) and `HfAcquireSession` (the downloader) live in different files and the source doesn't expose the session class:
+
+```python
+# Current: framework has to reach inside to find HfAcquireSession
+from genesis_worker.sources.huggingface.acquire import HfAcquireSession
+```
+
+The `__init__.py` does re-export `HfAcquireSession`, but from a package-level perspective — not from the `HuggingFaceSource` itself. The framework layer (`facade.py` / Streamlit app) ends up knowing the internal structure of the `huggingface` package.
+
+This breaks the desired layering:
+- **External module** (facade/Streamlit) should not have to reach inside `huggingface.acquire`
+- **Framework** (the `HuggingFaceSource` walker) should not need to know about the acquire session — the facade should wire them together
+
+**Suggestion:** Either:
+1. Add a `start_acquire()` method on `HuggingFaceSource` that constructs and returns an `HfAcquireSession`, keeping the framework's knowledge at the source level: `source.start_acquire(cache_dir, revision)` → `HfAcquireSession`
+2. Or make the facade construct the session directly but import from `__init__` (the re-export), not from the internal `acquire` module — this keeps the contract at the package boundary rather than the internal file
+
+Option 1 is cleaner because it mirrors how other sources work — the source is the unit of extensibility, not the internal file layout.
+
+---
+
+### File: `genesis_worker/settings.py`
+
+#### Issue A: `LlamaSwapServiceSettings` duplicates path fields from `PathsSettings`
+
+`LlamaSwapServiceSettings` has `repo_root`, `config_dir`, and `log_dir` — fields that already exist on `PathsSettings`:
+
+```python
+class LlamaSwapServiceSettings(BaseModel):
+    repo_root: Path = Field(default_factory=_default_repo_root)
+    config_dir: Path = Field(default_factory=_default_config_dir)
+    log_dir: Path = Field(default_factory=_default_log_dir)
+```
+
+This creates two sources of truth for the same paths. The service should not own its own copies — it should use the already-resolved values from `PathsSettings`.
+
+**Suggestion:** Remove `repo_root`, `config_dir`, and `log_dir` from `LlamaSwapServiceSettings`. The service receives these from the facade/paths settings when it needs them. This matches the `HuggingFaceSourceSettings` / `LMSourceSettings` pattern, which only have `local_path`.
+
+#### Issue B: `recipes_path` is hardcoded as a settings field but should come from the source code
+
+`recipes_path` is exposed as a configurable field in `LlamaSwapServiceSettings`, but the recipes are **bundled with the service module**. They ship as part of the codebase and are versioned with the service — users don't edit them, the framework ships them.
+
+As agreed, the service should resolve the recipes path from its own source location (`__file__`), not from settings:
+
+```python
+class LlamaSwapService:
+    # Resolved at import time from the module's own location
+    _RECIPE_DIR = Path(__file__).parent / "recipes"
+    
+    def recipes_path(self) -> Path:
+        return self._RECIPE_DIR / "recipes.yaml"
+```
+
+No settings field needed. If the path needs to be overridden (for testing), inject it via the constructor.
+
+#### Issue C: Config path defaults are wrong — should be under `data_dir/llama-swap/`
+
+The current path resolution allows the config to land in `config_dir/` or the repo root, but we agreed that llama-swap's generated config should sit under `data_dir/llama-swap/`:
+
+```python
+# Desired default:
+config_path = data_dir / "llama-swap" / "config.yaml"
+```
+
+This keeps user-modifiable config in `config_dir/` and generated/service state in `data_dir/`.

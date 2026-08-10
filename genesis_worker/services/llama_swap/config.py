@@ -529,22 +529,7 @@ def read_generated_at(path: Path) -> str | None:
 
 
 def is_config_stale(config_path: Path, *, catalog_generated_at: str) -> bool:
-    """True iff ``config.yaml`` is older than the current catalog.
-
-    "Stale" means: a catalog rescan would produce a different set of
-    entries than what ``config.yaml`` was last generated against. We
-    detect this by comparing the catalog's ``generated_at`` (an ISO
-    timestamp produced at rescan time) to the ``generated_at`` we
-    embedded in ``config.yaml`` when we last wrote it.
-
-    Files that predate the spec-002 ``generated_at`` embedding always
-    read back as stale — that's the right default for the dashboard
-    ("regenerate to refresh after spec-002 lands").
-
-    This is a pure helper: no Settings, no facade, no I/O beyond the
-    one file read. The facade is responsible for getting the catalog's
-    fresh timestamp and calling this.
-    """
+    """True iff ``config.yaml`` is older than the current catalog."""
     embedded = read_generated_at(config_path)
     if embedded is None:
         return True

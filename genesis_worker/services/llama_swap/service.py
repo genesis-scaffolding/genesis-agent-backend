@@ -21,28 +21,11 @@ from .config import build_config, write_config
 from .recipes import Recipes
 
 if TYPE_CHECKING:
-    from ...facade import GenesisWorker
     from ...models import Catalog
 
 
 class LlamaSwapService(InferenceService):
-    """Inference service for llama-swap.
-
-    Implements the full :class:`InferenceService` Protocol (lifecycle
-    and introspection) plus three service-specific methods the facade
-    reaches via ``worker.service("llama_swap")``:
-
-    - :meth:`regenerate_config` — rebuild ``config.yaml`` from catalog +
-      recipes + overrides.
-    - :meth:`list_recipes` — return parsed recipe entries for UI display.
-    - :meth:`export_for_agent` — emit the pi-agent ``models.json``-shaped
-      dict (lands in spec-002 chunk 2 with :mod:`agent_export`).
-
-    Construction is by :class:`ServiceRegistry`; the facade injects
-    itself via :meth:`bind_worker` after registry construction so the
-    service can reach the catalog service for
-    :meth:`regenerate_config` without circular imports at module load.
-    """
+    """Inference service for llama-swap."""
 
     name = "llama_swap"
     display_name = "llama-swap"
@@ -52,21 +35,6 @@ class LlamaSwapService(InferenceService):
         # construction symmetric with sources — the framework always
         # provides a real object.
         self._settings = settings if settings is not None else LlamaSwapServiceSettings()
-        # Injected by the facade after registry construction. Lifecycle
-        # methods don't need it; service-specific methods (``regenerate_config``)
-        # do. Local imports inside those methods break the
-        # facade → registry → service → facade cycle.
-        self._worker: GenesisWorker | None = None
-
-    def bind_worker(self, worker: GenesisWorker) -> None:
-        """Facade injects itself here after construction.
-
-        Splits the construction cycle: the registry builds services,
-        then the facade wires itself up. Services don't import the
-        facade at module level; the runtime type is reached via this
-        setter and via lazy imports in the methods that need it.
-        """
-        self._worker = worker
 
     # --- Read-only methods --------------------------------------------------
 
@@ -90,14 +58,7 @@ class LlamaSwapService(InferenceService):
         )
 
     def resource_estimate(self) -> ServiceResourceEstimate:
-        """Placeholder advisory budget for the dashboard tile.
-
-        Spec-002 placeholder values, retained for v1. Per-model running
-        state isn't tracked yet; the dashboard's resource tile labels
-        these numbers as ``~est`` and skips rendering when the typical
-        value is zero. Real measurement lands with per-model loaded-
-        state tracking (post-v1).
-        """
+        """Placeholder advisory budget for the dashboard tile."""
         return ServiceResourceEstimate(
             vram_bytes_typical=5_000_000_000,
             vram_bytes_min=2_000_000_000,
@@ -183,30 +144,32 @@ class LlamaSwapService(InferenceService):
 
     # --- Service-specific methods ------------------------------------------
 
-    def regenerate_config(self, *, catalog: Catalog | None = None) -> bool:
-        """Rebuild ``config.yaml`` from catalog + recipes + overrides.
+    def regenerate_config(
+        self,
+        *,
+        catalog: Catalog,
+        config_path: Path,
+        recipes_path: Path,
+        overrides: dict | None = None,
+    ) -> bool:
+        """Rebuild ``config.yaml`` from catalog, recipes, and overrides.
 
-        Returns True iff the on-disk file changed. The facade passes a
-        freshly-scanned catalog; this method never rescans on its own
-        (so the Streamlit config-editor page can drive the workflow
-        explicitly via ``worker.rescan_catalog()`` + ``regenerate``).
+        Pure function: resolves nothing, reaches into no framework
+        internals. The caller (facade / Streamlit) is responsible for
+        gathering the catalog, resolving paths, and loading overrides
+        before invoking this method.
+
+        Returns True iff the on-disk file changed.
         """
-        if self._worker is None:
-            raise RuntimeError(
-                "LlamaSwapService.regenerate_config requires the facade; "
-                "call bind_worker(worker) first."
-            )
-        from .overrides import OverridesStore
-
-        cat = catalog if catalog is not None else self._worker.rescan_catalog()
-        recipes = Recipes.load(self.recipes_path())
-        overrides = OverridesStore(self.overrides_path()).load()
-        entries = build_config(cat, recipes, overrides=overrides)
+        recipes = Recipes.load(recipes_path)
+        entries = build_config(
+            catalog, recipes, overrides=overrides or {}
+        )
         return write_config(
-            self.config_path(),
+            config_path,
             entries,
-            root=cat.root,
-            generated_at=cat.generated_at,
+            root=catalog.root,
+            generated_at=catalog.generated_at,
         )
 
     def list_recipes(self) -> Recipes:
@@ -219,9 +182,7 @@ class LlamaSwapService(InferenceService):
 
         return build_provider(self.config_path(), base_url=base_url)
 
-    def write_models_json(
-        self, target: Path, *, base_url: str | None = None
-    ) -> bool:
+    def write_models_json(self, target: Path, *, base_url: str | None = None) -> bool:
         """Build + write ``target`` iff contents differ. Returns True iff a write happened."""
         from .agent_export import write_models_json
 
@@ -256,3 +217,4 @@ class LlamaSwapService(InferenceService):
 
 
 __all__ = ["LlamaSwapService"]
+
