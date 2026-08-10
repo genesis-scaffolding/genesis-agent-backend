@@ -15,6 +15,7 @@ from ...contracts import (
     AcquireChoice,
     AcquireFileGroup,
     AcquireProgress,
+    AcquireSession,
     AcquireState,
     AcquireStep,
 )
@@ -107,7 +108,7 @@ def group_files(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
     return sorted(groups, key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
 
-class HfAcquireSession:
+class HfAcquireSession(AcquireSession):
     """State-machine acquire session for one Hugging Face repo.
 
     Construction:

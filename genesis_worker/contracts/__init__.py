@@ -4,6 +4,14 @@ See ADR-009. Everything a source or service plugin needs lives here: the ABCs it
 implements, the types that cross the boundary, and the context it is constructed with.
 """
 
+from .acquire import (
+    AcquireChoice,
+    AcquireFileGroup,
+    AcquireProgress,
+    AcquireSession,
+    AcquireState,
+    AcquireStep,
+)
 from .catalog import Catalog, DiscoveredModel, ModelEntry, ModelPiece
 from .classify import (
     COMPONENT_DIRS,
@@ -21,15 +29,7 @@ from .service import (
     StartResult,
     StopResult,
 )
-from .source import (
-    AcquireChoice,
-    AcquireFileGroup,
-    AcquireProgress,
-    AcquireSession,
-    AcquireState,
-    AcquireStep,
-    ModelSource,
-)
+from .source import ModelSource
 
 __all__ = [
     "COMPONENT_DIRS",
