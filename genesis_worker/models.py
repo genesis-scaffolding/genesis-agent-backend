@@ -1,32 +1,4 @@
-"""Framework-level entity types — the single home for the worker's data shapes.
-
-This module is the central home for every type that flows between
-modules or is returned to consumers (CLI, Streamlit, tests). The goal
-is one well-known location to find framework-level data shapes,
-rather than scattering them across ``facade.py``, ``catalog/``,
-``services/``, etc.
-
-What's in here:
-
-- **Discovery entities** (``ModelPiece``, ``DiscoveredModel``) — produced
-  by ``ModelSource`` walkers, consumed by the catalog build service.
-- **Extension info** (``SourceInfo``, ``ServiceInfo``) — produced by the
-  facade, consumed by UI / CLI listings.
-- **Catalog schemas** (``ModelEntry``, ``Catalog``) — pydantic models for
-  the unified catalog, produced by the catalog build service and
-  consumed by config emit, the UI, and the orchestrator.
-
-The dataclasses (``ModelPiece``, ``DiscoveredModel``, ``SourceInfo``,
-``ServiceInfo``) are in-memory only. The pydantic models
-(``ModelEntry``, ``Catalog``) carry validation and serialization
-concerns because they're persisted to YAML.
-
-Pydantic schemas with deep domain logic live in their own files
-(``settings.py`` for settings; ``services/llama_swap/recipes.py``
-for recipes) because each carries its own validation, serialization,
-or resolver behavior. They are *not* scattered — each is co-located
-with the module that produces or consumes it.
-"""
+"""Framework-level entity types — the single home for the worker's data shapes."""
 
 from __future__ import annotations
 
@@ -149,9 +121,7 @@ class Catalog(BaseModel):
         result: dict[str, list[ModelEntry]] = {}
         for field_name in type(self).model_fields:
             value = getattr(self, field_name)
-            if isinstance(value, list) and all(
-                isinstance(v, ModelEntry) for v in value
-            ):
+            if isinstance(value, list) and all(isinstance(v, ModelEntry) for v in value):
                 result[field_name] = value
         return result
 

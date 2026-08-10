@@ -1,25 +1,4 @@
-"""Settings for the worker.
-
-Nested pydantic-settings model. Per-source and per-service settings are
-nested under ``SourcesSettings`` and ``ServicesSettings`` so adding a
-new source or service is one new pydantic model and one new field — no
-central enum.
-
-Only the top-level ``Settings`` is a ``BaseSettings``. Nested models are
-plain ``BaseModel``. The env-var delimiter is ``__`` so users can write
-``GENESIS_PATHS__DATA_DIR=/foo`` to override a nested field.
-
-Env-var precedence (lowest -> highest):
-
-    1. class defaults
-    2. dev.env (if present in cwd)
-    3. .env   (if present in cwd)
-    4. real env vars (GENESIS_*)
-    5. explicit constructor args
-
-ADR-004 details the path-resolution rules and the v1 backwards-compat
-fallback chain for legacy state files.
-"""
+"""Settings for the worker."""
 
 from __future__ import annotations
 

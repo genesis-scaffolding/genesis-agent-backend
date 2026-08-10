@@ -1,32 +1,4 @@
-"""``config.yaml`` generation from catalog + recipes + overrides.
-
-Lifts the build pipeline from ``bin/build-config.py`` verbatim, with two
-changes:
-
-1. Input is now :class:`~genesis_worker.services.llama_swap.recipes.Recipe`
-   pydantic objects instead of dicts.
-2. YAML emission uses :mod:`pyyaml` (ADR-006) instead of the hand-rolled
-   emitter. Multi-line ``cmd`` strings are emitted as literal block
-   scalars (``|``) automatically by ``yaml.dump``.
-
-Each emitted entry gains a ``resolved_from`` annotation naming the
-recipe that won for that entry. The Config Editor UI (spec-003) uses
-this to render "from recipe: <name>" badges next to overrideable fields.
-
-Build pipeline:
-
-    catalog -> recipes -> match per entry -> apply overrides -> emit
-
-Merging precedence (lowest -> highest):
-
-    1. matched recipe's value
-    2. default recipe's value (cascade)
-    3. overrides.yaml value
-    4. CLI --binary override (binary path only; reserved for post-v1)
-
-``write_config`` preserves mtime on no-op writes so llama-swap's
-``-watch-config`` doesn't reload on a no-op rebuild.
-"""
+"""``config.yaml`` generation from catalog + recipes + overrides."""
 
 from __future__ import annotations
 

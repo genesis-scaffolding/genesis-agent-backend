@@ -1,25 +1,4 @@
-"""GenesisWorker — the single public facade for the worker package.
-
-The :class:`GenesisWorker` is the entry point that CLI scripts,
-Streamlit pages, and external consumers (e.g. the orchestrator) use to
-drive the worker. It owns:
-
-- :class:`~genesis_worker.settings.Settings` — constructed if not provided.
-- :class:`~genesis_worker.sources.SourceRegistry` — auto-discovers sources.
-- :class:`~genesis_worker.services.ServiceRegistry` — auto-discovers services.
-- :class:`~genesis_worker.catalog_build.CatalogService` — uses the source registry
-  to walk the vault and produce the unified catalog.
-
-Consumers never reach into the registries directly (well, they can via
-the ``sources`` / ``services`` properties) — they ask the worker to
-list sources, rescan the catalog, look up a service, etc. Adding a new
-source or service requires no changes here: the registries auto-discover.
-
-Methods that depend on spec-002 (acquire flows, lifecycle plumbing,
-metrics collection) are intentionally absent; they land in plan-002/3.
-
-ADR-003 details the facade rationale.
-"""
+"""GenesisWorker — the single public facade for the worker package."""
 
 from __future__ import annotations
 

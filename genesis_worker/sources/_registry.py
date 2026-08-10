@@ -1,27 +1,4 @@
-"""Source registry — facade over :class:`ModelSource` construction.
-
-The :class:`SourceRegistry` is the single point of construction for
-sources. On construction it walks the sibling subpackages of
-``genesis_worker.sources``, imports each, finds the concrete
-:class:`ModelSource` class, resolves its ``local_path`` from settings,
-and instantiates it.
-
-Path-resolution rules (highest priority first):
-
-1. ``settings.sources.<name>.local_path`` set to an absolute path → use as-is.
-2. ``settings.sources.<name>.local_path`` set to a relative path → join
-   with ``settings.paths.resolved_vault_path``.
-3. No override → ``settings.paths.resolved_vault_path / source.vault_subdir``.
-
-Each source lives in its own subpackage (``sources/huggingface/``,
-``sources/lmstudio/``, ...) with the class in ``source.py``. The
-package's ``__init__.py`` re-exports the class for ergonomic imports.
-Adding a new source is one new subpackage — the registry picks it up
-automatically.
-
-Sources are pure logic and never import ``xdg_path`` or compute paths
-themselves — that is the framework's responsibility.
-"""
+"""Source registry — facade over :class:`ModelSource` construction."""
 
 from __future__ import annotations
 

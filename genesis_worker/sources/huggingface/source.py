@@ -1,22 +1,4 @@
-"""HuggingFace cache walker.
-
-Walks ``<local_path>/`` and emits one :class:`DiscoveredModel` per
-``models--*`` directory. The live snapshot is read from ``refs/main``
-and only that snapshot is enumerated.
-
-The framework constructs each source with a fully-resolved
-``local_path`` (see :class:`~genesis_worker.sources._registry.SourceRegistry`).
-This module does not import ``xdg_path`` or compute paths itself — it
-declares its on-disk layout via ``vault_subdir = "huggingface/hub"``.
-
-Walker logic lifted from ``bin/catalog.py:walk_huggingface`` — the
-behavior is identical, only the output type changes (dataclass instead
-of dict). Classification helpers are shared via
-:mod:`genesis_worker.sources._classify`.
-
-ADR-003: this is one registered source. Adding another is one new
-module + passing the class to :class:`SourceRegistry`.
-"""
+"""HuggingFace cache walker."""
 
 from __future__ import annotations
 

@@ -1,13 +1,4 @@
-"""Path resolution for the worker.
-
-Two concerns:
-- XDG-aware default paths for the worker's own state files (config, cache, logs).
-- Auto-detecting the repo root so legacy state files (`recipes.yaml`,
-  `config.yaml`, `MODEL_CATALOG.{yaml,md}`, `pi-models.json`) keep working
-  when they have not yet been migrated to XDG.
-
-ADR-004 details the path-resolution rules.
-"""
+"""Path resolution for the worker."""
 
 from __future__ import annotations
 

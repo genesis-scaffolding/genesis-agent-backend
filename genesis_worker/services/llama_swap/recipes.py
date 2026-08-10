@@ -1,20 +1,4 @@
-"""Recipes: pydantic schema, loader, longest-match resolver.
-
-A recipe is one family-level profile (sampling knobs, MTP spec,
-chat-template kwargs, KV-cache dtype override, mmproj offload toggle,
-reasoning budget, etc.). The :class:`Recipes` object bundles the
-``default`` recipe (used as a cascade source AND as the fallback when
-no family matches) with a list of matchable recipes.
-
-The resolver implements substring shadowing: when several recipes match,
-only the longest keyword wins (e.g. ``qwen3.6-27b`` shadows
-``qwen3.6``). Recipes sharing a keyword (siblings) all win together
-and emit one llama-swap entry each.
-
-Schema and resolver behavior are kept identical to ``bin/build-config.py``
-so a content-equivalent ``config.yaml`` can be produced from the new
-modules (ADR-008's validation gate).
-"""
+"""Recipes: pydantic schema, loader, longest-match resolver."""
 
 from __future__ import annotations
 

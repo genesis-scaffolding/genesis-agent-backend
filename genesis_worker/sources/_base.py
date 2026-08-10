@@ -1,28 +1,4 @@
-"""Model source extension axis — the :class:`ModelSource` Protocol.
-
-A :class:`ModelSource` knows how to discover (and, optionally, acquire)
-models from one kind of repository: HuggingFace cache, LM Studio layout,
-ModelScope, Civitai, etc.
-
-Sources are pure logic: the framework constructs each source with a
-fully-resolved ``local_path`` (see
-:class:`~genesis_worker.sources._registry.SourceRegistry`) and the
-source walks that path. Sources do NOT import ``xdg_path`` or compute
-paths themselves — they declare their on-disk layout via the
-``vault_subdir`` class attribute (e.g. ``"huggingface/hub"``) and the
-framework decides where that lands.
-
-Adding a new source is one new module under ``genesis_worker/sources/``:
-import the class and pass it to :class:`SourceRegistry` explicitly.
-There is no auto-discovery and no decorator.
-
-The discovery entity types (:class:`~genesis_worker.models.DiscoveredModel`,
-:class:`~genesis_worker.models.ModelPiece`) live at the framework level
-in :mod:`genesis_worker.models`, not here — sources emit them, the
-catalog consumes them, and other axes may too.
-
-ADR-003 details the extension architecture.
-"""
+"""Model source extension axis — the :class:`ModelSource` Protocol."""
 
 from __future__ import annotations
 

@@ -1,20 +1,4 @@
-"""LM Studio walker.
-
-Walks ``<local_path>/<publisher>/<model-dir>/`` and emits one
-:class:`DiscoveredModel` per ``<publisher>/<model-dir>``.
-
-The framework constructs each source with a fully-resolved
-``local_path`` (see :class:`~genesis_worker.sources._registry.SourceRegistry`).
-This module does not import ``xdg_path`` or compute paths itself — it
-declares its on-disk layout via ``vault_subdir = "lmstudio/models"``.
-
-Walker logic lifted from ``bin/catalog.py:walk_lmstudio`` — behavior
-identical, output type is a dataclass instead of a dict. Classification
-helpers are shared via :mod:`genesis_worker.sources._classify`.
-
-ADR-003: ``can_acquire`` is False — LM Studio is read-only here; users
-add models by dropping files into the right directory.
-"""
+"""LM Studio walker."""
 
 from __future__ import annotations
 

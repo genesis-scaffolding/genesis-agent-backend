@@ -1,19 +1,4 @@
-"""Service registry — facade over :class:`InferenceService` construction.
-
-The :class:`ServiceRegistry` is the single point of construction for
-inference services. On construction it walks the sibling subpackages
-of ``genesis_worker.services``, imports each, finds the concrete
-:class:`InferenceService` class, and instantiates it with its
-per-service settings slice.
-
-Each service lives in its own subpackage (``services/llama_swap/``)
-with the class in ``service.py``. The package's ``__init__.py``
-re-exports the class. Adding a new service is one new subpackage —
-the registry picks it up automatically.
-
-The :class:`InferenceService` Protocol and the result / status /
-capability dataclasses ship in :mod:`genesis_worker.services._base`.
-"""
+"""Service registry — facade over :class:`InferenceService` construction."""
 
 from __future__ import annotations
 

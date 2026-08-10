@@ -1,13 +1,4 @@
-"""Shared role classification for model files.
-
-Both the HuggingFace walker and the LM Studio walker classify files the
-same way: ``mmproj`` and ``mtp-*.gguf`` by filename, component dirs
-(``text_encoder/``, ``transformer/``, ``vae/``, ...) by parent directory,
-and everything else as ``main`` (if a weight extension) or ``config``.
-
-Lifted verbatim from ``bin/catalog.py`` — kept as a shared helper so a
-bug fix is one place, not two.
-"""
+"""Shared role classification for model files."""
 
 from __future__ import annotations
 

@@ -1,24 +1,4 @@
-"""Llama-swap inference service.
-
-Wraps the llama-swap process for the worker. This module establishes
-the concrete :class:`InferenceService` implementation for llama-swap;
-the read-only methods (``is_available``, ``capabilities``) are
-implemented now, while the lifecycle methods (``start`` / ``stop`` /
-``status`` / ``is_running`` / ``runtime_endpoint`` / ``wait_ready`` /
-``resource_estimate``) land in plan-002 with the tmux + curl + psutil
-plumbing in :mod:`genesis_worker.services.llama_swap.lifecycle`.
-
-The class is constructed by :class:`~genesis_worker.services._registry.ServiceRegistry`
-with the per-service settings slice (``settings.services.llama_swap``).
-It does not import ``Settings`` directly — it receives its slice at
-construction, mirroring how :class:`~genesis_worker.sources.HuggingFaceSource`
-receives ``local_path``.
-
-ADR-003 establishes llama-swap as one of multiple peers (ComfyUI,
-AIToolkit, vLLM are future axes). The :class:`InferenceService` Protocol
-keeps the dashboard capability-driven; this implementation reports
-``can_serve_llm=True`` and ``can_generate_config=True``.
-"""
+"""Llama-swap inference service."""
 
 from __future__ import annotations
 

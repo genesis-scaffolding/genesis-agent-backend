@@ -1,24 +1,4 @@
-"""Inference service extension axis — Protocol + dataclasses.
-
-A :class:`InferenceService` is the lifecycle façade for one inference
-backend: llama-swap today, ComfyUI / AIToolkit / vLLM tomorrow. Each
-service has its own binary, port, config-file format, lifecycle, and
-(sometimes) its own concept of "recipe" or "preset."
-
-The framework constructs each service with its per-service settings
-slice via :class:`~genesis_worker.services._registry.ServiceRegistry`.
-Concrete services implement :class:`InferenceService` and expose their
-capabilities / status / lifecycle hooks through the Protocol.
-
-Status, capability, and result types live here at the axis level so
-any consumer (UI, CLI, facade) can reason about services without
-importing a concrete implementation.
-
-ADR-003 details the extension architecture. Lifecycle plumbing
-(tmux, curl, process supervision) for individual services lands in
-plan-002; this module defines the contract those implementations
-will satisfy.
-"""
+"""Inference service extension axis — Protocol + dataclasses."""
 
 from __future__ import annotations
 

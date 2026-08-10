@@ -1,25 +1,4 @@
-"""Per-model user overrides on top of recipe defaults.
-
-Stored in ``overrides.yaml``, keyed by llama-swap entry-id. Schema:
-
-    entries:
-      <entry-id>:
-        sampling:
-          temp: 0.6
-        reasoning_budget: 8192
-
-Merging precedence at build time (lowest -> highest):
-
-    1. matched recipe
-    2. default recipe
-    3. overrides.yaml
-    4. CLI --binary (binary path only; post-v1)
-
-Missing file = empty store. Removing a field from overrides.yaml
-clears that override (no tombstone needed).
-
-ADR-007 details the file format and the SQLite deferral.
-"""
+"""Per-model user overrides on top of recipe defaults."""
 
 from __future__ import annotations
 

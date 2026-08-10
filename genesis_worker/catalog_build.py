@@ -1,14 +1,4 @@
-"""Catalog build service.
-
-Rescans every registered :class:`ModelSource`, merges their discoveries
-into a single :class:`~genesis_worker.models.Catalog`, and caches the
-result. The schema types (``Catalog``, ``ModelEntry``) live at the
-framework level in :mod:`genesis_worker.models`; this module owns the
-service that produces them.
-
-PyYAML emission (ADR-006) lives downstream in
-:mod:`genesis_worker.services.llama_swap.config`.
-"""
+"""Catalog build service."""
 
 from __future__ import annotations
 
