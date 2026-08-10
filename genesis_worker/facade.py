@@ -23,36 +23,16 @@ ADR-003 details the facade rationale.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .catalog.build import CatalogService
 from .catalog.schema import Catalog
-from .services._base import ServiceCapabilities
+from .models import ServiceInfo, SourceInfo
 from .services._registry import ServiceRegistry
 from .sources._registry import SourceRegistry
 
 if TYPE_CHECKING:
     from .settings import Settings
-
-
-@dataclass(frozen=True)
-class SourceInfo:
-    """Display-oriented view of one registered source."""
-
-    name: str
-    display_name: str
-    can_acquire: bool
-    is_available: bool
-
-
-@dataclass(frozen=True)
-class ServiceInfo:
-    """Display-oriented view of one registered service."""
-
-    name: str
-    display_name: str
-    capabilities: ServiceCapabilities
 
 
 class GenesisWorker:
@@ -174,4 +154,4 @@ def _default_settings() -> Settings:
     return _Settings()
 
 
-__all__ = ["GenesisWorker", "ServiceInfo", "SourceInfo"]
+__all__ = ["GenesisWorker"]

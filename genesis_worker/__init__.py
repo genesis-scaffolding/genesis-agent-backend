@@ -20,6 +20,7 @@ through the facade in consumer code.
 ADR-003 details the facade rationale.
 """
 
-from .facade import GenesisWorker, ServiceInfo, SourceInfo
+from .facade import GenesisWorker
+from .models import ServiceInfo, SourceInfo
 
 __all__ = ["GenesisWorker", "ServiceInfo", "SourceInfo"]
