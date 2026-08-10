@@ -8,7 +8,7 @@ import pytest
 
 from genesis_worker.catalog.build import CatalogService
 from genesis_worker.settings import PathsSettings, Settings
-from genesis_worker.sources import HuggingFaceSource, LMSource, SourceRegistry
+from genesis_worker.sources import SourceRegistry
 
 
 @pytest.fixture
@@ -32,17 +32,7 @@ def fake_vault(tmp_path: Path) -> Path:
 @pytest.fixture
 def registry_for(fake_vault: Path) -> SourceRegistry:
     """A SourceRegistry pointed at the fake vault via settings."""
-    return SourceRegistry(
-        Settings(paths=PathsSettings(vault_path=fake_vault)),
-        [HuggingFaceSource, LMSource],
-    )
-
-
-def _empty_registry(p: Path) -> SourceRegistry:
-    return SourceRegistry(
-        Settings(paths=PathsSettings(vault_path=p)),
-        [HuggingFaceSource, LMSource],
-    )
+    return SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault)))
 
 
 def test_rescan_merges_hf_and_lms(registry_for: SourceRegistry, fake_vault: Path) -> None:
@@ -61,7 +51,8 @@ def test_rescan_populates_total_bytes(registry_for: SourceRegistry) -> None:
 
 
 def test_rescan_handles_empty_vault(tmp_path: Path) -> None:
-    cat = CatalogService(_empty_registry(tmp_path)).rescan()
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
+    cat = CatalogService(registry).rescan()
     assert cat.huggingface == []
     assert cat.lmstudio == []
 
@@ -79,7 +70,8 @@ def test_rescan_records_source_label(registry_for: SourceRegistry) -> None:
 
 def test_by_source_groups_entries(tmp_path: Path) -> None:
     """``by_source()`` returns ``{field_name: [entries]}`` for every source field."""
-    cat = CatalogService(_empty_registry(tmp_path)).rescan()
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
+    cat = CatalogService(registry).rescan()
     grouped = cat.by_source()
     assert set(grouped) == {"huggingface", "lmstudio"}
     # Same object identity — accessor returns the field directly.
@@ -89,7 +81,8 @@ def test_by_source_groups_entries(tmp_path: Path) -> None:
 
 def test_by_source_works_for_empty_catalog(tmp_path: Path) -> None:
     """An empty catalog returns ``{huggingface: [], lmstudio: []}``."""
-    cat = CatalogService(_empty_registry(tmp_path)).rescan()
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
+    cat = CatalogService(registry).rescan()
     assert cat.by_source() == {"huggingface": [], "lmstudio": []}
 
 

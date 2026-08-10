@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..models import DiscoveredModel, ModelPiece
-from ._classify import SKIP_FILENAMES, classify, role_sort_key
+from ...models import DiscoveredModel, ModelPiece
+from .._classify import SKIP_FILENAMES, classify, role_sort_key
 
 
 class HuggingFaceSource:

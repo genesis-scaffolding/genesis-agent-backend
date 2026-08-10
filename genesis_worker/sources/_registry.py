@@ -1,10 +1,10 @@
 """Source registry — facade over :class:`ModelSource` construction.
 
 The :class:`SourceRegistry` is the single point of construction for
-sources. It takes a list of source *classes* (no decorator, no
-auto-discovery) and a :class:`~genesis_worker.settings.Settings` object,
-resolves each source's ``local_path`` from settings, constructs the
-source with that resolved path, and exposes ``.get(name)`` / ``.all()``.
+sources. On construction it walks the sibling subpackages of
+``genesis_worker.sources``, imports each, finds the concrete
+:class:`ModelSource` class, resolves its ``local_path`` from settings,
+and instantiates it.
 
 Path-resolution rules (highest priority first):
 
@@ -13,9 +13,11 @@ Path-resolution rules (highest priority first):
    with ``settings.paths.resolved_vault_path``.
 3. No override → ``settings.paths.resolved_vault_path / source.vault_subdir``.
 
-Adding a new source requires a settings field on
-:class:`~genesis_worker.settings.SourcesSettings` if the path should be
-user-overridable; otherwise the ``vault_subdir`` default is enough.
+Each source lives in its own subpackage (``sources/huggingface/``,
+``sources/lmstudio/``, ...) with the class in ``source.py``. The
+package's ``__init__.py`` re-exports the class for ergonomic imports.
+Adding a new source is one new subpackage — the registry picks it up
+automatically.
 
 Sources are pure logic and never import ``xdg_path`` or compute paths
 themselves — that is the framework's responsibility.
@@ -23,7 +25,8 @@ themselves — that is the framework's responsibility.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import importlib
+import pkgutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,29 +36,62 @@ if TYPE_CHECKING:
     from ..settings import Settings
 
 
+def _find_extension_class(module, *required_attrs: str) -> type | None:
+    """Find the first class in ``module`` that declares every required attribute.
+
+    Used by both :class:`SourceRegistry` and :class:`ServiceRegistry` to
+    locate the concrete extension class after auto-discovering a
+    subpackage. Returns ``None`` if no such class is found.
+    """
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name, None)
+        if not isinstance(attr, type):
+            continue
+        if not all(hasattr(attr, a) for a in required_attrs):
+            continue
+        return attr
+    return None
+
+
 class SourceRegistry:
     """Facade for constructing and looking up :class:`ModelSource` instances.
 
-    Construction is explicit: callers pass the source classes they want
-    registered. No decorators, no module-level state, no auto-discovery.
+    On construction, the registry walks the sibling subpackages of
+    ``genesis_worker.sources`` and instantiates one of every concrete
+    source found. Each source is constructed with ``local_path``
+    resolved from settings.
 
     Example::
 
-        registry = SourceRegistry(
-            Settings(),
-            [HuggingFaceSource, LMSource],
-        )
+        registry = SourceRegistry(Settings())
         for source in registry.all():
-            ...
-
-    Each source is constructed exactly once with ``local_path`` resolved
-    from settings per the rules in the module docstring.
+            if source.is_available():
+                ...
     """
 
-    def __init__(self, settings: Settings, source_classes: Iterable[type]) -> None:
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._instances: dict[str, ModelSource] = {}
-        for cls in source_classes:
+        self._discover()
+
+    def _discover(self) -> None:
+        """Walk sibling subpackages of ``genesis_worker.sources``.
+
+        Skips packages whose name starts with ``_`` (private helpers,
+        protocols, this registry itself). For each remaining subpackage,
+        imports it (triggering its ``__init__`` re-export) and looks for
+        a class declaring both ``name`` and ``vault_subdir``.
+        """
+        pkg = importlib.import_module(__package__ or "")
+        assert pkg.__path__ is not None
+        for mod_info in pkgutil.iter_modules(pkg.__path__):
+            name = mod_info.name
+            if not name or name.startswith("_"):
+                continue
+            sub = importlib.import_module(f"{pkg.__name__}.{name}")
+            cls = _find_extension_class(sub, "name", "vault_subdir")
+            if cls is None:
+                continue
             self._instances[cls.name] = cls(local_path=self._resolve_path(cls))
 
     def _resolve_path(self, cls: type) -> Path:

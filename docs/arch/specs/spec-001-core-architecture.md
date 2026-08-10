@@ -11,10 +11,10 @@ This spec covers Phases 0–4 of the master plan. The running `llama-swap` and t
 Both extension axes — model sources and inference services — follow the same pattern:
 
 - A **Protocol** declares the interface a concrete class must satisfy.
-- Each module under the axis's package defines one or more concrete classes that satisfy the Protocol.
-- A **Registry facade** (`SourceRegistry`, `ServiceRegistry`) is the single point of construction. The caller passes the concrete classes explicitly; the facade resolves any framework-level wiring (paths, settings) and instantiates them.
+- Each concrete implementation lives in its own subpackage under the axis's package, with the class in `source.py` / `service.py` and the package's `__init__.py` re-exporting it.
+- A **Registry facade** (`SourceRegistry`, `ServiceRegistry`) is the single point of construction. On construction it auto-discovers every subpackage under its axis, imports each, finds the concrete class by attribute pattern, resolves any framework-level wiring (paths, settings), and instantiates it.
 
-There is **no decorator-based registration, no module-level auto-discovery, and no implicit state**. Adding a new source or service is one new module + adding the class to the consumer's list passed to the registry.
+There is **no decorator-based registration, no explicit class list, and no module-level state** — the registry walks the package and finds new implementations automatically. Adding a new source or service is one new subpackage.
 
 Sources and services are **pure logic**: they declare their wiring needs (`vault_subdir` for sources; `settings` for services) and the framework resolves those needs at construction time. Sources do not import `xdg_path`; services do not read settings on their own.
 
@@ -49,8 +49,12 @@ my-agent-backend/
     │   ├── _base.py               # ModelSource Protocol
     │   ├── _registry.py           # SourceRegistry facade
     │   ├── _classify.py           # shared classification helpers (COMPONENT_DIRS, WEIGHT_EXTS, SKIP_FILENAMES, classify, role_sort_key)
-    │   ├── huggingface.py         # Phase 1 walker (acquire in spec-002)
-    │   └── lmstudio.py            # Phase 1 walker
+    │   ├── huggingface/
+    │   │   ├── __init__.py        # re-exports HuggingFaceSource
+    │   │   └── source.py          # HuggingFaceSource (Phase 1 walker; acquire in spec-002)
+    │   └── lmstudio/
+    │       ├── __init__.py        # re-exports LMSource
+    │       └── source.py          # LMSource (Phase 1 walker)
     ├── services/
     │   ├── __init__.py            # re-exports ServiceRegistry, InferenceService, dataclasses
     │   ├── _base.py               # InferenceService Protocol + ServiceCapabilities / ServiceResourceEstimate / ServiceStatus / StartResult / StopResult / ServiceState
@@ -317,12 +321,13 @@ class ModelSource(Protocol):
 
 ### `genesis_worker/sources/_registry.py`
 
-The single point of construction for sources. No decorator, no auto-discovery, no module-level state.
+The single point of construction for sources. Auto-discovers every subpackage under `genesis_worker.sources`, imports each, finds the concrete `ModelSource` class, and instantiates it with a resolved `local_path`. No explicit class list, no decorator, no module-level state.
 
 ```python
 from __future__ import annotations
 
-from collections.abc import Iterable
+import importlib
+import pkgutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -332,12 +337,25 @@ if TYPE_CHECKING:
     from ..settings import Settings
 
 
+def _find_extension_class(module, *required_attrs: str) -> type | None:
+    """Find the first class in ``module`` that declares every required attribute."""
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name, None)
+        if not isinstance(attr, type):
+            continue
+        if not all(hasattr(attr, a) for a in required_attrs):
+            continue
+        return attr
+    return None
+
+
 class SourceRegistry:
     """Facade for constructing and looking up ModelSource instances.
 
-    Construction is explicit: callers pass the source classes they want
-    registered. Each source is constructed exactly once with ``local_path``
-    resolved from settings per the rules below.
+    On construction, walks the sibling subpackages of
+    ``genesis_worker.sources`` and instantiates one of every concrete
+    source found. Each source is constructed with ``local_path``
+    resolved from settings.
 
     Path resolution (highest priority first):
 
@@ -345,15 +363,24 @@ class SourceRegistry:
     2. ``settings.sources.<name>.local_path`` is a relative Path ->
        join with ``settings.paths.resolved_vault_path``.
     3. No override -> ``settings.paths.resolved_vault_path / source.vault_subdir``.
-
-    Adding a new source is one new module + adding the class to the
-    consumer's list passed to this facade.
     """
 
-    def __init__(self, settings: Settings, source_classes: Iterable[type]) -> None:
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._instances: dict[str, ModelSource] = {}
-        for cls in source_classes:
+        self._discover()
+
+    def _discover(self) -> None:
+        pkg = importlib.import_module(__package__ or "")
+        assert pkg.__path__ is not None
+        for mod_info in pkgutil.iter_modules(pkg.__path__):
+            name = mod_info.name
+            if not name or name.startswith("_"):
+                continue
+            sub = importlib.import_module(f"{pkg.__name__}.{name}")
+            cls = _find_extension_class(sub, "name", "vault_subdir")
+            if cls is None:
+                continue
             self._instances[cls.name] = cls(local_path=self._resolve_path(cls))
 
     def _resolve_path(self, cls: type) -> Path: ...
@@ -370,17 +397,39 @@ class SourceRegistry:
         return self._settings.paths.resolved_vault_path
 ```
 
-### `genesis_worker/sources/huggingface.py`
+### `genesis_worker/sources/huggingface/`
+
+A package, not a file. The class lives in `source.py`; the package's `__init__.py` re-exports it for ergonomic imports. `SourceRegistry` auto-discovers this package by walking `genesis_worker.sources`.
 
 Lifted from `bin/catalog.py:walk_huggingface`. The walker logic is preserved verbatim; the output is a list of `DiscoveredModel` rather than dicts.
 
 ```python
+"""HuggingFace cache walker.
+
+Walks ``<local_path>/`` and emits one :class:`DiscoveredModel` per
+``models--*`` directory. The live snapshot is read from ``refs/main``
+and only that snapshot is enumerated.
+
+The framework constructs each source with a fully-resolved
+``local_path`` (see :class:`~genesis_worker.sources._registry.SourceRegistry`).
+This module does not import ``xdg_path`` or compute paths itself — it
+declares its on-disk layout via ``vault_subdir = "huggingface/hub"``.
+
+Walker logic lifted from ``bin/catalog.py:walk_huggingface`` — the
+behavior is identical, only the output type changes (dataclass instead
+of dict). Classification helpers are shared via
+:mod:`genesis_worker.sources._classify`.
+
+ADR-003: this is one registered source. Adding another is one new
+subpackage under ``genesis_worker/sources/`` — the registry picks it up.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from ..models import DiscoveredModel, ModelPiece
-from ._classify import SKIP_FILENAMES, classify, role_sort_key
+from ...models import DiscoveredModel, ModelPiece
+from .._classify import SKIP_FILENAMES, classify, role_sort_key
 
 
 class HuggingFaceSource:
@@ -403,7 +452,15 @@ class HuggingFaceSource:
         # ... lifted from bin/catalog.py:walk_huggingface ...
 ```
 
-(`lmstudio.py` follows the same pattern, with `vault_subdir = "lmstudio/models"` and the LM Studio walker.)
+`__init__.py`:
+
+```python
+from .source import HuggingFaceSource
+
+__all__ = ["HuggingFaceSource"]
+```
+
+`genesis_worker/sources/lmstudio/` follows the same pattern, with `vault_subdir = "lmstudio/models"` and the LM Studio walker.
 
 Note: the source has **no** `local_path()` method, **no** `xdg_path` import, and **no** `_local_path` private storage. The framework constructs the source with the resolved `local_path`; the source stores it on `self.local_path` and uses it directly. There is no path computation in the source module.
 
@@ -617,33 +674,59 @@ class InferenceService(Protocol):
 
 ### `genesis_worker/services/_registry.py`
 
-The single point of construction for inference services. Mirrors `SourceRegistry`: explicit class list, no decorators, no module-level state. Each service receives its per-service settings slice at construction.
+The single point of construction for inference services. Auto-discovers every subpackage under `genesis_worker.services`, imports each, finds the concrete `InferenceService` class, and instantiates it with its per-service settings slice. Mirrors `SourceRegistry`.
 
 ```python
 from __future__ import annotations
 
-from collections.abc import Iterable
+import importlib
+import pkgutil
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..settings import Settings
 
 
+def _find_extension_class(module, *required_attrs: str) -> type | None:
+    """Find the first class in ``module`` that declares every required attribute."""
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name, None)
+        if not isinstance(attr, type):
+            continue
+        if not all(hasattr(attr, a) for a in required_attrs):
+            continue
+        return attr
+    return None
+
+
 class ServiceRegistry:
     """Facade for constructing and looking up service instances.
 
-    Construction is explicit: callers pass the service classes they want
-    registered. Each service is constructed with its per-service settings
-    slice (e.g. ``settings.services.llama_swap``) as the ``settings`` kwarg.
-    Services whose ``name`` does not appear under ``settings.services`` get
-    ``settings=None`` — they may accept None or require a settings slice.
+    On construction, walks the sibling subpackages of
+    ``genesis_worker.services`` and instantiates one of every concrete
+    service found. Each service is constructed with its per-service
+    settings slice (e.g. ``settings.services.llama_swap``) as the
+    ``settings`` kwarg. Services whose ``name`` does not appear under
+    ``settings.services`` get ``settings=None``.
     """
 
-    def __init__(self, settings: Settings, service_classes: Iterable[type]) -> None:
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._instances: dict[str, Any] = {}
-        for cls in service_classes:
-            per_service = getattr(settings.services, cls.name, None)
+        self._discover()
+
+    def _discover(self) -> None:
+        pkg = importlib.import_module(__package__ or "")
+        assert pkg.__path__ is not None
+        for mod_info in pkgutil.iter_modules(pkg.__path__):
+            name = mod_info.name
+            if not name or name.startswith("_"):
+                continue
+            sub = importlib.import_module(f"{pkg.__name__}.{name}")
+            cls = _find_extension_class(sub, "name", "display_name")
+            if cls is None:
+                continue
+            per_service = getattr(self._settings.services, cls.name, None)
             self._instances[cls.name] = cls(settings=per_service)
 
     def get(self, name: str) -> Any:
@@ -963,11 +1046,11 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 
 - `test_paths.py`: `repo_root()` returns a directory containing `Makefile` or `pyproject.toml`.
 - `test_settings.py`: instantiate `Settings()` with no env vars, assert defaults; set `GENESIS_PATHS__DATA_DIR=/custom/x` via `monkeypatch.setenv`, assert it wins; set `XDG_DATA_HOME=/custom/y`, assert `xdg_path("DATA", ".local/share")` returns `/custom/y/genesis-worker`.
-- `test_sources_registry.py`: `SourceRegistry(Settings(), [HuggingFaceSource, LMSource])` returns both sources; `get("huggingface")` / `get("lmstudio")` work; `get("does_not_exist")` raises `KeyError`. Path-resolution contract: default → `vault_subdir`, explicit absolute → used as-is, explicit relative → joined to `vault_path`. Empty class list yields an empty registry.
+- `test_sources_registry.py`: `SourceRegistry(Settings())` auto-discovers both `huggingface/` and `lmstudio/` subpackages and returns both sources; `get("huggingface")` / `get("lmstudio")` work; `get("does_not_exist")` raises `KeyError`. Path-resolution contract: default → `vault_subdir`, explicit absolute → used as-is, explicit relative → joined to `vault_path`.
 - `test_sources_huggingface.py`: walk against a fixture tree (build a temp HF layout under `tmp_path` with `models--org--name/refs/main`, `snapshots/<sha>/...`), assert entry count + pieces + total_bytes.
 - `test_sources_lmstudio.py`: walk against a fixture `<publisher>/<model-dir>` tree, assert entry count.
-- `test_services_registry.py`: `ServiceRegistry(Settings(), [LlamaSwapService])` constructs the service with the per-service settings slice; `LlamaSwapService` satisfies the `InferenceService` Protocol; `is_available()` / `capabilities()` return real values; lifecycle methods raise `NotImplementedError` until plan-002 lands them. The registry also accepts anonymous test classes for the construction contract (`get()` / `all()` / `KeyError`).
-- `test_catalog_build.py`: build a Catalog via `CatalogService(SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault)), [HuggingFaceSource, LMSource]))`, assert the merge. `Catalog.by_source()` returns the same data as the explicit `huggingface` / `lmstudio` fields.
+- `test_services_registry.py`: `ServiceRegistry(Settings())` auto-discovers the `llama_swap/` subpackage and constructs `LlamaSwapService` with the per-service settings slice. `LlamaSwapService` satisfies the `InferenceService` Protocol; `is_available()` / `capabilities()` return real values; lifecycle methods raise `NotImplementedError` until plan-002 lands them.
+- `test_catalog_build.py`: build a Catalog via `CatalogService(SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault))))`, assert the merge. `Catalog.by_source()` returns the same data as the explicit `huggingface` / `lmstudio` fields.
 - `test_recipes.py`: load current `recipes.yaml`; resolve a battery of model names; assert the winner matches `bin/build-config.py`'s behavior (qwen3.6-27b wins over qwen3.6; lfm2 → lfm2; rocinante → default; bonsai → bonsai).
 - `test_overrides.py`: write/load round-trip; missing file returns `{}`; clearing a field removes it.
 - `test_config_emit.py`: (a) no-overrides build → diff `cmd` strings against current `config.yaml` (byte-equal or whitespace-equal). (b) Apply an override to one entry → that entry's `cmd` reflects the override. (c) `write_config` is idempotent (mtime preserved on no-op).
@@ -976,9 +1059,9 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 
 1. `uv sync` exits 0.
 2. `uv run pytest genesis_worker/tests/` passes.
-3. `uv run python -c "from genesis_worker.sources import SourceRegistry, HuggingFaceSource, LMSource; from genesis_worker.settings import Settings; print(sorted(s.name for s in SourceRegistry(Settings(), [HuggingFaceSource, LMSource]).all()))"` prints `['huggingface', 'lmstudio']`.
+3. `uv run python -c "from genesis_worker.sources import SourceRegistry; from genesis_worker.settings import Settings; print(sorted(s.name for s in SourceRegistry(Settings()).all()))"` prints `['huggingface', 'lmstudio']`.
 4. `uv run python -c "from genesis_worker.settings import Settings; print(Settings().paths)"` prints four XDG-defaulted paths.
-5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry, HuggingFaceSource, LMSource; from genesis_worker.catalog.build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s, [HuggingFaceSource, LMSource]); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
+5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry; from genesis_worker.catalog.build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
 6. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; from genesis_worker.services.llama_swap.recipes import Recipes; from pathlib import Path; ...; print(len(entries))"` shows the same entry count as `wc -l config.yaml`.
 7. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; ...; yaml.safe_dump(...)" | diff - <(grep -A 1000 '^models:' config.yaml)` shows content-equivalent entries (whitespace allowed to differ).
 8. `make all` still passes — `bin/catalog.py` and `bin/build-config.py` still produce their original output. The `config.yaml` on disk is untouched.
