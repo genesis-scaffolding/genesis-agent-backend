@@ -1,18 +1,21 @@
 """Catalog build service.
 
-Iterates every registered source via :class:`SourceRegistry`, asks each
-for its discovered models, merges them into one :class:`Catalog`.
-PyYAML emission (ADR-006) lives in the writer layer at
-:mod:`genesis_worker.catalog.emit`.
+Rescans every registered :class:`ModelSource`, merges their discoveries
+into a single :class:`~genesis_worker.models.Catalog`, and caches the
+result. The schema types (``Catalog``, ``ModelEntry``) live at the
+framework level in :mod:`genesis_worker.models`; this module owns the
+service that produces them.
+
+PyYAML emission (ADR-006) lives downstream in
+:mod:`genesis_worker.services.llama_swap.config`.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from ..models import DiscoveredModel
-from ..sources._registry import SourceRegistry
-from .schema import Catalog, ModelEntry
+from .models import Catalog, DiscoveredModel, ModelEntry
+from .sources._registry import SourceRegistry
 
 
 class CatalogService:

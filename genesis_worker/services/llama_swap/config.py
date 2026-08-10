@@ -39,7 +39,7 @@ from typing import Any
 
 import yaml
 
-from ...catalog.schema import Catalog, ModelEntry
+from ...models import Catalog, ModelEntry
 from ...paths import repo_root
 from .recipes import Recipe
 

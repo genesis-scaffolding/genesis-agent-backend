@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.catalog.build import CatalogService
+from genesis_worker.catalog_build import CatalogService
 from genesis_worker.settings import PathsSettings, Settings
 from genesis_worker.sources import SourceRegistry
 

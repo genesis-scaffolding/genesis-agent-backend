@@ -7,7 +7,7 @@ drive the worker. It owns:
 - :class:`~genesis_worker.settings.Settings` — constructed if not provided.
 - :class:`~genesis_worker.sources.SourceRegistry` — auto-discovers sources.
 - :class:`~genesis_worker.services.ServiceRegistry` — auto-discovers services.
-- :class:`~genesis_worker.catalog.CatalogService` — uses the source registry
+- :class:`~genesis_worker.catalog_build.CatalogService` — uses the source registry
   to walk the vault and produce the unified catalog.
 
 Consumers never reach into the registries directly (well, they can via
@@ -25,9 +25,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .catalog.build import CatalogService
-from .catalog.schema import Catalog
-from .models import ServiceInfo, SourceInfo
+from .catalog_build import CatalogService
+from .models import Catalog, ServiceInfo, SourceInfo
 from .services._registry import ServiceRegistry
 from .sources._registry import SourceRegistry
 

@@ -68,10 +68,7 @@ my-agent-backend/
     │       ├── service.py         # LlamaSwapService — read-only methods real; lifecycle methods (start/stop/status/etc.) stubbed until plan-002
     │       ├── lifecycle.py       # Phase 5 (spec-002)
     │       └── agent_export.py    # Phase 6 (spec-002)
-    ├── catalog/
-    │   ├── __init__.py
-    │   ├── schema.py              # Phase 2 (Catalog, ModelEntry pydantic; Catalog.by_source())
-    │   └── build.py               # Phase 2 (CatalogService takes a SourceRegistry)
+    ├── catalog_build.py           # CatalogService (takes a SourceRegistry; schema is in models.py)
     └── tests/
         ├── test_paths.py
         ├── test_settings.py
@@ -253,8 +250,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .catalog.build import CatalogService
-from .catalog.schema import Catalog
+from .catalog_build import CatalogService
+from .models import Catalog
 from .services._base import ServiceCapabilities
 from .services._registry import ServiceRegistry
 from .sources._registry import SourceRegistry
@@ -589,76 +586,27 @@ def classify(path: Path) -> str: ...
 def role_sort_key(role: str) -> tuple[int, str]: ...
 ```
 
-### `genesis_worker/catalog/schema.py`
+### `genesis_worker/catalog_build.py`
 
-```python
-from __future__ import annotations
+The catalog build service. Walks every registered source via the source registry, merges discoveries into a :class:`~genesis_worker.models.Catalog`, and returns it. The schema types (``Catalog``, ``ModelEntry``) live at the framework level in :mod:`genesis_worker.models`; this module owns the service that produces them.
 
-from pydantic import BaseModel, Field
-
-from ..models import ModelPiece
-
-
-class ModelEntry(BaseModel):
-    """One model in the catalog."""
-
-    name: str
-    source: str
-    pieces: list[ModelPiece] = Field(default_factory=list)
-    total_bytes: int
-    directory: str
-    notes: list[str] = Field(default_factory=list)
-    extra: dict = Field(default_factory=dict)
-
-
-class Catalog(BaseModel):
-    """The unified catalog. ``huggingface`` and ``lmstudio`` lists are kept
-    separate so the YAML output matches the existing artifact shape (ADR-008)."""
-
-    root: str
-    generated_at: str
-    huggingface: list[ModelEntry] = Field(default_factory=list)
-    lmstudio: list[ModelEntry] = Field(default_factory=list)
-
-    def by_source(self) -> dict[str, list[ModelEntry]]:
-        """Return entries grouped by source name.
-
-        Source-agnostic iteration over the catalog. Walks the model's
-        declared fields and returns any field whose value is a list of
-        ``ModelEntry`` (works for empty lists too).
-
-        Adding a new source field (e.g. ``modelscope: list[ModelEntry]``)
-        automatically appears in this mapping — no second edit in
-        downstream consumers needed.
-        """
-        result: dict[str, list[ModelEntry]] = {}
-        for field_name in type(self).model_fields:
-            value = getattr(self, field_name)
-            if isinstance(value, list) and all(
-                isinstance(v, ModelEntry) for v in value
-            ):
-                result[field_name] = value
-        return result
-```
-
-### `genesis_worker/catalog/build.py`
+The `catalog/` package that previously held `schema.py` and `build.py` has been flattened — schema moved to `models.py`, build service moved to this top-level module. The principle: framework-level data shapes live together, services live at the level where they're used.
 
 ```python
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from ..models import DiscoveredModel
-from ..sources._registry import SourceRegistry
-from .schema import Catalog, ModelEntry
+from .models import Catalog, DiscoveredModel, ModelEntry
+from .sources._registry import SourceRegistry
 
 
 class CatalogService:
     """Walks the vault and produces a unified catalog.
 
-    The SourceRegistry owns path resolution for every registered source;
-    this service just walks them in order. The catalog's ``root`` is the
-    registry's ``vault_path``.
+    The :class:`SourceRegistry` owns path resolution for every registered
+    source; this service just walks them in order. The catalog's ``root``
+    is the registry's ``vault_path``.
     """
 
     def __init__(self, registry: SourceRegistry) -> None:
@@ -1049,7 +997,7 @@ from typing import Any
 
 import yaml
 
-from ...catalog.schema import Catalog, ModelEntry
+from ...models import Catalog, ModelEntry
 from ...paths import repo_root
 from .recipes import Recipe
 
@@ -1175,7 +1123,7 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 3. `uv run python -c "from genesis_worker.sources import SourceRegistry; from genesis_worker.settings import Settings; print(sorted(s.name for s in SourceRegistry(Settings()).all()))"` prints `['huggingface', 'lmstudio']`.
 3a. `uv run python -c "from genesis_worker import GenesisWorker; w = GenesisWorker(); print([s.name for s in w.list_services()])"` prints at least `llama_swap`.
 4. `uv run python -c "from genesis_worker.settings import Settings; print(Settings().paths)"` prints four XDG-defaulted paths.
-5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry; from genesis_worker.catalog.build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
+5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry; from genesis_worker.catalog_build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
 6. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; from genesis_worker.services.llama_swap.recipes import Recipes; from pathlib import Path; ...; print(len(entries))"` shows the same entry count as `wc -l config.yaml`.
 7. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; ...; yaml.safe_dump(...)" | diff - <(grep -A 1000 '^models:' config.yaml)` shows content-equivalent entries (whitespace allowed to differ).
 8. `make all` still passes — `bin/catalog.py` and `bin/build-config.py` still produce their original output. The `config.yaml` on disk is untouched.
