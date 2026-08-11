@@ -50,13 +50,41 @@ def test_settings_xdg_env_var_overrides_default(monkeypatch: pytest.MonkeyPatch)
 
 def test_settings_resolved_vault_path_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GENESIS_PATHS__VAULT_PATH", raising=False)
-    s = Settings()
+    monkeypatch.delenv("MODELS_ROOT", raising=False)
+    monkeypatch.setattr(
+        "genesis_worker.settings._read_models_root", lambda: None
+    )
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.paths.resolved_vault_path == s.paths.data_dir / "vault"
 
 
 def test_settings_resolved_vault_path_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GENESIS_PATHS__VAULT_PATH", "/srv/vault")
-    s = Settings()
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.paths.resolved_vault_path == Path("/srv/vault")
+
+
+def test_settings_resolved_vault_path_models_root_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MODELS_ROOT from os.environ is a backward-compat synonym for vault_path."""
+    monkeypatch.delenv("GENESIS_PATHS__VAULT_PATH", raising=False)
+    monkeypatch.delenv("MODELS_ROOT", raising=False)
+    monkeypatch.setattr(
+        "genesis_worker.settings._read_models_root", lambda: "/srv/models"
+    )
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.paths.resolved_vault_path == Path("/srv/models")
+
+
+def test_settings_explicit_vault_path_wins_over_models_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GENESIS_PATHS__VAULT_PATH", "/srv/vault")
+    monkeypatch.setattr(
+        "genesis_worker.settings._read_models_root", lambda: "/srv/models"
+    )
+    s = Settings()  # type: ignore[call-arg]
     assert s.paths.resolved_vault_path == Path("/srv/vault")
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import streamlit as st
@@ -29,19 +28,28 @@ def _to_relative(page_path: Path) -> str:
 
 st.title("Genesis Worker")
 
+
 # --- System strip -----------------------------------------------------------
-metrics = worker.collect_metrics()
-cols = st.columns(4)
-cols[0].metric("CPU", f"{metrics.cpu_percent:.0f}%")
-cols[1].metric("RAM", f"{metrics.ram_used_gb:.1f} / {metrics.ram_total_gb:.1f} GB")
-if metrics.gpu_percent is not None:
-    cols[2].metric("GPU", f"{metrics.gpu_percent:.0f}%")
-else:
-    cols[2].metric("GPU", "n/a")
-if metrics.vram_total_gb:
-    cols[3].metric("VRAM", f"{metrics.vram_used_gb:.1f} / {metrics.vram_total_gb:.1f} GB")
-else:
-    cols[3].metric("VRAM", "n/a")
+# Wrapped in a fragment that reruns every 10s for live metrics. The rest of
+# the dashboard does NOT auto-refresh — it stays stable while you click
+# around, and only re-renders when something changes.
+@st.fragment(run_every="10s")
+def _system_strip() -> None:
+    metrics = worker.collect_metrics()
+    cols = st.columns(4)
+    cols[0].metric("CPU", f"{metrics.cpu_percent:.0f}%")
+    cols[1].metric("RAM", f"{metrics.ram_used_gb:.1f} / {metrics.ram_total_gb:.1f} GB")
+    if metrics.gpu_percent is not None:
+        cols[2].metric("GPU", f"{metrics.gpu_percent:.0f}%")
+    else:
+        cols[2].metric("GPU", "n/a")
+    if metrics.vram_total_gb:
+        cols[3].metric("VRAM", f"{metrics.vram_used_gb:.1f} / {metrics.vram_total_gb:.1f} GB")
+    else:
+        cols[3].metric("VRAM", "n/a")
+
+
+_system_strip()
 
 st.divider()
 
@@ -164,8 +172,25 @@ st.divider()
 with st.expander("Debug: paths and catalog walk", expanded=False):
     import os
 
+    from dotenv import dotenv_values
+
     paths = worker.settings.paths
     vault = paths.resolved_vault_path
+
+    # pydantic-settings reads .env via dotenv but does not populate os.environ.
+    # A value in .env is therefore invisible to naive os.environ.get().
+    # Read .env ourselves so the panel reflects what the framework sees.
+    try:
+        env_file_values = dotenv_values(".env")
+    except Exception:  # noqa: BLE001 — no .env or unreadable; panel degrades
+        env_file_values = {}
+
+    def _shown(name: str) -> str:
+        if name in os.environ:
+            return os.environ[name]
+        if name in env_file_values:
+            return f"{env_file_values[name]}  (from .env)"
+        return "<unset>"
 
     def _row(label: str, value: object, exists: bool | None = None) -> None:
         suffix = ""
@@ -176,10 +201,10 @@ with st.expander("Debug: paths and catalog walk", expanded=False):
         st.code(f"{label:<28} {value}{suffix}", language=None)
 
     st.markdown("**Environment**")
-    _row("MODELS_ROOT", os.environ.get("MODELS_ROOT", "<unset>"))
-    _row("GENESIS_PATHS__VAULT_PATH", os.environ.get("GENESIS_PATHS__VAULT_PATH", "<unset>"))
-    _row("XDG_DATA_HOME", os.environ.get("XDG_DATA_HOME", "<unset>"))
-    _row("HOME", os.environ.get("HOME", "<unset>"))
+    _row("MODELS_ROOT", _shown("MODELS_ROOT"))
+    _row("GENESIS_PATHS__VAULT_PATH", _shown("GENESIS_PATHS__VAULT_PATH"))
+    _row("XDG_DATA_HOME", _shown("XDG_DATA_HOME"))
+    _row("HOME", _shown("HOME"))
 
     st.markdown("**Resolved paths**")
     _row("vault_path", vault, vault.exists())
@@ -190,9 +215,21 @@ with st.expander("Debug: paths and catalog walk", expanded=False):
         lp = src.local_path
         _row(f"{info.name}.local_path", lp, lp.exists())
 
+    st.markdown("**Service config paths**")
+    for info in worker.list_services():
+        svc = worker.service(info.name)
+        try:
+            cp = svc.config_path
+        except Exception as exc:  # noqa: BLE001 — diagnostic panel
+            st.write(f"{info.name}: config_path unavailable ({exc})")
+            continue
+        st.write(f"{info.name}: `{cp}` (exists: {cp.exists()})")
+        if cp.exists():
+            import os as _os
+
+            st.caption(f"  mtime: {_os.path.getmtime(cp):.0f}, size: {cp.stat().st_size} bytes")
+
     st.markdown("**Raw walker vs catalog**")
-    # Count models--* dirs directly under each source's local_path so we can
-    # see whether the walker sees the right directories.
     for info in sources_list:
         src = worker.source(info.name)
         lp = src.local_path
@@ -210,7 +247,6 @@ with st.expander("Debug: paths and catalog walk", expanded=False):
                 "Walker found directories but the catalog is empty — "
                 "the walker's validation is rejecting them."
             )
-            # Show first rejection so we can see why.
             for d in raw_dirs[:1]:
                 refs = d / "refs" / "main"
                 snapshots = d / "snapshots"
@@ -219,6 +255,6 @@ with st.expander("Debug: paths and catalog walk", expanded=False):
                     f"snapshots exists={snapshots.is_dir()}"
                 )
 
-# Slow auto-refresh so the dashboard reflects state changes.
-time.sleep(10)
-st.rerun()
+# No top-level sleep + rerun. The system strip above uses
+# st.fragment(run_every="10s") to refresh the metrics on its own; the rest
+# of the page stays stable and only rerenders on user action.
