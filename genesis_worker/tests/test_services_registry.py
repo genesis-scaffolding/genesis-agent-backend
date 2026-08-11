@@ -80,8 +80,12 @@ def test_registry_constructs_each_service_exactly_once() -> None:
 
 def test_service_defaults_when_no_option_slice(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path))
-    assert svc._options.listen_addr == "127.0.0.1:8080"
+    # Default is 0.0.0.0:8080 so the service is reachable from the
+    # LAN/VPN, not just localhost. Users who want a different bind
+    # address override via GENESIS_SERVICES__LLAMA_SWAP__LISTEN_ADDR.
+    assert svc._options.listen_addr == "0.0.0.0:8080"
     assert svc._options.session_name == "swap"
+    assert svc._options.public_host is None  # falls back to socket.gethostname()
 
 
 def test_registry_scopes_paths_by_dir_name() -> None:

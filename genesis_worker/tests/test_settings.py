@@ -121,7 +121,7 @@ def test_plugin_defaults_come_from_the_plugin(monkeypatch: pytest.MonkeyPatch) -
     from genesis_worker.sources.huggingface.options import HuggingFaceOptions
 
     assert HuggingFaceOptions().default_revision == "main"
-    assert LlamaSwapOptions().listen_addr == "127.0.0.1:8080"
+    assert LlamaSwapOptions().listen_addr == "0.0.0.0:8080"
     assert LlamaSwapOptions().kv_quant_over_bytes == 25_000_000_000
 
 

@@ -75,10 +75,42 @@ class LlamaSwapService(InferenceService):
     def is_running(self) -> bool:
         return lifecycle.is_running(self._options.session_name)
 
+    def public_host(self) -> str:
+        """Hostname clients should use to reach this service.
+
+        Defaults to ``socket.gethostname()`` so the dashboard, pi-agent
+        exports, and web-UI links are reachable from other machines on
+        the LAN/VPN — not from ``127.0.0.1`` (which points at the calling
+        machine, not the worker) and not from ``0.0.0.0`` (a bind address,
+        not a connect address).
+        """
+        if self._options.public_host:
+            return self._options.public_host
+        import socket
+
+        try:
+            return socket.gethostname()
+        except OSError:
+            return "localhost"
+
+    def _port(self) -> int:
+        # listen_addr is "host:port" — we want the port for URL building.
+        try:
+            return int(self._options.listen_addr.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            return 8080
+
     def runtime_endpoint(self) -> str | None:
+        """OpenAI-compatible API base URL (``/v1``). Used by pi-agent."""
         if not self.is_running():
             return None
-        return f"http://{self._options.listen_addr}/v1"
+        return f"http://{self.public_host()}:{self._port()}/v1"
+
+    def web_ui_endpoint(self) -> str | None:
+        """Web UI URL. Used by the dashboard's 'Open Web UI' button."""
+        if not self.is_running():
+            return None
+        return f"http://{self.public_host()}:{self._port()}/v1"
 
     def start(self) -> StartResult:
         return lifecycle.start_swap(

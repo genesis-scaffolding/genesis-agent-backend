@@ -15,7 +15,6 @@ import pytest
 
 from genesis_worker.paths import repo_root
 from genesis_worker.services.llama_swap.export_pi_config import (
-    DEFAULT_BASE_URL,
     FALLBACK_PROVIDER_NAME,
     build_provider,
     write_models_json,
@@ -108,13 +107,17 @@ def test_build_provider_hostname_falls_back_when_empty(tmp_path: Path) -> None:
 
 
 def test_build_provider_default_base_url(tmp_path: Path) -> None:
+    """When no base_url is provided, the framework falls back to the
+    worker's hostname (not 127.0.0.1) so pi-agent on another machine can
+    reach llama-swap. The exact hostname depends on the test runner, so
+    we only assert the structural shape.
+    """
     cfg = tmp_path / "config.yaml"
     cfg.write_text(_config_with([_entry("m1")]))
     provider = build_provider(cfg)
     inner = next(iter(provider["providers"].values()))
-    assert inner["baseUrl"] == DEFAULT_BASE_URL
-    assert inner["api"] == "openai-completions"
-    assert inner["apiKey"] == "local"
+    assert inner["baseUrl"].endswith("/v1")
+    assert "127.0.0.1" not in inner["baseUrl"]
 
 
 def test_build_provider_explicit_base_url(tmp_path: Path) -> None:

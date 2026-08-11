@@ -89,7 +89,7 @@ for info in worker.list_services():
             pages = svc.ui_pages
             if pages and st.button("Admin", key=f"admin-{info.name}"):
                 st.switch_page(_to_relative(pages[0].path))
-            endpoint = svc.runtime_endpoint()
+            endpoint = svc.web_ui_endpoint()
             if (
                 caps.has_web_ui
                 and status.state.value == "running"

@@ -29,7 +29,7 @@ with cols[0]:
         st.rerun()
 
 with cols[1]:
-    endpoint = svc.runtime_endpoint()
+    endpoint = svc.web_ui_endpoint()
     if status.state == ServiceState.RUNNING and endpoint:
         st.link_button("Open Web UI ↗", endpoint)
 
