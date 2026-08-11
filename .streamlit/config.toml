@@ -1,0 +1,8 @@
+[global]
+developmentMode = false
+
+[browser]
+gatherUsageStats = false
+
+[server]
+fileWatcherType = "none"

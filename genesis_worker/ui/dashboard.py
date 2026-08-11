@@ -3,10 +3,28 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import streamlit as st
 
 worker = st.session_state["worker"]
+
+# All st.switch_page calls in this file need a path relative to this script.
+_FRAMEWORK_UI = Path(__file__).parent
+
+
+def _to_relative(page_path: Path) -> str:
+    """Return ``page_path`` as a path string relative to this script.
+
+    Streamlit's ``st.switch_page`` resolves page references relative to the
+    calling script; absolute paths are not accepted. ``Path.relative_to``
+    refuses ``..`` segments, so we use ``os.path.relpath`` which handles
+    sibling directories.
+    """
+    import os.path
+
+    return os.path.relpath(str(page_path), start=str(_FRAMEWORK_UI))
+
 
 st.title("Genesis Worker")
 
@@ -61,7 +79,7 @@ for info in worker.list_services():
         with cols[4]:
             pages = svc.ui_pages
             if pages and st.button("Admin", key=f"admin-{info.name}"):
-                st.switch_page(pages[0].label)
+                st.switch_page(_to_relative(pages[0].path))
             endpoint = svc.runtime_endpoint()
             if (
                 caps.has_web_ui
@@ -86,17 +104,14 @@ if st.button("↻ Rescan catalog", key="dashboard-rescan"):
     worker.rescan_catalog()
     st.rerun()
 
-if not catalog.entries:
+catalog_by_source = catalog.by_source()
+total = sum(len(v) for v in catalog_by_source.values())
+if total == 0:
     st.info("Catalog is empty. Acquire a model or check your vault path.")
 else:
-    # Group entries by source for display.
-    by_source: dict[str, list] = {s.name: [] for s in sources}
-    for entry in catalog.entries:
-        by_source.setdefault(entry.source, []).append(entry)
-
     for tab, source in zip(tabs, sources, strict=True):
         with tab:
-            entries = by_source.get(source.name, [])
+            entries = catalog_by_source.get(source.name, [])
             if not entries:
                 st.caption("No entries from this source.")
                 continue
@@ -113,7 +128,7 @@ else:
     if len(acquirable) == 1:
         target = acquirable[0]
         if st.button(f"Open {target.display_name} acquire", key="dashboard-acquire-go"):
-            st.switch_page(target.ui_pages[0].label)
+            st.switch_page(_to_relative(target.ui_pages[0].path))
     else:
         choice = st.selectbox(
             "Source",
@@ -122,7 +137,7 @@ else:
             key="dashboard-acquire-source",
         )
         if choice and st.button("Go", key="dashboard-acquire-go"):
-            st.switch_page(choice.ui_pages[0].label)
+            st.switch_page(_to_relative(choice.ui_pages[0].path))
 
 # Slow auto-refresh so the dashboard reflects state changes.
 time.sleep(10)

@@ -13,10 +13,13 @@ if st.button("↻ Rescan", key="catalog-rescan"):
     st.rerun()
 
 catalog = worker.catalog()
-if not catalog.entries:
+by_source = catalog.by_source()
+total = sum(len(v) for v in by_source.values())
+if total == 0:
     st.info("Catalog is empty.")
     st.stop()
 
-for entry in catalog.entries:
-    with st.expander(f"{entry.name}  ({entry.source})"):
-        st.code(str(entry), language="yaml")
+for source, entries in by_source.items():
+    for entry in entries:
+        with st.expander(f"{entry.name}  ({source})"):
+            st.code(str(entry), language="yaml")

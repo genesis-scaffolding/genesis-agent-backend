@@ -27,21 +27,41 @@ step = worker.acquire_step(session)
 st.subheader(step.title)
 
 if step.kind == "select_files" and step.file_groups:
+    # Each entry in step.file_groups is an AcquireFileGroup:
+    # one selectable model (with shards as `paths`). Indices submitted to
+    # AcquireChoice are 1-based into step.file_groups.
+    groups = step.file_groups
+    main_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role == "main"]
+    aux_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role in ("mmproj", "mtp")]
+
+    def _label(g) -> str:
+        if g.paths:
+            return f"{g.label}  ({g.paths[0]})"
+        return g.label
+
     with st.form("select-files"):
-        main_index: int | None = None
-        aux_indexes: list[int] = []
-        for i, group in enumerate(step.file_groups):
-            options = [f.filename for f in group.files]
-            chosen = st.selectbox(group.label, options, key=f"fg-{group.label}-{i}")
-            idx = next(j for j, f in enumerate(group.files) if f.filename == chosen)
-            if group.role == "main":
-                main_index = idx
-            else:
-                aux_indexes.append(idx)
+        main_choice = None
+        if main_groups:
+            options = [_label(g) for _, g in main_groups]
+            chosen = st.selectbox("Main model", options, key="select-main")
+            main_choice = main_groups[options.index(chosen)][0]
+        aux_choices: list[int] = []
+        for role in ("mmproj", "mtp"):
+            role_groups = [(i, g) for i, g in aux_groups if g.role == role]
+            if not role_groups:
+                continue
+            options = [_label(g) for _, g in role_groups]
+            chosen = st.selectbox(
+                f"{role} (optional)",
+                ["(none)", *options],
+                key=f"select-{role}",
+            )
+            if chosen != "(none)":
+                aux_choices.append(role_groups[options.index(chosen)][0])
         if st.form_submit_button("Continue"):
             worker.submit_acquire(
                 session,
-                AcquireChoice(main_index=main_index, aux_indexes=aux_indexes or None),
+                AcquireChoice(main_index=main_choice, aux_indexes=aux_choices or None),
             )
             st.rerun()
 

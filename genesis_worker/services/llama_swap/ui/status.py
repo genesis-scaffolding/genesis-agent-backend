@@ -6,12 +6,14 @@ import streamlit as st
 
 from genesis_worker.contracts import ServiceState
 
+SERVICE_NAME = "llama_swap"
+
 worker = st.session_state["worker"]
-svc = worker.service("llama-swap")
+svc = worker.service(SERVICE_NAME)
 
 st.header("llama-swap")
 
-status = worker.service_status("llama-swap")
+status = worker.service_status(SERVICE_NAME)
 state_text = status.state.value.upper()
 if status.pid:
     state_text += f"  (pid {status.pid})"
@@ -20,10 +22,10 @@ st.write(f"State: **{state_text}**")
 cols = st.columns([1, 1, 2])
 with cols[0]:
     if status.state == ServiceState.RUNNING and st.button("Stop", key="status-stop"):
-        worker.stop_service("llama-swap")
+        worker.stop_service(SERVICE_NAME)
         st.rerun()
     elif status.state == ServiceState.STOPPED and st.button("Start", key="status-start"):
-        worker.start_service("llama-swap")
+        worker.start_service(SERVICE_NAME)
         st.rerun()
 
 with cols[1]:
@@ -32,7 +34,7 @@ with cols[1]:
         st.link_button("Open Web UI ↗", endpoint)
 
 st.subheader("Configuration")
-config_path = svc.config_path()
+config_path = svc.config_path
 last_gen = svc.last_generated_at()
 
 if config_path.exists():
@@ -46,7 +48,7 @@ else:
 cols = st.columns([1, 1, 1])
 with cols[0]:
     if st.button("↻ Regenerate config", key="status-regen"):
-        ok = worker.regenerate_service_config("llama-swap")
+        ok = worker.regenerate_service_config(SERVICE_NAME)
         if ok:
             st.success("regenerated")
         else:
@@ -55,4 +57,4 @@ with cols[0]:
 
 with cols[1]:
     if st.button("Manage config →", key="status-manage"):
-        st.switch_page("config_editor")
+        st.switch_page("config_editor.py")
