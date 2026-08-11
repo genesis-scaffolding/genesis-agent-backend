@@ -26,7 +26,14 @@ if session is None:
 step = worker.acquire_step(session)
 st.subheader(step.title)
 
-if step.kind == "select_files" and step.file_groups:
+if step.kind == "inspecting":
+    st.caption("Inspecting repository. This can take a few seconds.")
+    if st.button("Cancel", key="acquire-cancel-inspecting"):
+        worker.cancel_acquire(session)
+        st.session_state.pop(sid_key, None)
+        st.rerun()
+
+elif step.kind == "select_files" and step.file_groups:
     # Each entry in step.file_groups is an AcquireFileGroup:
     # one selectable model (with shards as `paths`). Indices submitted to
     # AcquireChoice are 1-based into step.file_groups.
@@ -68,9 +75,16 @@ if step.kind == "select_files" and step.file_groups:
 elif step.kind == "confirm_storage":
     total_gb = (step.total_bytes or 0) / (1024 ** 3)
     st.warning(f"Will download {total_gb:.1f} GB")
-    if st.button("Confirm"):
-        worker.submit_acquire(session, AcquireChoice(confirm=True))
-        st.rerun()
+    cols = st.columns([1, 1])
+    with cols[0]:
+        if st.button("Confirm", key="acquire-confirm"):
+            worker.submit_acquire(session, AcquireChoice(confirm=True))
+            st.rerun()
+    with cols[1]:
+        if st.button("Cancel", key="acquire-cancel-confirm"):
+            worker.cancel_acquire(session)
+            st.session_state.pop(sid_key, None)
+            st.rerun()
 
 elif step.kind == "downloading":
     if step.progress:
@@ -78,8 +92,10 @@ elif step.kind == "downloading":
         st.progress(min(ratio, 1.0))
     if step.log_tail:
         st.code("\n".join(step.log_tail[-10:]))
-    if st.button("Cancel"):
+    if st.button("Cancel", key="acquire-cancel-downloading"):
         worker.cancel_acquire(session)
+        st.session_state.pop(sid_key, None)
+        st.rerun()
     time.sleep(2)
     st.rerun()
 

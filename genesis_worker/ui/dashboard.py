@@ -100,9 +100,22 @@ sources = worker.list_sources()
 tab_labels = [s.display_name for s in sources]
 tabs = st.tabs(tab_labels) if tab_labels else []
 
-# Rescan button sits above the tabs.
-if st.button("↻ Rescan catalog", key="dashboard-rescan"):
-    worker.rescan_catalog()
+# Rescan button: disabled while running, spinner during, success message after.
+rescanning = st.session_state.get("dashboard_rescanning", False)
+if st.button(
+    "↻ Rescan catalog",
+    key="dashboard-rescan",
+    disabled=rescanning,
+):
+    st.session_state["dashboard_rescanning"] = True
+    st.rerun()
+
+if rescanning:
+    with st.spinner("Scanning vault…"):
+        result = worker.rescan_catalog()
+    total = sum(len(v) for v in result.by_source().values())
+    st.session_state["dashboard_rescanning"] = False
+    st.toast(f"Found {total} entries", icon="✓")
     st.rerun()
 
 catalog_by_source = catalog.by_source()
@@ -127,18 +140,20 @@ if not acquirable:
     st.caption("No sources support acquisition.")
 else:
     if len(acquirable) == 1:
-        target = acquirable[0]
-        if st.button(f"Open {target.display_name} acquire", key="dashboard-acquire-go"):
-            st.switch_page(_to_relative(target.ui_pages[0].path))
+        info = acquirable[0]
+        if st.button(f"Open {info.display_name} acquire", key="dashboard-acquire-go"):
+            st.switch_page(_to_relative(worker.source(info.name).ui_pages[0].path))
     else:
-        choice = st.selectbox(
+        choice_info = st.selectbox(
             "Source",
             options=acquirable,
             format_func=lambda s: s.display_name,
             key="dashboard-acquire-source",
         )
-        if choice and st.button("Go", key="dashboard-acquire-go"):
-            st.switch_page(_to_relative(choice.ui_pages[0].path))
+        if choice_info and st.button("Go", key="dashboard-acquire-go"):
+            st.switch_page(
+                _to_relative(worker.source(choice_info.name).ui_pages[0].path)
+            )
 
 # Slow auto-refresh so the dashboard reflects state changes.
 time.sleep(10)
