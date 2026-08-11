@@ -89,6 +89,19 @@ class GenesisWorker:
         """Begin acquiring ``repo_id`` from ``source_name``."""
         return self._source_registry.get(source_name).start_acquire(repo_id)
 
+    def acquire_step(self, session: AcquireSession):
+        return session.current_step()
+
+    def submit_acquire(self, session: AcquireSession, choice):
+        return session.submit(choice)
+
+    def cancel_acquire(self, session: AcquireSession) -> None:
+        session.cancel()
+
+    def list_acquire_sessions(self, source_name: str | None = None) -> list[dict]:
+        """Return summaries of in-flight sessions, optionally filtered by source."""
+        return []  # Sources don't currently track past sessions; per-page state only.
+
     def regenerate_service_config(self, service_name: str) -> bool:
         """Regenerate one service's config against the current catalog."""
         return self._service_registry.get(service_name).regenerate_config(self.catalog())

@@ -12,6 +12,7 @@ from ...contracts import (
     ModelPiece,
     ModelSource,
     SourceContext,
+    UiPage,
     classify,
     role_sort_key,
 )
@@ -40,6 +41,14 @@ class HuggingFaceSource(ModelSource):
             cache_dir=self.local_path,
             revision=self._options.default_revision,
         )
+
+    @property
+    def ui_pages(self) -> list[UiPage]:
+        ui_dir = Path(__file__).parent / "ui"
+        return [
+            UiPage("Acquire model",   ":material/cloud_download:", ui_dir / "acquire.py"),
+            UiPage("Active sessions", ":material/schedule:",       ui_dir / "session_list.py"),
+        ]
 
     def is_available(self) -> bool:
         return self.local_path.is_dir()

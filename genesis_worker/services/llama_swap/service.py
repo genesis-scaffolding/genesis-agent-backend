@@ -15,6 +15,7 @@ from ...contracts import (
     ServiceStatus,
     StartResult,
     StopResult,
+    UiPage,
 )
 from . import lifecycle
 from .export_pi_config import build_provider, write_models_json
@@ -142,6 +143,16 @@ class LlamaSwapService(InferenceService):
     def agent_config_target(self) -> Path:
         base = os.environ.get("PI_INSTALL_DIR")
         return (Path(base) if base else Path.home() / ".pi" / "agent") / "models.json"
+
+    @property
+    def ui_pages(self) -> list[UiPage]:
+        ui_dir = Path(__file__).parent / "ui"
+        return [
+            UiPage("Status",        ":material/monitor:",   ui_dir / "status.py"),
+            UiPage("Config editor", ":material/tune:",      ui_dir / "config_editor.py"),
+            UiPage("Recipes view",  ":material/menu_book:", ui_dir / "recipes_view.py"),
+            UiPage("Pi export",     ":material/download:",  ui_dir / "pi_export.py"),
+        ]
 
 
 __all__ = ["LlamaSwapService"]
