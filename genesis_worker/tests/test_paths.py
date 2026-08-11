@@ -32,20 +32,16 @@ def test_repo_root_finds_pyproject_or_makefile(
 
 def test_xdg_path_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
-    result = xdg_path("DATA", ".local/share")
+    result = xdg_path("DATA", ".local/share", "genesis-worker")
     assert result == Path("/custom/xdg/genesis-worker")
 
 
 def test_xdg_path_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    result = xdg_path("DATA", ".local/share")
+    result = xdg_path("DATA", ".local/share", "genesis-worker")
     assert result == Path.home() / ".local/share" / "genesis-worker"
 
 
-def test_xdg_path_appends_genesis_worker_suffix() -> None:
-    result = xdg_path("CACHE", ".cache")
-    assert result.name == "genesis-worker"
-
-
-def test_xdg_path_sub_is_overridable() -> None:
+def test_xdg_path_appends_sub() -> None:
+    assert xdg_path("CACHE", ".cache", "genesis-worker").name == "genesis-worker"
     assert xdg_path("CACHE", ".cache", "other").name == "other"

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from genesis_worker import settings as settings_module
 from genesis_worker.settings import (
     PathsSettings,
     Settings,
@@ -65,18 +66,18 @@ def test_settings_unknown_env_var_ignored(monkeypatch: pytest.MonkeyPatch) -> No
     assert s is not None
 
 
-def test_xdg_base_is_a_constant_not_a_field() -> None:
-    """Renaming the directory is a code decision; it must not be env-configurable."""
+def test_xdg_base_is_not_a_settings_field() -> None:
+    """Renaming the directory is a code decision, not a user-settable option."""
     assert "XDG_BASE" not in PathsSettings.model_fields
-    assert PathsSettings.XDG_BASE == "genesis-worker"
+    assert settings_module.XDG_BASE == "genesis-worker"
 
 
 def test_xdg_base_drives_every_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The constant is load-bearing: change it and all five directories follow."""
-    monkeypatch.setattr(PathsSettings, "XDG_BASE", "renamed")
-    fields = PathsSettings.model_fields
-    dirs = [fields[n].default_factory() for n in ("data_dir", "config_dir", "cache_dir")]  # type: ignore[misc,operator]
-    assert {d.name for d in dirs} == {"renamed"}
+    """The constant is load-bearing: change it and every directory follows."""
+    monkeypatch.setattr(settings_module, "XDG_BASE", "renamed")
+    paths = PathsSettings()
+    assert {p.name for p in (paths.data_dir, paths.config_dir, paths.cache_dir,
+                             paths.state_dir, paths.log_dir)} == {"renamed"}
 
 
 def test_plugin_option_slices_are_opaque_to_the_framework() -> None:
