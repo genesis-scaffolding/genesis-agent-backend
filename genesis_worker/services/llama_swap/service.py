@@ -110,7 +110,7 @@ class LlamaSwapService(InferenceService):
         """Web UI URL. Used by the dashboard's 'Open Web UI' button."""
         if not self.is_running():
             return None
-        return f"http://{self.public_host()}:{self._port()}/v1"
+        return f"http://{self.public_host()}:{self._port()}/"
 
     def start(self) -> StartResult:
         return lifecycle.start_swap(
