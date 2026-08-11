@@ -14,7 +14,10 @@ import pytest
 import yaml
 
 from genesis_worker.catalog_build import CatalogService
-from genesis_worker.services.llama_swap.config import (
+from genesis_worker.paths import repo_root
+from genesis_worker.registries import SourceRegistry
+from genesis_worker.services.llama_swap.generate_config import (
+    BuildOptions,
     build_config,
     detect_files,
     make_display_name,
@@ -23,7 +26,10 @@ from genesis_worker.services.llama_swap.config import (
 )
 from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
 from genesis_worker.settings import PathsSettings, Settings
-from genesis_worker.sources import SourceRegistry
+
+# Binary paths in recipes are relative to the checkout; the framework supplies the root.
+REPO_ROOT = repo_root()
+BUILD_OPTIONS = BuildOptions(repo_root=REPO_ROOT)
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +42,7 @@ def real_catalog():
 
 @pytest.fixture(scope="module")
 def real_recipes() -> Recipes:
-    return Recipes.load(Path("recipes.yaml"))
+    return Recipes.load(REPO_ROOT / "recipes.yaml")
 
 
 def test_detect_files_picks_largest_main(real_catalog) -> None:
@@ -78,7 +84,7 @@ def test_make_display_name_appends_variant() -> None:
 
 
 def test_build_config_emits_one_entry_per_recipe(real_catalog, real_recipes: Recipes) -> None:
-    entries = build_config(real_catalog, real_recipes)
+    entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
     # All entries must have a non-empty cmd.
     for eid, data in entries:
         assert "cmd" in data and data["cmd"], f"empty cmd for {eid}"
@@ -87,10 +93,10 @@ def test_build_config_emits_one_entry_per_recipe(real_catalog, real_recipes: Rec
 
 def test_no_overrides_matches_live_config(real_catalog, real_recipes: Recipes) -> None:
     """Content-equivalence gate: parsed cmd strings must match the live config.yaml."""
-    live = yaml.safe_load(Path("config.yaml").read_text())
+    live = yaml.safe_load((REPO_ROOT / "config.yaml").read_text())
     live_models = live["models"]
 
-    entries = build_config(real_catalog, real_recipes)
+    entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
     emitted = {eid: data for eid, data in entries}
 
     # Same set of entry ids.
@@ -112,7 +118,7 @@ def test_overrides_change_emitted_cmd(real_catalog, real_recipes: Recipes) -> No
     """An override for one entry's sampling.temp must change that entry's cmd."""
     target_eid: str | None = None
     base_cmd = ""
-    for eid, data in build_config(real_catalog, real_recipes):
+    for eid, data in build_config(real_catalog, real_recipes, options=BUILD_OPTIONS):
         if "temp" in data["cmd"]:
             target_eid = eid
             base_cmd = data["cmd"]
@@ -121,7 +127,7 @@ def test_overrides_change_emitted_cmd(real_catalog, real_recipes: Recipes) -> No
     assert base_cmd
 
     overrides = {target_eid: {"sampling": {"temp": 0.42}}}
-    entries = build_config(real_catalog, real_recipes, overrides=overrides)
+    entries = build_config(real_catalog, real_recipes, overrides=overrides, options=BUILD_OPTIONS)
     emitted = dict(entries)
     assert "0.42" in emitted[target_eid]["cmd"]
     assert emitted[target_eid]["cmd"] != base_cmd
@@ -149,10 +155,13 @@ def test_write_config_writes_when_changed(tmp_path: Path) -> None:
 
 def test_write_config_preserves_mtime_on_noop(tmp_path: Path) -> None:
     out = tmp_path / "config.yaml"
-    # Pre-write the literal-block form PyYAML produces for cmd.
+    # Pre-write the literal-block form PyYAML produces for cmd, including
+    # the ``generated_at`` and ``root`` fields added in spec-002 chunk 1.
     out.write_text(
         "healthCheckTimeout: 60\n"
         "logLevel: info\n"
+        "generated_at: x\n"
+        "root: ''\n"
         "models:\n"
         "  x:\n"
         "    name: X\n"
@@ -193,7 +202,7 @@ def test_emitted_yaml_parses_back(real_catalog, real_recipes: Recipes) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         out_path = Path(f.name)
     try:
-        entries = build_config(real_catalog, real_recipes)
+        entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
         write_config(
             out_path, entries, root=real_catalog.root, generated_at=real_catalog.generated_at
         )
@@ -208,7 +217,7 @@ def test_emitted_yaml_parses_back(real_catalog, real_recipes: Recipes) -> None:
 
 def test_no_extra_yaml_keys(real_catalog, real_recipes: Recipes) -> None:
     """Each emitted entry has exactly the documented keys."""
-    entries = build_config(real_catalog, real_recipes)
+    entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
     expected = {"name", "cmd", "proxy", "ttl", "resolved_from"}
     for eid, data in entries:
         assert set(data.keys()) == expected, f"{eid}: keys={set(data.keys())}, expected={expected}"

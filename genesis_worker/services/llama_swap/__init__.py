@@ -1,26 +1,16 @@
-"""llama-swap inference service implementation.
+"""llama-swap inference service plugin."""
 
-This package contains the llama-swap-specific code: the service class
-itself, its config generator, its lifecycle (tmux + curl), its agent
-export, and the recipe / override storage it depends on.
-
-Submodules:
-    service        LlamaSwapService (InferenceService implementation)
-    recipes        pydantic schema + longest-match resolver
-    overrides      per-model user overrides (overrides.yaml)
-    config         config.yaml emission from catalog + recipes + overrides
-    lifecycle      tmux + curl (plan-002)
-    agent_export   pi-models.json emission (plan-002)
-"""
-
+from .options import LlamaSwapOptions
 from .overrides import OverridesStore
-from .recipes import Recipe, Recipes, ResolvedRecipes
+from .recipes import Recipe, Recipes, RecipesStore, ResolvedRecipes
 from .service import LlamaSwapService
 
 __all__ = [
+    "LlamaSwapOptions",
     "LlamaSwapService",
     "OverridesStore",
     "Recipe",
     "Recipes",
+    "RecipesStore",
     "ResolvedRecipes",
 ]

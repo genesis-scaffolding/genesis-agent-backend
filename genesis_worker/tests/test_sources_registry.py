@@ -6,14 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.settings import (
-    HuggingFaceSourceSettings,
-    LMSourceSettings,
-    PathsSettings,
-    Settings,
-    SourcesSettings,
-)
-from genesis_worker.sources import ModelSource, SourceRegistry
+from genesis_worker.contracts import ModelSource
+from genesis_worker.registries import SourceRegistry
+from genesis_worker.settings import PathsSettings, Settings
 
 
 def test_huggingface_and_lmstudio_are_discovered() -> None:
@@ -49,9 +44,7 @@ def test_registry_explicit_absolute_path_wins() -> None:
     """An absolute local_path bypasses the vault entirely."""
     s = Settings(
         paths=PathsSettings(vault_path=Path("/v")),
-        sources=SourcesSettings(
-            huggingface=HuggingFaceSourceSettings(local_path=Path("/srv/external/hf")),
-        ),
+        sources={"huggingface": {"local_path": Path("/srv/external/hf")}},
     )
     reg = SourceRegistry(s)
     assert reg.get("huggingface").local_path == Path("/srv/external/hf")
@@ -63,9 +56,7 @@ def test_registry_explicit_relative_path_joins_vault() -> None:
     """A relative local_path is joined with resolved_vault_path."""
     s = Settings(
         paths=PathsSettings(vault_path=Path("/v")),
-        sources=SourcesSettings(
-            huggingface=HuggingFaceSourceSettings(local_path=Path("custom/hf-subdir")),
-        ),
+        sources={"huggingface": {"local_path": Path("custom/hf-subdir")}},
     )
     reg = SourceRegistry(s)
     assert reg.get("huggingface").local_path == Path("/v/custom/hf-subdir")
@@ -75,7 +66,7 @@ def test_registry_explicit_relative_path_for_lmstudio() -> None:
     """Same resolution rule applies to LM Studio's local_path override."""
     s = Settings(
         paths=PathsSettings(vault_path=Path("/v")),
-        sources=SourcesSettings(lmstudio=LMSourceSettings(local_path=Path("alt/lms"))),
+        sources={"lmstudio": {"local_path": Path("alt/lms")}},
     )
     reg = SourceRegistry(s)
     assert reg.get("lmstudio").local_path == Path("/v/alt/lms")

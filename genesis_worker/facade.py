@@ -5,33 +5,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .catalog_build import CatalogService
-from .models import Catalog, ServiceInfo, SourceInfo
-from .services._registry import ServiceRegistry
-from .sources._registry import SourceRegistry
+from .contracts import AcquireSession, Catalog, InferenceService, ModelSource
+from .models import ServiceInfo, SourceInfo
+from .registries import ServiceRegistry, SourceRegistry
 
 if TYPE_CHECKING:
     from .settings import Settings
 
 
 class GenesisWorker:
-    """Top-level facade for the worker.
-
-    Construction wires together the four building blocks: settings,
-    source registry, service registry, catalog service. After that the
-    consumer (CLI, Streamlit, tests) asks for whatever it needs via the
-    public methods; it does not reach into the registries directly.
-
-    Example::
-
-        worker = GenesisWorker()
-        for info in worker.list_sources():
-            print(info.name, "available" if info.is_available else "missing")
-        catalog = worker.rescan_catalog()
-        for entry in catalog.huggingface:
-            print(entry.name, entry.total_bytes)
-        svc = worker.services().get("llama_swap")
-        print(svc.capabilities().can_serve_llm)
-    """
+    """Top-level facade for the worker."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         # Owned by the facade. Tests / CLIs pass a pre-built Settings
@@ -95,6 +78,20 @@ class GenesisWorker:
         return self._catalog_cache
 
     # --- Source / service inspection (for UI / CLI listings) ---------------
+
+    def source(self, name: str) -> ModelSource:
+        return self._source_registry.get(name)
+
+    def service(self, name: str) -> InferenceService:
+        return self._service_registry.get(name)
+
+    def start_acquire(self, source_name: str, repo_id: str) -> AcquireSession:
+        """Begin acquiring ``repo_id`` from ``source_name``."""
+        return self._source_registry.get(source_name).start_acquire(repo_id)
+
+    def regenerate_service_config(self, service_name: str) -> bool:
+        """Regenerate one service's config against the current catalog."""
+        return self._service_registry.get(service_name).regenerate_config(self.catalog())
 
     def list_sources(self) -> list[SourceInfo]:
         """Return display info for every registered source."""

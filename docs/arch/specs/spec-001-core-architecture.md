@@ -67,7 +67,7 @@ my-agent-backend/
     │       ├── overrides.py       # Phase 4
     │       ├── service.py         # LlamaSwapService — read-only methods real; lifecycle methods (start/stop/status/etc.) stubbed until plan-002
     │       ├── lifecycle.py       # Phase 5 (spec-002)
-    │       └── agent_export.py    # Phase 6 (spec-002)
+    │       └── export_pi_config.py    # Phase 6 (spec-002)
     ├── catalog_build.py           # CatalogService (takes a SourceRegistry; schema is in models.py)
     └── tests/
         ├── test_paths.py
@@ -982,7 +982,7 @@ class OverridesStore:
         self.path.write_text(yaml.safe_dump(payload, sort_keys=False))
 ```
 
-### `genesis_worker/services/llama_swap/config.py`
+### `genesis_worker/services/llama_swap/generate_config.py`
 
 Lifts `bin/build-config.py` logic verbatim. Replaces hand-rolled YAML emit with `yaml.dump` (ADR-006). Adds `resolved_from: <recipe_name>` annotation to each emitted entry. Iterates the catalog via `Catalog.by_source()` for source-agnostic build.
 
@@ -1124,8 +1124,8 @@ Each test file uses pytest; the project root pytest config picks them up via `uv
 3a. `uv run python -c "from genesis_worker import GenesisWorker; w = GenesisWorker(); print([s.name for s in w.list_services()])"` prints at least `llama_swap`.
 4. `uv run python -c "from genesis_worker.settings import Settings; print(Settings().paths)"` prints four XDG-defaulted paths.
 5. `uv run python -c "from genesis_worker.settings import Settings, PathsSettings; from genesis_worker.sources import SourceRegistry; from genesis_worker.catalog_build import CatalogService; from pathlib import Path; s = Settings(paths=PathsSettings(vault_path=Path.home() / 'Data2/models')); r = SourceRegistry(s); print(CatalogService(r).rescan().huggingface[:1])"` returns at least one HuggingFace entry from the real vault.
-6. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; from genesis_worker.services.llama_swap.recipes import Recipes; from pathlib import Path; ...; print(len(entries))"` shows the same entry count as `wc -l config.yaml`.
-7. `uv run python -c "from genesis_worker.services.llama_swap.config import build_config; ...; yaml.safe_dump(...)" | diff - <(grep -A 1000 '^models:' config.yaml)` shows content-equivalent entries (whitespace allowed to differ).
+6. `uv run python -c "from genesis_worker.services.llama_swap.generate_config import build_config; from genesis_worker.services.llama_swap.recipes import Recipes; from pathlib import Path; ...; print(len(entries))"` shows the same entry count as `wc -l config.yaml`.
+7. `uv run python -c "from genesis_worker.services.llama_swap.generate_config import build_config; ...; yaml.safe_dump(...)" | diff - <(grep -A 1000 '^models:' config.yaml)` shows content-equivalent entries (whitespace allowed to differ).
 8. `make all` still passes — `bin/catalog.py` and `bin/build-config.py` still produce their original output. The `config.yaml` on disk is untouched.
 9. The running `llama-swap` (started by the existing `bin/up`) is still serving on port 8080 with the same model list.
 10. `uv run ruff check`, `uv run pyright` exit 0.

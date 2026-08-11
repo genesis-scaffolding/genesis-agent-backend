@@ -98,7 +98,18 @@ Adding a new source or service means:
 2. Add a field on `SourcesSettings` or `ServicesSettings`.
 3. Done.
 
+> **Superseded by ADR-009.** Step 2 made the framework own each plugin's schema. Plugin
+> options are now opaque to `Settings` (`sources`/`services` are `dict[str, dict[str, Any]]`);
+> the plugin defines and validates its own options model. Adding a plugin no longer touches
+> `settings.py` at all.
+
 ### v1 backwards-compatible path resolution
+
+> **Superseded by ADR-009 for llama-swap.** The repo-root fallback is gone: generated
+> config lands at `<data_dir>/llama-swap/config.yaml` and recipes ship inside the plugin.
+> The repo-root `config.yaml` / `recipes.yaml` remain in place untouched because `bin/`
+> and the live llama-swap still consume them (ADR-008) — the new code simply no longer
+> reads or writes them. The text below is retained as the record of the original decision.
 
 For paths that today live in the repo root (`recipes.yaml`, `config.yaml`, `MODEL_CATALOG.{yaml,md}`, `pi-models.json`), the per-service and per-catalog settings have a **fallback chain**: explicit setting → repo-root path if it exists → XDG-default path. This means a fresh checkout with today's running setup works with zero config edits:
 
@@ -118,7 +129,8 @@ The `repo_root` is auto-detected from `Path(__file__)` at facade-init time and o
 Directories are NOT created at startup. They're created on first write (`mkdir(parents=True, exist_ok=True)`). Same rationale as the orchestrator ADR-002.
 
 ## Status
-Accepted
+Accepted; partially superseded by [ADR-009](adr-009-framework-plugin-boundary.md)
+(per-plugin settings ownership, and the repo-root fallback for llama-swap).
 
 ## Consequences
 

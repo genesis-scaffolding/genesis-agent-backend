@@ -11,12 +11,8 @@ from typing import Any
 
 import yaml
 
-from ...models import Catalog, ModelEntry
-from ...paths import repo_root
+from ...contracts import Catalog, ModelEntry
 from .recipes import Recipe
-
-# Repo-root resolution so recipes can use paths like "vendor/llama.cpp/build/bin/llama-server".
-REPO_ROOT = repo_root()
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
 # one of these, the corresponding VRAM-saver flag is added. These are
@@ -28,9 +24,14 @@ DEFAULT_BINARY_REL = "vendor/llama.cpp/build/bin/llama-server"
 
 
 @dataclass(frozen=True)
-class BuildThresholds:
-    """Per-invocation thresholds. Defaults are the repo's historical values."""
+class BuildOptions:
+    """Per-invocation build policy. The service supplies these from its context.
 
+    ``repo_root`` has no default on purpose: relative binary paths in recipes resolve
+    against it, and a plugin cannot know where the checkout lives. The framework does.
+    """
+
+    repo_root: Path
     kv_quant_over: int = DEFAULT_KV_QUANT_OVER
     mmproj_offload_over: int = DEFAULT_MMPROJ_OFFLOAD_OVER
     default_binary_rel: str = DEFAULT_BINARY_REL
@@ -68,11 +69,11 @@ def _opt(recipe: Recipe, default_recipe: Recipe | None, key: str) -> Any:
     return None
 
 
-def _resolve_binary(binary: str) -> str:
-    """Resolve a binary path: relative paths joined with REPO_ROOT."""
+def _resolve_binary(binary: str, repo_root: Path) -> str:
+    """Relative binaries resolve against the checkout root."""
     p = Path(binary)
     if not p.is_absolute():
-        p = REPO_ROOT / p
+        p = repo_root / p
     return str(p.resolve())
 
 
@@ -138,7 +139,7 @@ def build_cmd(
     *,
     default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    thresholds: BuildThresholds | None = None,
+    options: BuildOptions,
     overrides: dict[str, Any] | None = None,
 ) -> str:
     """Compose the llama-server command line for one model entry.
@@ -148,17 +149,16 @@ def build_cmd(
     options present in ``overrides`` win over both.
 
     Binary resolution order: recipe.binary -> CLI --binary ->
-    default.binary -> thresholds.default_binary_rel.
+    default.binary -> options.default_binary_rel.
     """
     ovr = overrides or {}
-    thresholds = thresholds or BuildThresholds()
     binary_str = (
         recipe.binary
         or binary_override
         or (default_recipe.binary if default_recipe else None)
-        or thresholds.default_binary_rel
+        or options.default_binary_rel
     )
-    resolved_binary = _resolve_binary(binary_str)
+    resolved_binary = _resolve_binary(binary_str, options.repo_root)
 
     sections: list[str] = []
     sections.append(f"{resolved_binary} \\")
@@ -174,7 +174,7 @@ def build_cmd(
         elif mmproj_offload is False:
             offload = False
         else:
-            offload = files.weight_bytes > thresholds.mmproj_offload_over
+            offload = files.weight_bytes > options.mmproj_offload_over
         if offload:
             sections.append("  --no-mmproj-offload \\")
 
@@ -195,7 +195,7 @@ def build_cmd(
         kv_dtype = default_recipe.kv_cache
     if kv_dtype in ("q8_0", "q4_0"):
         runtime.extend(["-ctk", kv_dtype, "-ctv", kv_dtype])
-    elif files.weight_bytes > thresholds.kv_quant_over:
+    elif files.weight_bytes > options.kv_quant_over:
         runtime.extend(["-ctk", "q8_0", "-ctv", "q8_0"])
 
     ctx_min = ovr.get("ctx_min", recipe.ctx_min)
@@ -324,7 +324,7 @@ def build_entry(
     multi_match: bool,
     default_recipe: Recipe | None = None,
     binary_override: str | None = None,
-    thresholds: BuildThresholds | None = None,
+    options: BuildOptions,
     entry_id_override: str | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> tuple[str, dict]:
@@ -345,7 +345,7 @@ def build_entry(
         files,
         default_recipe=default_recipe,
         binary_override=binary_override,
-        thresholds=thresholds or BuildThresholds(),
+        options=options,
         overrides=overrides,
     )
     return entry_id, {
@@ -363,7 +363,7 @@ def build_config(
     overrides: dict[str, dict] | None = None,
     *,
     binary_override: str | None = None,
-    thresholds: BuildThresholds | None = None,
+    options: BuildOptions,
 ) -> list[tuple[str, dict]]:
     """Walk the catalog, match recipes, apply overrides, emit entries.
 
@@ -372,7 +372,6 @@ def build_config(
     ``{entry_id: {field: value}}`` dict from :class:`OverridesStore`.
     """
     overrides = overrides or {}
-    thresholds = thresholds or BuildThresholds()
     entries: list[tuple[str, dict]] = []
     all_ids: set[str] = set()
 
@@ -405,7 +404,7 @@ def build_config(
                     multi_match=multi,
                     default_recipe=recipes.default,
                     binary_override=binary_override,
-                    thresholds=thresholds,
+                    options=options,
                     entry_id_override=entry_id,
                     overrides=overrides.get(entry_id),
                 )
@@ -425,6 +424,12 @@ def emit_payload(
     emits them as ``|`` literal block scalars (matching the format
     produced by ``bin/build-config.py``'s hand-rolled emitter). The
     structure matches what llama-swap's config loader expects.
+
+    ``generated_at`` and ``root`` are embedded so the Streamlit config
+    editor can show "stale" when the catalog has changed since
+    ``config.yaml`` was last written (:func:`read_generated_at`). The
+    fields are extra metadata not consumed by llama-swap; harmless to
+    leave in place.
     """
     models = {}
     for entry_id, data in entries:
@@ -435,6 +440,8 @@ def emit_payload(
     return {
         "healthCheckTimeout": 60,
         "logLevel": "info",
+        "generated_at": generated_at,
+        "root": root,
         "models": models,
     }
 
@@ -480,15 +487,65 @@ def write_config(
     return True
 
 
+def read_generated_at(path: Path) -> str | None:
+    """Read the ``generated_at`` timestamp embedded by :func:`emit_payload`.
+
+    Two forms are recognized:
+
+    1. The new form written by :func:`emit_payload`:
+       ``generated_at: 'YYYY-MM-DDTHH:MM:SS+TZ'`` (YAML field).
+    2. The legacy form written by ``bin/build-config.py`` (still in use
+       via ``make all`` until Phase 10 retirement):
+       ``# llama-swap config generated YYYY-MM-DDTHH:MM:SS+TZ`` (header
+       comment).
+
+    Returns None if the file is missing, malformed, or contains no
+    timestamp in either form. The catalog-editor "stale" indicator
+    treats None as stale-by-default.
+    """
+    try:
+        text = path.read_text()
+    except (FileNotFoundError, OSError):
+        return None
+    # YAML field form first (newer writers, more reliable).
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError:
+        raw = None
+    if isinstance(raw, dict):
+        value = raw.get("generated_at")
+        if isinstance(value, str):
+            return value
+    # Legacy header comment form (bin/build-config.py, until Phase 10).
+    comment_match = re.search(
+        r"^#\s*llama-swap config generated (\S+)\s*$",
+        text,
+        re.MULTILINE,
+    )
+    if comment_match is not None:
+        return comment_match.group(1)
+    return None
+
+
+def is_config_stale(config_path: Path, *, catalog_generated_at: str) -> bool:
+    """True iff ``config.yaml`` is older than the current catalog."""
+    embedded = read_generated_at(config_path)
+    if embedded is None:
+        return True
+    return embedded != catalog_generated_at
+
+
 __all__ = [
-    "BuildThresholds",
+    "BuildOptions",
     "DetectedFiles",
     "build_cmd",
     "build_config",
     "build_entry",
     "detect_files",
     "emit_payload",
+    "is_config_stale",
     "make_display_name",
     "make_entry_id",
+    "read_generated_at",
     "write_config",
 ]

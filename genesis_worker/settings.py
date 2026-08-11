@@ -1,25 +1,25 @@
-"""Settings for the worker."""
+"""Framework settings. Plugin option slices are opaque here — see ADR-009."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .paths import repo_root, xdg_path
 
-# --- Path fields -------------------------------------------------------------
+# The directory the worker owns under each XDG base. Change it here to rename them all.
+XDG_BASE = "genesis-worker"
 
 
 class PathsSettings(BaseModel):
-    """XDG-aware path fields, with optional legacy-repo-root fallback."""
-
-    data_dir: Path = Field(default_factory=lambda: xdg_path("DATA", ".local/share"))
-    config_dir: Path = Field(default_factory=lambda: xdg_path("CONFIG", ".config"))
-    cache_dir: Path = Field(default_factory=lambda: xdg_path("CACHE", ".cache"))
-    state_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state"))
-    log_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state"))
+    data_dir: Path = Field(default_factory=lambda: xdg_path("DATA", ".local/share", XDG_BASE))
+    config_dir: Path = Field(default_factory=lambda: xdg_path("CONFIG", ".config", XDG_BASE))
+    cache_dir: Path = Field(default_factory=lambda: xdg_path("CACHE", ".cache", XDG_BASE))
+    state_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state", XDG_BASE))
+    log_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state", XDG_BASE))
 
     vault_path: Path | None = None
 
@@ -34,47 +34,12 @@ class PathsSettings(BaseModel):
         return repo_root()
 
 
-# --- Per-source settings -----------------------------------------------------
-
-
-class HuggingFaceSourceSettings(BaseModel):
-    local_path: Path | None = None
-    default_revision: str = "main"
-
-
-class LMSourceSettings(BaseModel):
-    local_path: Path | None = None
-
-
-class SourcesSettings(BaseModel):
-    huggingface: HuggingFaceSourceSettings = Field(default_factory=HuggingFaceSourceSettings)
-    lmstudio: LMSourceSettings = Field(default_factory=LMSourceSettings)
-
-
-# --- Per-service settings ----------------------------------------------------
-
-
-class LlamaSwapServiceSettings(BaseModel):
-    config_path: Path | None = None
-    recipes_path: Path | None = None
-    listen_addr: str = "127.0.0.1:8080"
-    session_name: str = "swap"
-    log_file: Path | None = None
-    health_timeout_s: float = 60.0
-    kv_quant_over_bytes: int = 25_000_000_000
-    mmproj_offload_over_bytes: int = 25_000_000_000
-    default_binary_rel: str = "vendor/llama.cpp/build/bin/llama-server"
-
-
-class ServicesSettings(BaseModel):
-    llama_swap: LlamaSwapServiceSettings = Field(default_factory=LlamaSwapServiceSettings)
-
-
-# --- Top-level settings ------------------------------------------------------
-
-
 class Settings(BaseSettings):
-    """Runtime configuration for the Genesis Worker."""
+    """Runtime configuration for the Genesis Worker.
+
+    ``sources`` and ``services`` map a plugin name to its option slice. The
+    framework never reads inside a slice; the plugin parses it at construction.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="GENESIS_",
@@ -84,16 +49,14 @@ class Settings(BaseSettings):
     )
 
     paths: PathsSettings = Field(default_factory=PathsSettings)
-    sources: SourcesSettings = Field(default_factory=SourcesSettings)
-    services: ServicesSettings = Field(default_factory=ServicesSettings)
+    sources: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    services: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def options_for(self, axis: str, name: str) -> dict[str, Any]:
+        return dict(getattr(self, axis).get(name, {}))
 
 
 __all__ = [
-    "HuggingFaceSourceSettings",
-    "LMSourceSettings",
-    "LlamaSwapServiceSettings",
     "PathsSettings",
-    "ServicesSettings",
     "Settings",
-    "SourcesSettings",
 ]

@@ -39,7 +39,7 @@ Implements [spec-001](../specs/spec-001-core-architecture.md).
 18. **Write `genesis_worker/services/_registry.py`** — mirror of `sources/_registry.py`.
 19. **Write `genesis_worker/services/llama_swap/recipes.py`** per spec-001.
 20. **Write `genesis_worker/services/llama_swap/overrides.py`** per spec-001.
-21. **Write `genesis_worker/services/llama_swap/config.py`** — lift `_opt`, `normalize`, `get_matching_recipes`, `_is_llm_candidate`, `detect_files`, `_SAMPLING_FLAGS`, `build_cmd`, `make_entry_id`, `make_display_name`, `build_entry` from `bin/build-config.py`. Replace the hand-rolled YAML emitter at the end of `emit_yaml` with `yaml.safe_dump`. Add `resolved_from` annotation.
+21. **Write `genesis_worker/services/llama_swap/generate_config.py`** — lift `_opt`, `normalize`, `get_matching_recipes`, `_is_llm_candidate`, `detect_files`, `_SAMPLING_FLAGS`, `build_cmd`, `make_entry_id`, `make_display_name`, `build_entry` from `bin/build-config.py`. Replace the hand-rolled YAML emitter at the end of `emit_yaml` with `yaml.safe_dump`. Add `resolved_from` annotation.
 22. **Write `genesis_worker/tests/test_paths.py`** per spec-001.
 23. **Write `genesis_worker/tests/test_settings.py`** per spec-001.
 24. **Write `genesis_worker/tests/test_sources_registry.py`** per spec-001.

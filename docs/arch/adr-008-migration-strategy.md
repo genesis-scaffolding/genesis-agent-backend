@@ -28,8 +28,8 @@ Before any `bin/` script is retired, the new module must produce output that is 
 Validation is by diff. A validation script (one per retired script) compares:
 
 - `bin/catalog.py` vs `genesis_worker.catalog.build` → `MODEL_CATALOG.{yaml,md}`
-- `bin/build-config.py` vs `genesis_worker.services.llama_swap.config` → `config.yaml`
-- `bin/pi-models.py` vs `genesis_worker.services.llama_swap.agent_export` → `pi-models.json`
+- `bin/build-config.py` vs `genesis_worker.services.llama_swap.generate_config` → `config.yaml`
+- `bin/pi-models.py` vs `genesis_worker.services.llama_swap.export_pi_config` → `pi-models.json`
 - `bin/hf-model.py` → tested at the function level (`group_files`, `classify_path`, `build_hf_command`); end-to-end interactive flow validated manually.
 - `bin/up` → tested by running the Python lifecycle module against a container or scratch box.
 
@@ -54,10 +54,14 @@ Migration is deferred because:
 
 - It changes the running `llama-swap`'s `config.yaml` path. Doing this while llama-swap is up requires downtime.
 - It's a one-time operation; no value in shipping it as part of v1.
-- The new code's default paths already point at repo-root when those files exist there (ADR-004), so v1 works without migration.
+- ~~The new code's default paths already point at repo-root when those files exist there (ADR-004), so v1 works without migration.~~ **Revised by ADR-009:** `genesis_worker` now writes to `<data_dir>/llama-swap/` and reads recipes bundled inside the plugin, so it never touches the repo-root files. The two live side by side: `bin/` + `Makefile` drive the running llama-swap from repo-root state, and the package operates entirely on XDG paths. Migration is now a cutover of which one you run, not a file move.
 
 ## Status
-Accepted
+Accepted; the state-file rationale is revised by [ADR-009](adr-009-framework-plugin-boundary.md).
+
+`recipes.yaml` now exists twice on purpose: the repo-root copy feeds `bin/`, and
+`genesis_worker/services/llama_swap/data/recipes.yaml` ships with the plugin. They are held
+in sync by `test_recipes_bundled.py` until `bin/build-config.py` retires.
 
 ## Consequences
 

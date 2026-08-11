@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from ...contracts import (
+    SKIP_FILENAMES,
+    DiscoveredModel,
+    ModelPiece,
+    ModelSource,
+    classify,
+    role_sort_key,
+)
 
-from ...models import DiscoveredModel, ModelPiece
-from .._classify import SKIP_FILENAMES, classify, role_sort_key
 
-
-class LMSource:
+class LMSource(ModelSource):
     """LM Studio layout: ``<local_path>/<publisher>/<model-dir>/``."""
 
     name = "lmstudio"
     display_name = "LM Studio"
     can_acquire = False
     vault_subdir = "lmstudio/models"
-    local_path: Path  # framework-assigned at construction
-
-    def __init__(self, local_path: Path) -> None:
-        self.local_path = local_path
 
     def is_available(self) -> bool:
         return self.local_path.is_dir()

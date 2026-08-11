@@ -9,6 +9,25 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+BUNDLED_RECIPES_PATH = Path(__file__).parent / "data" / "recipes.yaml"
+
+
+class RecipesStore:
+    """Lazily loads and caches :class:`Recipes` from disk."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._cached: Recipes | None = None
+
+    def load(self) -> Recipes:
+        if self._cached is None:
+            self._cached = Recipes.load(self.path)
+        return self._cached
+
+    def reload(self) -> Recipes:
+        self._cached = None
+        return self.load()
+
 
 class Recipe(BaseModel):
     """One recipe entry, plus the recipe's name as a field."""
@@ -121,4 +140,4 @@ def _normalize(s: str) -> str:
     return s.lower().replace("-", "").replace("_", "").replace(".", "")
 
 
-__all__ = ["Recipe", "Recipes", "ResolvedRecipes"]
+__all__ = ["BUNDLED_RECIPES_PATH", "Recipe", "Recipes", "RecipesStore", "ResolvedRecipes"]

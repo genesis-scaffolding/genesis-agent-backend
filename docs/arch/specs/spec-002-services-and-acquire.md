@@ -15,7 +15,7 @@ genesis_worker/
 │   └── llama_swap/
 │       ├── service.py            # LlamaSwapService
 │       ├── lifecycle.py          # tmux + curl
-│       └── agent_export.py       # pi-models.json
+│       └── export_pi_config.py       # pi-models.json
 └── sources/
     ├── _base.py                  # EXTENDED: AcquireSession protocol, AcquireStep, AcquireChoice, ...
     └── huggingface.py            # EXTENDED: HfAcquireSession implementation
@@ -301,9 +301,27 @@ class LlamaSwapService(InferenceService):
     def export_for_agent(self, *, base_url: str | None = None) -> dict: ...
 ```
 
-(`regenerate_config` calls `services/llama_swap/config.py:build_config` then `write_config`. `list_recipes` calls `recipes.load`. `export_for_agent` calls `agent_export.build_provider`.)
+(`regenerate_config` calls `services/llama_swap/generate_config.py:build_config` then `write_config`. `list_recipes` calls `recipes.load`. `export_for_agent` calls `export_pi_config.build_provider`.)
 
-## `services/llama_swap/agent_export.py`
+> **Superseded by [ADR-009](../adr-009-framework-plugin-boundary.md).** The service no
+> longer receives `Settings` or resolves paths. It is constructed with a `ServiceContext`
+> carrying resolved directories plus an opaque option slice, and owns its paths and stores
+> as attributes:
+>
+> ```python
+> def __init__(self, ctx: ServiceContext) -> None:
+>     opts = LlamaSwapOptions(**ctx.options)
+>     self._config_path = opts.config_path or ctx.data_dir / "config.yaml"
+>     self._recipes = RecipesStore(opts.recipes_path or BUNDLED_RECIPES_PATH)
+>     self._overrides = OverridesStore(self._config_path.parent / "overrides.yaml")
+> ```
+>
+> `config_path` / `recipes_path` / `overrides_path` are properties, not fallback chains.
+> `regenerate_config(catalog) -> bool` takes only the catalog. `write_models_json` and
+> `pi_install_target` are named `write_agent_config` and `agent_config_target` on the
+> `InferenceService` contract.
+
+## `services/llama_swap/export_pi_config.py`
 
 Lifts `bin/pi-models.py` logic. Replaces the hand-rolled `parse_models_section` regex with `yaml.safe_load`.
 
@@ -560,7 +578,7 @@ class HfAcquireSession:
 
 - `test_lifecycle.py`: with a fake `llama-swap` shim script on PATH, start → wait_ready (succeeds via a mock `/v1/models` response) → status==RUNNING → stop → status==STOPPED.
 - `test_service_llama_swap.py`: instantiate `LlamaSwapService` with test settings; `capabilities()` returns the expected struct; `resource_estimate()` non-zero.
-- `test_agent_export.py`: feed a fixture `config.yaml`; assert the produced JSON has the right `id`, `name`, `input`, `contextWindow`, `maxTokens`, `reasoning` for each entry. Diff against the current `pi-models.json` content (field-by-field, ignore order).
+- `test_export_pi_config.py`: feed a fixture `config.yaml`; assert the produced JSON has the right `id`, `name`, `input`, `contextWindow`, `maxTokens`, `reasoning` for each entry. Diff against the current `pi-models.json` content (field-by-field, ignore order).
 - `test_acquire_hf.py`: mock `HfApi.list_repo_tree` with a canned response (2 main GGUFs, 1 mmproj); walk the session through `inspecting → select_files → confirm_storage → downloading → complete`; assert the right `hf_hub_download` calls were made with the right `allow_patterns`.
 
 ## Verification
@@ -571,6 +589,6 @@ class HfAcquireSession:
    - Start a parallel llama-swap on a different port (e.g. `LISTEN=127.0.0.1:8081 ./bin/up` then stop it, OR call `lifecycle.start_swap(...)` with `listen_addr='127.0.0.1:8081'`).
    - Confirm `/v1/models` on `:8081` returns the same model list as `:8080`.
    - Stop the parallel instance. The running `:8080` is unaffected.
-4. **Agent export diff:** `uv run python -c "from genesis_worker.services.llama_swap.agent_export import build_provider; from pathlib import Path; import json; print(json.dumps(build_provider(Path('config.yaml')), sort_keys=True))" | jq -S . > /tmp/new.json`; `diff <(jq -S . pi-models.json) <(jq -S . /tmp/new.json)` shows no semantic differences (field ordering / whitespace allowed to differ; `id`/`name`/`contextWindow`/`reasoning`/`input`/`maxTokens`/`cost` must match).
+4. **Agent export diff:** `uv run python -c "from genesis_worker.services.llama_swap.export_pi_config import build_provider; from pathlib import Path; import json; print(json.dumps(build_provider(Path('config.yaml')), sort_keys=True))" | jq -S . > /tmp/new.json`; `diff <(jq -S . pi-models.json) <(jq -S . /tmp/new.json)` shows no semantic differences (field ordering / whitespace allowed to differ; `id`/`name`/`contextWindow`/`reasoning`/`input`/`maxTokens`/`cost` must match).
 5. **HF acquire smoke test (no actual download):** mock the API; drive the session through one cycle; assert `snapshot_download` was called with the expected `allow_patterns` and `cache_dir`. No real network I/O.
 6. `make all` still passes; `config.yaml`, `pi-models.json`, `MODEL_CATALOG.*` on disk are unchanged.

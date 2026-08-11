@@ -4,21 +4,42 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...models import DiscoveredModel, ModelPiece
-from .._classify import SKIP_FILENAMES, classify, role_sort_key
+from ...contracts import (
+    SKIP_FILENAMES,
+    AcquireSession,
+    AcquireState,
+    DiscoveredModel,
+    ModelPiece,
+    ModelSource,
+    SourceContext,
+    classify,
+    role_sort_key,
+)
+from .acquire import HfAcquireSession
+from .options import HuggingFaceOptions
 
 
-class HuggingFaceSource:
+class HuggingFaceSource(ModelSource):
     """HuggingFace cache layout: ``<local_path>/models--org--repo/``."""
 
     name = "huggingface"
     display_name = "HuggingFace"
-    can_acquire = True  # AcquireSession ships in spec-002
+    can_acquire = True
     vault_subdir = "huggingface/hub"
-    local_path: Path  # framework-assigned at construction
 
-    def __init__(self, local_path: Path) -> None:
-        self.local_path = local_path
+    def __init__(self, ctx: SourceContext) -> None:
+        super().__init__(ctx)
+        self._options = HuggingFaceOptions(**ctx.options)
+
+    def start_acquire(self, repo_id: str) -> AcquireSession:
+        from huggingface_hub import HfApi
+
+        return HfAcquireSession(
+            api=HfApi(),
+            state=AcquireState(source=self.name, repo_id=repo_id),
+            cache_dir=self.local_path,
+            revision=self._options.default_revision,
+        )
 
     def is_available(self) -> bool:
         return self.local_path.is_dir()

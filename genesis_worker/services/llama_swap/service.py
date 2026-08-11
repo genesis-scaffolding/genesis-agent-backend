@@ -2,97 +2,146 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+from pathlib import Path
 
-from ...settings import LlamaSwapServiceSettings
-from .._base import (
+from ...contracts import (
+    Catalog,
     InferenceService,
     ServiceCapabilities,
+    ServiceContext,
     ServiceResourceEstimate,
     ServiceStatus,
     StartResult,
     StopResult,
 )
+from . import lifecycle
+from .export_pi_config import build_provider, write_models_json
+from .generate_config import BuildOptions, build_config, read_generated_at, write_config
+from .options import LlamaSwapOptions
+from .overrides import OverridesStore
+from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
 
 
 class LlamaSwapService(InferenceService):
-    """Inference service for llama-swap.
-
-    Implements the read-only surface of :class:`InferenceService` now;
-    lifecycle hooks (``start``, ``stop``, ``status``, etc.) raise
-    :class:`NotImplementedError` and are filled in by plan-002 with the
-    tmux + curl plumbing.
-
-    Construction is by :class:`ServiceRegistry`; this class accepts its
-    per-service settings slice as ``settings``.
-    """
+    """Inference service for llama-swap."""
 
     name = "llama_swap"
     display_name = "llama-swap"
 
-    def __init__(self, settings: LlamaSwapServiceSettings | None = None) -> None:
-        # Services without a settings slice (or with a future one that
-        # hasn't landed) get a default. This keeps construction symmetric
-        # with sources — the framework always provides a real object.
-        self._settings = settings if settings is not None else LlamaSwapServiceSettings()
+    def __init__(self, ctx: ServiceContext) -> None:
+        super().__init__(ctx)
+        opts = LlamaSwapOptions(**ctx.options)
+        self._options = opts
 
-    # --- Real (read-only) methods -------------------------------------------
+        self._config_path = opts.config_path or ctx.data_dir / "config.yaml"
+        self._recipes_path = opts.recipes_path or BUNDLED_RECIPES_PATH
+        self._overrides_path = self._config_path.parent / "overrides.yaml"
+        self._log_file = opts.log_file or ctx.log_dir / "llama-swap.log"
+
+        self._recipes = RecipesStore(self._recipes_path)
+        self._overrides = OverridesStore(self._overrides_path)
+        self._build_options = BuildOptions(
+            repo_root=ctx.repo_root,
+            kv_quant_over=opts.kv_quant_over_bytes,
+            mmproj_offload_over=opts.mmproj_offload_over_bytes,
+            default_binary_rel=opts.default_binary_rel,
+        )
 
     def is_available(self) -> bool:
-        """llama-swap binary on PATH and (if configured) its config file exists."""
-        if shutil.which("llama-swap") is None:
-            return False
-        config = self._settings.config_path
-        # Available if no config is specified, or if the specified config exists.
-        return config is None or config.is_file()
+        return shutil.which("llama-swap") is not None
 
     def capabilities(self) -> ServiceCapabilities:
-        """Static capability declaration. Drives the dashboard's tile rendering."""
         return ServiceCapabilities(
             can_generate_config=True,
-            can_export_for_agent=True,  # pi-models.json emission (plan-002)
+            can_export_for_agent=True,
             can_serve_llm=True,
             can_serve_image=False,
             can_train_models=False,
             has_web_ui=False,
         )
 
-    # --- Lifecycle methods (plan-002) --------------------------------------
-
     def resource_estimate(self) -> ServiceResourceEstimate:
-        """Compute a resource estimate from the loaded config.
-
-        Plan-002: parses the current ``config.yaml`` to sum weight bytes
-        across currently-loaded models, queries psutil / pynvml for
-        available VRAM, returns the estimate.
-        """
-        raise NotImplementedError(
-            "LlamaSwapService.resource_estimate lands in plan-002 (psutil + pynvml)"
+        return ServiceResourceEstimate(
+            vram_bytes_typical=5_000_000_000,
+            vram_bytes_min=2_000_000_000,
+            cpu_cores_recommended=4,
         )
 
+    # --- Lifecycle ---------------------------------------------------------
+
     def is_running(self) -> bool:
-        """Plan-002: ``tmux has-session -t <session_name>``."""
-        raise NotImplementedError("LlamaSwapService.is_running lands in plan-002 (tmux)")
+        return lifecycle.is_running(self._options.session_name)
 
     def runtime_endpoint(self) -> str | None:
-        """Plan-002: ``http://{listen_addr}/v1`` if running, else None."""
-        raise NotImplementedError("LlamaSwapService.runtime_endpoint lands in plan-002")
+        if not self.is_running():
+            return None
+        return f"http://{self._options.listen_addr}/v1"
 
     def start(self) -> StartResult:
-        """Plan-002: tmux launch + curl polling, lifted from ``bin/up``."""
-        raise NotImplementedError("LlamaSwapService.start lands in plan-002 (tmux + curl)")
+        return lifecycle.start_swap(
+            config=self._config_path,
+            listen_addr=self._options.listen_addr,
+            session_name=self._options.session_name,
+            log_file=self._log_file,
+            health_timeout_s=self._options.health_timeout_s,
+        )
 
     def stop(self) -> StopResult:
-        """Plan-002: ``tmux kill-session -t <session_name>``."""
-        raise NotImplementedError("LlamaSwapService.stop lands in plan-002 (tmux)")
+        return lifecycle.stop_swap(self._options.session_name)
 
     def status(self) -> ServiceStatus:
-        """Plan-002: tmux check + /v1/models probe."""
-        raise NotImplementedError("LlamaSwapService.status lands in plan-002 (tmux + curl)")
+        return lifecycle.status(self._options.session_name, self._options.listen_addr)
 
     def wait_ready(self, timeout_s: float) -> bool:
-        """Plan-002: poll ``http://{listen_addr}/v1/models`` until 200 or timeout."""
-        raise NotImplementedError("LlamaSwapService.wait_ready lands in plan-002 (curl polling)")
+        return lifecycle.wait_ready(self._options.listen_addr, timeout_s)
+
+    # --- Config generation -------------------------------------------------
+
+    @property
+    def config_path(self) -> Path:
+        return self._config_path
+
+    @property
+    def overrides_path(self) -> Path:
+        return self._overrides_path
+
+    @property
+    def recipes_path(self) -> Path:
+        return self._recipes_path
+
+    def list_recipes(self) -> Recipes:
+        return self._recipes.load()
+
+    def regenerate_config(self, catalog: Catalog) -> bool:
+        entries = build_config(
+            catalog,
+            self._recipes.load(),
+            overrides=self._overrides.load(),
+            options=self._build_options,
+        )
+        return write_config(
+            self._config_path,
+            entries,
+            root=catalog.root,
+            generated_at=catalog.generated_at,
+        )
+
+    def last_generated_at(self) -> str | None:
+        return read_generated_at(self._config_path)
+
+    # --- pi-agent export ---------------------------------------------------
+
+    def export_for_agent(self, *, base_url: str | None = None) -> dict:
+        return build_provider(self._config_path, base_url=base_url)
+
+    def write_agent_config(self, target: Path, *, base_url: str | None = None) -> bool:
+        return write_models_json(target, self.export_for_agent(base_url=base_url))
+
+    def agent_config_target(self) -> Path:
+        base = os.environ.get("PI_INSTALL_DIR")
+        return (Path(base) if base else Path.home() / ".pi" / "agent") / "models.json"
 
 
 __all__ = ["LlamaSwapService"]
