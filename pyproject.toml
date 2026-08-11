@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2",
     "pynvml>=11",
     "pyyaml>=6",
+    "streamlit>=1.61.1",
 ]
 
 [dependency-groups]

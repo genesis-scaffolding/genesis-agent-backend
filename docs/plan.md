@@ -23,6 +23,7 @@ All architectural decisions live in `docs/arch/`. Each decision is a Nygard-form
 | 007 | [Overrides in `overrides.yaml`; no SQLite in v1](arch/adr-007-overrides-yaml-no-sqlite.md) | Declarative per-model overrides; defer SQLite. |
 | 008 | [Migration strategy](arch/adr-008-migration-strategy.md) | `bin/`, `Makefile`, and state files retained through v1; retired post-v1 after each new module is validated equivalent. |
 | 009 | [Framework / plugin boundary](arch/adr-009-framework-plugin-boundary.md) | `contracts` is the only shared surface; plugins own their options schema; framework passes resolved contexts; ABCs replace Protocols. Supersedes parts of 003 and 004. |
+| 010 | [Per-plugin UI pages](arch/adr-010-per-plugin-ui-pages.md) | Plugins ship their own Streamlit pages via `ui_pages`; framework dashboard is a control surface (VRAM-swap workflow); `has_web_ui` vs. management UI distinguished. Supersedes the UI portions of spec-003. |
 
 ## Implementation specs
 
