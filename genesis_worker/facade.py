@@ -116,6 +116,20 @@ class GenesisWorker:
             for svc in self._service_registry.all()
         ]
 
+    def start_service(self, name: str):
+        return self._service_registry.get(name).start()
+
+    def stop_service(self, name: str):
+        return self._service_registry.get(name).stop()
+
+    def service_status(self, name: str):
+        return self._service_registry.get(name).status()
+
+    def collect_metrics(self):
+        from .metrics import collect_metrics as _collect
+
+        return _collect()
+
 
 def _default_settings() -> Settings:
     """Lazy import to avoid pulling pydantic-settings at module import time.

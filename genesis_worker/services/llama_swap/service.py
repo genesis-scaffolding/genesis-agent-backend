@@ -59,7 +59,7 @@ class LlamaSwapService(InferenceService):
             can_serve_llm=True,
             can_serve_image=False,
             can_train_models=False,
-            has_web_ui=False,
+            has_web_ui=True,
         )
 
     def resource_estimate(self) -> ServiceResourceEstimate:

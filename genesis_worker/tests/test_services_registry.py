@@ -103,7 +103,7 @@ def test_llama_swap_capabilities_declares_llm_serving(tmp_path: Path) -> None:
     assert caps.can_export_for_agent
     assert not caps.can_serve_image
     assert not caps.can_train_models
-    assert not caps.has_web_ui
+    assert caps.has_web_ui  # llama-swap has its own web UI on :8080
 
 
 def test_is_available_tracks_the_binary_only(tmp_path: Path, monkeypatch) -> None:
