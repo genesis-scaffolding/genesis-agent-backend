@@ -115,7 +115,7 @@ if rescanning:
         result = worker.rescan_catalog()
     total = sum(len(v) for v in result.by_source().values())
     st.session_state["dashboard_rescanning"] = False
-    st.toast(f"Found {total} entries", icon="✓")
+    st.toast(f"Found {total} entries")
     st.rerun()
 
 catalog_by_source = catalog.by_source()
