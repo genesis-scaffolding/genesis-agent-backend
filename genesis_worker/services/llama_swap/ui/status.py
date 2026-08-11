@@ -57,4 +57,7 @@ with cols[0]:
 
 with cols[1]:
     if st.button("Manage config →", key="status-manage"):
-        st.switch_page("config_editor.py")
+        # Path is relative to the main app script's directory (genesis_worker/ui/),
+        # not to this script. Plugin pages live in nested directories and need the
+        # ``..`` segment to reach siblings.
+        st.switch_page("../services/llama_swap/ui/config_editor.py")

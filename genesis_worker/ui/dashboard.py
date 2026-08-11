@@ -9,17 +9,18 @@ import streamlit as st
 
 worker = st.session_state["worker"]
 
-# All st.switch_page calls in this file need a path relative to this script.
+# st.switch_page resolves paths relative to the main app script's directory,
+# which for us is this file's directory (genesis_worker/ui/).
 _FRAMEWORK_UI = Path(__file__).parent
 
 
 def _to_relative(page_path: Path) -> str:
-    """Return ``page_path`` as a path string relative to this script.
+    """Return ``page_path`` as a path string relative to the main script's dir.
 
-    Streamlit's ``st.switch_page`` resolves page references relative to the
-    calling script; absolute paths are not accepted. ``Path.relative_to``
+    ``st.switch_page`` requires a file path relative to the directory of the
+    main app script (``genesis_worker/ui/app.py``). ``Path.relative_to``
     refuses ``..`` segments, so we use ``os.path.relpath`` which handles
-    sibling directories.
+    sibling directories like ``../services/llama_swap/ui/status.py``.
     """
     import os.path
 
