@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,12 +11,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .paths import repo_root, xdg_path
 
 
+def _xdg(name: str, default_relative_to_home: str) -> Path:
+    # Resolved at call time so PathsSettings.XDG_BASE stays the one source of truth.
+    return xdg_path(name, default_relative_to_home, PathsSettings.XDG_BASE)
+
+
 class PathsSettings(BaseModel):
-    data_dir: Path = Field(default_factory=lambda: xdg_path("DATA", ".local/share"))
-    config_dir: Path = Field(default_factory=lambda: xdg_path("CONFIG", ".config"))
-    cache_dir: Path = Field(default_factory=lambda: xdg_path("CACHE", ".cache"))
-    state_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state"))
-    log_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state"))
+    # The directory the worker owns under each XDG base. Change it here.
+    # ClassVar, not a field: renaming it is a code decision, not a user setting.
+    XDG_BASE: ClassVar[str] = "genesis-worker"
+
+    data_dir: Path = Field(default_factory=lambda: _xdg("DATA", ".local/share"))
+    config_dir: Path = Field(default_factory=lambda: _xdg("CONFIG", ".config"))
+    cache_dir: Path = Field(default_factory=lambda: _xdg("CACHE", ".cache"))
+    state_dir: Path = Field(default_factory=lambda: _xdg("STATE", ".local/state"))
+    log_dir: Path = Field(default_factory=lambda: _xdg("STATE", ".local/state"))
 
     vault_path: Path | None = None
 

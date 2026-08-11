@@ -23,16 +23,16 @@ def repo_root() -> Path:
     return here
 
 
-def xdg_path(name: str, default_relative_to_home: str) -> Path:
+def xdg_path(name: str, default_relative_to_home: str, sub: str = "genesis-worker") -> Path:
     """XDG-compliant toolkit path.
 
     Honors ``$XDG_<name>_HOME`` if set; otherwise falls back to the
-    canonical default relative to ``$HOME``. Appends ``genesis-worker``
-    to whichever base is resolved.
+    canonical default relative to ``$HOME``. ``sub`` is the directory
+    the worker owns under that base — see ``PathsSettings.XDG_BASE``.
     """
     base = os.environ.get(f"XDG_{name}_HOME")
     root = Path(base) if base else Path.home() / default_relative_to_home
-    return root / "genesis-worker"
+    return root / sub
 
 
 __all__ = ["repo_root", "xdg_path"]

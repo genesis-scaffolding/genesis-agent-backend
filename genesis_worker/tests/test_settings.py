@@ -65,6 +65,20 @@ def test_settings_unknown_env_var_ignored(monkeypatch: pytest.MonkeyPatch) -> No
     assert s is not None
 
 
+def test_xdg_base_is_a_constant_not_a_field() -> None:
+    """Renaming the directory is a code decision; it must not be env-configurable."""
+    assert "XDG_BASE" not in PathsSettings.model_fields
+    assert PathsSettings.XDG_BASE == "genesis-worker"
+
+
+def test_xdg_base_drives_every_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The constant is load-bearing: change it and all five directories follow."""
+    monkeypatch.setattr(PathsSettings, "XDG_BASE", "renamed")
+    fields = PathsSettings.model_fields
+    dirs = [fields[n].default_factory() for n in ("data_dir", "config_dir", "cache_dir")]  # type: ignore[misc,operator]
+    assert {d.name for d in dirs} == {"renamed"}
+
+
 def test_plugin_option_slices_are_opaque_to_the_framework() -> None:
     """Settings carries slices; it does not know what keys a plugin accepts (ADR-009)."""
     s = Settings(services={"llama_swap": {"listen_addr": "0.0.0.0:1234"}})

@@ -45,3 +45,7 @@ def test_xdg_path_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_xdg_path_appends_genesis_worker_suffix() -> None:
     result = xdg_path("CACHE", ".cache")
     assert result.name == "genesis-worker"
+
+
+def test_xdg_path_sub_is_overridable() -> None:
+    assert xdg_path("CACHE", ".cache", "other").name == "other"
