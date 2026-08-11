@@ -155,6 +155,70 @@ else:
                 _to_relative(worker.source(choice_info.name).ui_pages[0].path)
             )
 
+st.divider()
+
+# --- Debug panel -----------------------------------------------------------
+# Shows what the worker has actually resolved: env vars, paths, exists-checks,
+# and a raw walker count vs. the catalog count. Useful when the catalog comes
+# up empty and you need to know whether it's a path issue or a walker issue.
+with st.expander("Debug: paths and catalog walk", expanded=False):
+    import os
+
+    paths = worker.settings.paths
+    vault = paths.resolved_vault_path
+
+    def _row(label: str, value: object, exists: bool | None = None) -> None:
+        suffix = ""
+        if exists is True:
+            suffix = "  ✓ exists"
+        elif exists is False:
+            suffix = "  ✗ MISSING"
+        st.code(f"{label:<28} {value}{suffix}", language=None)
+
+    st.markdown("**Environment**")
+    _row("MODELS_ROOT", os.environ.get("MODELS_ROOT", "<unset>"))
+    _row("GENESIS_PATHS__VAULT_PATH", os.environ.get("GENESIS_PATHS__VAULT_PATH", "<unset>"))
+    _row("XDG_DATA_HOME", os.environ.get("XDG_DATA_HOME", "<unset>"))
+    _row("HOME", os.environ.get("HOME", "<unset>"))
+
+    st.markdown("**Resolved paths**")
+    _row("vault_path", vault, vault.exists())
+
+    sources_list = worker.list_sources()
+    for info in sources_list:
+        src = worker.source(info.name)
+        lp = src.local_path
+        _row(f"{info.name}.local_path", lp, lp.exists())
+
+    st.markdown("**Raw walker vs catalog**")
+    # Count models--* dirs directly under each source's local_path so we can
+    # see whether the walker sees the right directories.
+    for info in sources_list:
+        src = worker.source(info.name)
+        lp = src.local_path
+        if not lp.exists():
+            st.write(f"{info.name}: path missing — nothing to walk")
+            continue
+        raw_dirs = [p for p in sorted(lp.iterdir()) if p.is_dir() and p.name.startswith("models--")]
+        catalog_entries = catalog.by_source().get(info.name, [])
+        st.write(
+            f"{info.name}: raw `models--*` dirs = **{len(raw_dirs)}**, "
+            f"catalog entries = **{len(catalog_entries)}**"
+        )
+        if raw_dirs and not catalog_entries:
+            st.caption(
+                "Walker found directories but the catalog is empty — "
+                "the walker's validation is rejecting them."
+            )
+            # Show first rejection so we can see why.
+            for d in raw_dirs[:1]:
+                refs = d / "refs" / "main"
+                snapshots = d / "snapshots"
+                st.caption(
+                    f"  {d.name}: refs/main exists={refs.is_file()}, "
+                    f"snapshots exists={snapshots.is_dir()}"
+                )
+
 # Slow auto-refresh so the dashboard reflects state changes.
 time.sleep(10)
 st.rerun()
