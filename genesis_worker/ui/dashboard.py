@@ -1,4 +1,8 @@
-"""Framework dashboard — control surface for managing services and the vault."""
+"""Framework dashboard — control surface for managing services.
+
+The catalog and acquisition live on the dedicated Catalog page; this
+page stays focused on services and live diagnostics.
+"""
 
 from __future__ import annotations
 
@@ -83,71 +87,6 @@ for info in worker.list_services():
 
 st.divider()
 
-# --- Vault section ------------------------------------------------------------
-st.header("Vault")
-catalog = worker.catalog()
-sources = worker.list_sources()
-
-tab_labels = [s.display_name for s in sources]
-tabs = st.tabs(tab_labels) if tab_labels else []
-
-# Rescan button: disabled while running, spinner during, success message after.
-rescanning = st.session_state.get("dashboard_rescanning", False)
-if st.button(
-    "↻ Rescan catalog",
-    key="dashboard-rescan",
-    disabled=rescanning,
-):
-    st.session_state["dashboard_rescanning"] = True
-    st.rerun()
-
-if rescanning:
-    with st.spinner("Scanning vault…"):
-        result = worker.rescan_catalog()
-    total = sum(len(v) for v in result.by_source().values())
-    st.session_state["dashboard_rescanning"] = False
-    st.toast(f"Found {total} entries")
-    st.rerun()
-
-catalog_by_source = catalog.by_source()
-total = sum(len(v) for v in catalog_by_source.values())
-if total == 0:
-    st.info("Catalog is empty. Acquire a model or check your vault path.")
-else:
-    for tab, source in zip(tabs, sources, strict=True):
-        with tab:
-            entries = catalog_by_source.get(source.name, [])
-            if not entries:
-                st.caption("No entries from this source.")
-                continue
-            for entry in entries:
-                with st.expander(entry.name):
-                    st.code(str(entry), language="yaml")
-
-# --- Acquire widget ----------------------------------------------------------
-st.subheader("Acquire new model")
-acquirable = [s for s in sources if s.can_acquire]
-if not acquirable:
-    st.caption("No sources support acquisition.")
-else:
-    if len(acquirable) == 1:
-        info = acquirable[0]
-        if st.button(f"Get new model with {info.display_name}", key="dashboard-acquire-go"):
-            st.switch_page(_to_relative(worker.source(info.name).ui_pages[0].path))
-    else:
-        choice_info = st.selectbox(
-            "Source",
-            options=acquirable,
-            format_func=lambda s: s.display_name,
-            key="dashboard-acquire-source",
-        )
-        if choice_info and st.button(f"Get new model with {choice_info.display_name}", key="dashboard-acquire-go"):
-            st.switch_page(
-                _to_relative(worker.source(choice_info.name).ui_pages[0].path)
-            )
-
-st.divider()
-
 # --- Debug panel -----------------------------------------------------------
 # Shows what the worker has actually resolved: env vars, paths, exists-checks,
 # and a raw walker count vs. the catalog count. Useful when the catalog comes
@@ -159,6 +98,7 @@ with st.expander("Debug: paths and catalog walk", expanded=False):
 
     paths = worker.settings.paths
     vault = paths.resolved_vault_path
+    catalog = worker.catalog()
 
     # pydantic-settings reads .env via dotenv but does not populate os.environ.
     # A value in .env is therefore invisible to naive os.environ.get().
