@@ -190,6 +190,11 @@ class GenesisWorker:
 
         return _collect()
 
+    def collect_host_info(self):
+        from .host import collect_host_info as _collect
+
+        return _collect()
+
 
 def _default_settings() -> Settings:
     """Lazy import to avoid pulling pydantic-settings at module import time.

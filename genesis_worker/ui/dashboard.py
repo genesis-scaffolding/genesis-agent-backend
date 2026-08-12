@@ -1,7 +1,7 @@
-"""Framework dashboard — control surface for managing services.
+"""Framework dashboard — control surface for managing services and viewing host info.
 
 The catalog and acquisition live on the dedicated Catalog page; this
-page stays focused on services and live diagnostics.
+page stays focused on the host, live diagnostics, and services.
 """
 
 from __future__ import annotations
@@ -12,80 +12,122 @@ from genesis_worker.ui._nav import to_relative as _to_relative
 
 worker = st.session_state["worker"]
 
-
 st.title("Genesis Worker")
 
 
-# --- System strip -----------------------------------------------------------
-# Wrapped in a fragment that reruns every 10s for live metrics. The rest of
-# the dashboard does NOT auto-refresh — it stays stable while you click
-# around, and only re-renders when something changes.
-@st.fragment(run_every="10s")
-def _system_strip() -> None:
-    metrics = worker.collect_metrics()
-    cols = st.columns(4)
-    cols[0].metric("CPU", f"{metrics.cpu_percent:.0f}%")
-    cols[1].metric("RAM", f"{metrics.ram_used_gb:.1f} / {metrics.ram_total_gb:.1f} GB")
-    if metrics.gpu_percent is not None:
-        cols[2].metric("GPU", f"{metrics.gpu_percent:.0f}%")
-    else:
-        cols[2].metric("GPU", "n/a")
-    if metrics.vram_total_gb:
-        cols[3].metric("VRAM", f"{metrics.vram_used_gb:.1f} / {metrics.vram_total_gb:.1f} GB")
-    else:
-        cols[3].metric("VRAM", "n/a")
+# --- Section 1: Host ---------------------------------------------------------
+# Auto-refreshing system strip is a fragment so its 10s tick doesn't
+# rerender the static host info and paths below. Static parts only
+# recompute on user action (button click, page navigation).
+with st.container(border=True):
+    st.header("Host")
+
+    @st.fragment(run_every="10s")
+    def _system_strip() -> None:
+        metrics = worker.collect_metrics()
+        cols = st.columns(4)
+        cols[0].metric("CPU", f"{metrics.cpu_percent:.0f}%")
+        cols[1].metric("RAM", f"{metrics.ram_used_gb:.1f} / {metrics.ram_total_gb:.1f} GB")
+        if metrics.gpu_percent is not None:
+            cols[2].metric("GPU", f"{metrics.gpu_percent:.0f}%")
+        else:
+            cols[2].metric("GPU", "n/a")
+        if metrics.vram_total_gb:
+            cols[3].metric("VRAM", f"{metrics.vram_used_gb:.1f} / {metrics.vram_total_gb:.1f} GB")
+        else:
+            cols[3].metric("VRAM", "n/a")
+
+    _system_strip()
+
+    def _format_uptime(s: int | None) -> str:
+        if s is None:
+            return "unknown"
+        days, rem = divmod(s, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes = rem // 60
+        parts: list[str] = []
+        if days > 0:
+            parts.append(f"{days}d")
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0 or not parts:
+            parts.append(f"{minutes}m")
+        return " ".join(parts)
+
+    st.subheader("About")
+    info = worker.collect_host_info()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"**Hostname:** `{info.hostname}`")
+        st.markdown(f"**OS:** {info.os}")
+        st.markdown(f"**Arch:** {info.arch}")
+        st.markdown(f"**Python:** {info.python}")
+    with c2:
+        st.markdown(f"**Uptime:** {_format_uptime(info.uptime_s)}")
+        if info.public_ip:
+            st.markdown(f"**Public IP:** `{info.public_ip}`")
+        if info.tailscale_ip:
+            st.markdown(f"**Tailscale IP:** `{info.tailscale_ip}`")
+
+    st.subheader("Paths")
+    paths = worker.settings.paths
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"**Vault:** `{paths.resolved_vault_path}`")
+        st.markdown(f"**Data:** `{paths.data_dir}`")
+        st.markdown(f"**Config:** `{paths.config_dir}`")
+    with c2:
+        st.markdown(f"**Cache:** `{paths.cache_dir}`")
+        st.markdown(f"**State:** `{paths.state_dir}`")
+        st.markdown(f"**Repo root:** `{paths.resolved_repo_root}`")
 
 
-_system_strip()
+# --- Section 2: Services -----------------------------------------------------
+with st.container(border=True):
+    st.header("Services")
+    for info in worker.list_services():
+        svc = worker.service(info.name)
+        status = worker.service_status(info.name)
+        caps = info.capabilities
+        estimate = svc.resource_estimate()
+        vram_gb = estimate.vram_bytes_typical / (1024 ** 3) if estimate.vram_bytes_typical else 0
 
-st.divider()
+        with st.container(border=True):
+            cols = st.columns([2, 1, 1, 1, 1])
+            with cols[0]:
+                st.subheader(info.display_name)
+                st.caption(svc.__class__.__name__)
+            with cols[1]:
+                st.write(f"**{status.state.value.upper()}**")
+                if status.pid:
+                    st.caption(f"pid {status.pid}")
+            with cols[2]:
+                if vram_gb:
+                    st.write(f"~{vram_gb:.0f} GB VRAM")
+            with cols[3]:
+                if status.state.value == "running" and st.button(
+                    "Stop", key=f"stop-{info.name}"
+                ):
+                    worker.stop_service(info.name)
+                    st.rerun()
+                elif status.state.value == "stopped" and st.button(
+                    "Start", key=f"start-{info.name}"
+                ):
+                    worker.start_service(info.name)
+                    st.rerun()
+            with cols[4]:
+                pages = svc.ui_pages
+                if pages and st.button("Admin", key=f"admin-{info.name}"):
+                    st.switch_page(_to_relative(pages[0].path))
+                endpoint = svc.web_ui_endpoint()
+                if (
+                    caps.has_web_ui
+                    and status.state.value == "running"
+                    and endpoint
+                    and st.link_button("Web UI ↗", endpoint, key=f"webui-{info.name}")
+                ):
+                    pass
 
-# --- Services grid -----------------------------------------------------------
-st.header("Services")
-for info in worker.list_services():
-    svc = worker.service(info.name)
-    status = worker.service_status(info.name)
-    caps = info.capabilities
-    estimate = svc.resource_estimate()
-    vram_gb = estimate.vram_bytes_typical / (1024 ** 3) if estimate.vram_bytes_typical else 0
-
-    with st.container(border=True):
-        cols = st.columns([2, 1, 1, 1, 1])
-        with cols[0]:
-            st.subheader(info.display_name)
-            st.caption(svc.__class__.__name__)
-        with cols[1]:
-            st.write(f"**{status.state.value.upper()}**")
-            if status.pid:
-                st.caption(f"pid {status.pid}")
-        with cols[2]:
-            if vram_gb:
-                st.write(f"~{vram_gb:.0f} GB VRAM")
-        with cols[3]:
-            if status.state.value == "running" and st.button(
-                "Stop", key=f"stop-{info.name}"
-            ):
-                worker.stop_service(info.name)
-                st.rerun()
-            elif status.state.value == "stopped" and st.button(
-                "Start", key=f"start-{info.name}"
-            ):
-                worker.start_service(info.name)
-                st.rerun()
-        with cols[4]:
-            pages = svc.ui_pages
-            if pages and st.button("Admin", key=f"admin-{info.name}"):
-                st.switch_page(_to_relative(pages[0].path))
-            endpoint = svc.web_ui_endpoint()
-            if (
-                caps.has_web_ui
-                and status.state.value == "running"
-                and endpoint
-                and st.link_button("Web UI ↗", endpoint, key=f"webui-{info.name}")
-            ):
-                pass
-
-st.divider()
 
 # --- Debug panel -----------------------------------------------------------
 # Shows what the worker has actually resolved: env vars, paths, exists-checks,
@@ -177,7 +219,3 @@ with st.expander("Debug: paths and catalog walk", expanded=False):
                     f"  {d.name}: refs/main exists={refs.is_file()}, "
                     f"snapshots exists={snapshots.is_dir()}"
                 )
-
-# No top-level sleep + rerun. The system strip above uses
-# st.fragment(run_every="10s") to refresh the metrics on its own; the rest
-# of the page stays stable and only rerenders on user action.

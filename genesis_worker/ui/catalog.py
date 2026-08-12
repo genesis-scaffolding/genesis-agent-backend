@@ -9,12 +9,11 @@ from genesis_worker.ui._render import format_bytes, render_entry
 
 worker = st.session_state["worker"]
 
-st.header("Catalog")
-
+st.title("Model Catalog")
 
 # --- Section 1: vault summary + refresh -------------------------------------
 with st.container(border=True):
-    st.subheader("Vault")
+    st.header("Vault Info")
 
     catalog = worker.catalog()
     catalog_by_source = catalog.by_source()
@@ -25,12 +24,8 @@ with st.container(border=True):
     st.markdown(f"**Path:** `{vault}`{missing}")
 
     total_entries = sum(len(v) for v in catalog_by_source.values())
-    total_bytes = sum(
-        e.total_bytes for entries in catalog_by_source.values() for e in entries
-    )
-    st.markdown(
-        f"**Total:** {total_entries} models, {format_bytes(total_bytes)}"
-    )
+    total_bytes = sum(e.total_bytes for entries in catalog_by_source.values() for e in entries)
+    st.markdown(f"**Total:** {total_entries} models, {format_bytes(total_bytes)}")
 
     for info in sources:
         entries = catalog_by_source.get(info.name, [])
@@ -38,10 +33,7 @@ with st.container(border=True):
             st.markdown(f"- **{info.display_name}**: 0 models")
             continue
         bytes_ = sum(e.total_bytes for e in entries)
-        st.markdown(
-            f"- **{info.display_name}**: {len(entries)} models, "
-            f"{format_bytes(bytes_)}"
-        )
+        st.markdown(f"- **{info.display_name}**: {len(entries)} models, {format_bytes(bytes_)}")
 
     st.divider()
 
@@ -67,7 +59,7 @@ with st.container(border=True):
 
 # --- Section 2: acquire + model list ----------------------------------------
 with st.container(border=True):
-    st.subheader("Models")
+    st.header("Models")
 
     acquirable = [s for s in sources if s.can_acquire]
     if not acquirable:
@@ -91,9 +83,7 @@ with st.container(border=True):
                 f"Get new model with {choice_info.display_name}",
                 key="catalog-acquire-go",
             ):
-                st.switch_page(
-                    _to_relative(worker.source(choice_info.name).ui_pages[0].path)
-                )
+                st.switch_page(_to_relative(worker.source(choice_info.name).ui_pages[0].path))
 
     st.divider()
 
