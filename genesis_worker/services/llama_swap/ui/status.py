@@ -38,6 +38,7 @@ with st.container(border=True):
 
     st.subheader("Configuration")
     config_path = svc.config_path
+    st.markdown(f"`{config_path}`")
     last_gen = svc.last_generated_at()
 
     if config_path.exists():

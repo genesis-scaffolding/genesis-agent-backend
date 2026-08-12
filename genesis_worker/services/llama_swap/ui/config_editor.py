@@ -248,6 +248,7 @@ def _render_override_form(
 
 st.title("Config editor")
 st.caption("Inspect the live config + override individual model fields.")
+st.markdown(f"`{svc.config_path}`")
 
 catalog = worker.catalog()
 configs = svc.evaluate_model_config(catalog)

@@ -10,6 +10,7 @@ svc = worker.service("llama_swap")
 
 st.header("Recipes")
 st.caption("Read-only. Edits happen in the repo-root recipes.yaml during v1.")
+st.markdown(f"`{svc.recipes_path}`")
 
 recipes = svc.list_recipes()
 items = []
