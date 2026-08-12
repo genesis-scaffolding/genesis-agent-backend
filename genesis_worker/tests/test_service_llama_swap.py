@@ -215,43 +215,35 @@ def test_tail_log_replaces_invalid_utf8(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# read_config_models
+# evaluate_model_config / list_overrides / save_overrides_for_entry
 # ---------------------------------------------------------------------------
 
 
-def test_read_config_models_returns_empty_when_file_missing(tmp_path: Path) -> None:
+def test_evaluate_model_config_returns_empty_for_empty_catalog(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path))
-    assert svc.read_config_models() == {}
+    from genesis_worker.contracts.catalog import Catalog
 
-
-def test_read_config_models_parses_entries(tmp_path: Path) -> None:
-    svc = LlamaSwapService(service_ctx(tmp_path))
-    config = tmp_path / "data" / "config.yaml"
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(
-        "models:\n"
-        "  foo:\n"
-        '    name: "Foo"\n'
-        "    cmd: |\n"
-        "      /path/to/llama-server \\\n"
-        "        --model /foo.gguf \\\n"
-        "        --jinja\n"
-        '    proxy: "http://127.0.0.1:${PORT}"\n'
-        "    ttl: 0\n"
+    catalog = Catalog(
+        root=str(tmp_path), generated_at="2026-01-01T00:00:00+00:00",
+        huggingface=[], lmstudio=[],
     )
-    entries = svc.read_config_models()
-    assert set(entries) == {"foo"}
-    foo = entries["foo"]
-    assert foo.name == "Foo"
-    assert foo.binary == "/path/to/llama-server"
-    assert foo.flags == [("--model", "/foo.gguf"), ("--jinja", True)]
-    assert foo.proxy == "http://127.0.0.1:${PORT}"
-    assert foo.ttl == 0
+    assert svc.evaluate_model_config(catalog) == {}
 
 
-def test_read_config_models_handles_empty_models_block(tmp_path: Path) -> None:
+def test_list_overrides_returns_empty_when_store_missing(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path))
-    config = tmp_path / "data" / "config.yaml"
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text("models: {}\n")
-    assert svc.read_config_models() == {}
+    assert svc.list_overrides() == {}
+
+
+def test_save_overrides_for_entry_round_trips(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    svc.save_overrides_for_entry("foo", {"parallel": 5, "kv_cache": "q4_0"})
+    assert svc.list_overrides() == {"foo": {"parallel": 5, "kv_cache": "q4_0"}}
+
+
+def test_save_overrides_for_entry_clear_removes_only_that_entry(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    svc.save_overrides_for_entry("foo", {"parallel": 5})
+    svc.save_overrides_for_entry("bar", {"kv_cache": "q4_0"})
+    svc.save_overrides_for_entry("foo", {})
+    assert svc.list_overrides() == {"bar": {"kv_cache": "q4_0"}}
