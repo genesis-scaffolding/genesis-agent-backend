@@ -11,10 +11,7 @@ SERVICE_NAME = "llama_swap"
 worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
 
-# --- Service info ----------------------------------------------------------
-# Mirrors the dashboard's per-service card, but with st.title for the
-# service name (this is the page's heading) and only the Web UI button
-# in the nav row — the Admin button got us here.
+# --- Service info + Configuration ------------------------------------------
 with st.container(border=True):
     st.title(svc.display_name)
 
@@ -25,47 +22,46 @@ with st.container(border=True):
         st.badge("Stopped", color="gray")
 
     if status.state.value == "running":
-        if st.button("Stop", key="status-stop", use_container_width=True):
+        if st.button("Stop", key="status-stop"):
             worker.stop_service(SERVICE_NAME)
             st.rerun()
     else:
-        if st.button("Start", key="status-start", use_container_width=True):
+        if st.button("Start", key="status-start"):
             worker.start_service(SERVICE_NAME)
             st.rerun()
 
-    st.divider()
-
     endpoint = svc.web_ui_endpoint()
     if status.state.value == "running" and endpoint:
-        st.link_button("Open Web UI", endpoint, use_container_width=True)
+        st.link_button("Open Web UI", endpoint)
 
-# --- Configuration ---------------------------------------------------------
-st.subheader("Configuration")
-config_path = svc.config_path
-last_gen = svc.last_generated_at()
+    st.divider()
 
-if config_path.exists():
-    if last_gen:
-        st.write(f"✓ generated {last_gen}")
-    else:
-        st.write("✓ present")
-else:
-    st.warning("⚠ not generated — auto-generation will read the catalog and recipes")
+    st.subheader("Configuration")
+    config_path = svc.config_path
+    last_gen = svc.last_generated_at()
 
-cols = st.columns([1, 1, 1])
-with cols[0]:
-    if st.button("↻ Regenerate config", key="status-regen"):
-        ok = worker.regenerate_service_config(SERVICE_NAME)
-        if ok:
-            st.success("regenerated")
+    if config_path.exists():
+        if last_gen:
+            st.write(f"✓ generated {last_gen}")
         else:
-            st.info("already up to date")
-        st.rerun()
+            st.write("✓ present")
+    else:
+        st.warning("⚠ not generated — auto-generation will read the catalog and recipes")
 
-with cols[1]:
-    config_editor = next(p for p in svc.ui_pages if p.label == "Config editor")
-    if st.button("Manage config →", key="status-manage"):
-        st.switch_page(to_relative(config_editor.path))
+    cols = st.columns(2)
+    with cols[0]:
+        if st.button("↻ Regenerate config", key="status-regen"):
+            ok = worker.regenerate_service_config(SERVICE_NAME)
+            if ok:
+                st.success("regenerated")
+            else:
+                st.info("already up to date")
+            st.rerun()
+
+    with cols[1]:
+        config_editor = next(p for p in svc.ui_pages if p.label == "Config editor")
+        if st.button("Manage config →", key="status-manage"):
+            st.switch_page(to_relative(config_editor.path))
 
 
 # --- Console ---------------------------------------------------------------
