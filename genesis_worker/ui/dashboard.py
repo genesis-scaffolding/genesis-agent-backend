@@ -90,7 +90,7 @@ with st.container(border=True):
     if not services:
         st.info("No services registered.")
     else:
-        cols = st.columns(4)
+        cols = st.columns(6)
         for col, info in zip(cols, services, strict=False):
             with col:
                 svc = worker.service(info.name)
@@ -127,11 +127,7 @@ with st.container(border=True):
                     nav_cols = st.columns(2)
                     with nav_cols[0]:
                         endpoint = svc.web_ui_endpoint()
-                        if (
-                            caps.has_web_ui
-                            and status.state.value == "running"
-                            and endpoint
-                        ):
+                        if caps.has_web_ui and status.state.value == "running" and endpoint:
                             st.link_button(
                                 "Web UI",
                                 endpoint,
