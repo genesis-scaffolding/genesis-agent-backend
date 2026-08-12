@@ -85,48 +85,67 @@ with st.container(border=True):
 # --- Section 2: Services -----------------------------------------------------
 with st.container(border=True):
     st.header("Services")
-    for info in worker.list_services():
-        svc = worker.service(info.name)
-        status = worker.service_status(info.name)
-        caps = info.capabilities
-        estimate = svc.resource_estimate()
-        vram_gb = estimate.vram_bytes_typical / (1024 ** 3) if estimate.vram_bytes_typical else 0
 
-        with st.container(border=True):
-            cols = st.columns([2, 1, 1, 1, 1])
-            with cols[0]:
-                st.subheader(info.display_name)
-                st.caption(svc.__class__.__name__)
-            with cols[1]:
-                st.write(f"**{status.state.value.upper()}**")
-                if status.pid:
-                    st.caption(f"pid {status.pid}")
-            with cols[2]:
-                if vram_gb:
-                    st.write(f"~{vram_gb:.0f} GB VRAM")
-            with cols[3]:
-                if status.state.value == "running" and st.button(
-                    "Stop", key=f"stop-{info.name}"
-                ):
-                    worker.stop_service(info.name)
-                    st.rerun()
-                elif status.state.value == "stopped" and st.button(
-                    "Start", key=f"start-{info.name}"
-                ):
-                    worker.start_service(info.name)
-                    st.rerun()
-            with cols[4]:
-                pages = svc.ui_pages
-                if pages and st.button("Admin", key=f"admin-{info.name}"):
-                    st.switch_page(_to_relative(pages[0].path))
-                endpoint = svc.web_ui_endpoint()
-                if (
-                    caps.has_web_ui
-                    and status.state.value == "running"
-                    and endpoint
-                    and st.link_button("Web UI ↗", endpoint, key=f"webui-{info.name}")
-                ):
-                    pass
+    services = worker.list_services()
+    if not services:
+        st.info("No services registered.")
+    else:
+        cols = st.columns(4)
+        for col, info in zip(cols, services, strict=False):
+            with col:
+                svc = worker.service(info.name)
+                status = worker.service_status(info.name)
+                caps = info.capabilities
+
+                with st.container(border=True):
+                    st.subheader(info.display_name)
+
+                    if status.state.value == "running":
+                        st.badge("Running", color="green")
+                    else:
+                        st.badge("Stopped", color="gray")
+
+                    if status.state.value == "running":
+                        if st.button(
+                            "Stop",
+                            key=f"stop-{info.name}",
+                            use_container_width=True,
+                        ):
+                            worker.stop_service(info.name)
+                            st.rerun()
+                    else:
+                        if st.button(
+                            "Start",
+                            key=f"start-{info.name}",
+                            use_container_width=True,
+                        ):
+                            worker.start_service(info.name)
+                            st.rerun()
+
+                    st.divider()
+
+                    nav_cols = st.columns(2)
+                    with nav_cols[0]:
+                        endpoint = svc.web_ui_endpoint()
+                        if (
+                            caps.has_web_ui
+                            and status.state.value == "running"
+                            and endpoint
+                        ):
+                            st.link_button(
+                                "Web UI",
+                                endpoint,
+                                key=f"webui-{info.name}",
+                                use_container_width=True,
+                            )
+                    with nav_cols[1]:
+                        pages = svc.ui_pages
+                        if pages and st.button(
+                            "Admin",
+                            key=f"admin-{info.name}",
+                            use_container_width=True,
+                        ):
+                            st.switch_page(_to_relative(pages[0].path))
 
 
 # --- Debug panel -----------------------------------------------------------
