@@ -13,7 +13,7 @@ from typing import Any
 
 import streamlit as st
 
-from genesis_worker.services.llama_swap.recipe_eval import EvaluatedConfig, FieldSource
+from genesis_worker.services.llama_swap.generate_config import EvaluatedConfig, FieldSource
 
 SERVICE_NAME = "llama_swap"
 
