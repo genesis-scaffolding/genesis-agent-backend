@@ -41,6 +41,31 @@ genesis_worker/
 
 Enforced by `test_plugin_boundary.py`, which AST-walks every module under `sources/` and `services/` and fails on any `genesis_worker` import outside `genesis_worker.contracts`.
 
+### Shared utilities (`genesis_worker.utils`)
+
+The framework's Streamlit pages and the plugin pages both call `st.switch_page`, which requires a path string relative to the main app script's directory (`genesis_worker/ui/`). A plugin page that needs to navigate to another page (e.g. `status.py` → `config_editor.py`) cannot express that in absolute terms; the relative path is the only correct form, and computing it from the plugin's own location is a fragile hand-written offset.
+
+The natural place for that helper is in a `utils` package that both sides can import:
+
+```
+genesis_worker/
+  contracts/     contracts (ABCs, types)
+  utils/         shared helpers — self-contained, importable by both sides
+  <framework>    settings.py  paths.py  facade.py  catalog_build.py  registries
+  sources/       plugin directory
+  services/      plugin directory
+```
+
+`utils/` is a leaf package. It imports nothing from the rest of `genesis_worker` — only stdlib and third-party libraries. Enforced by `test_utils_is_a_leaf_package` in `test_plugin_boundary.py`. The reason is structural: the moment `utils` reaches into `contracts` or any framework module, the boundary is no longer two-sided, and a plugin importing from `utils` can transitively reach the framework's internals.
+
+The allowed surfaces for a plugin become:
+
+- `genesis_worker.contracts` — the ABCs and types
+- `genesis_worker.utils` — self-contained helpers (currently `utils/ui/_nav.py` for path-relative navigation; future formatting, streaming, etc. go here too)
+- the plugin's own package
+
+The boundary test in `test_plugin_boundary.py` is updated to accept both top-level surfaces and to walk `utils/` independently to enforce the leaf invariant.
+
 ### Construction: contexts
 
 The framework resolves everything and passes one context object:
@@ -91,6 +116,7 @@ Positive:
 Negative:
 - Plugin options are validated at plugin construction, not at `Settings()` construction, so a typo in `GENESIS_SERVICES__*` surfaces later and as a plugin error. An `options_schema()` hook on the ABC would let the framework validate up front and render a settings UI; deferred.
 - `contracts` is a dependency magnet. Anything added there is permanent public surface for both sides.
+- `utils` is also a shared surface; the leaf invariant (no imports outside the package) is the price of letting both sides reach into it without leaking framework internals.
 
 Known exception:
 - `Catalog` hardcodes `huggingface` and `lmstudio` as fields, so a framework type names two plugins. ADR-008 pins the `MODEL_CATALOG.yaml` shape for diff-validation against `bin/catalog.py`; generalizing to `entries: list[ModelEntry]` needs a custom serializer to preserve it. Revisit when `bin/catalog.py` retires.

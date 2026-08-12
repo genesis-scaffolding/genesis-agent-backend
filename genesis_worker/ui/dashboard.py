@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.ui._nav import to_relative as _to_relative
+from genesis_worker.utils.ui._nav import to_relative as _to_relative
 
 worker = st.session_state["worker"]
 

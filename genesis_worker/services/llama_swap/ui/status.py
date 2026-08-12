@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis_worker.contracts import ServiceState
+from genesis_worker.utils.ui._nav import to_relative
 
 SERVICE_NAME = "llama_swap"
 
@@ -56,8 +57,6 @@ with cols[0]:
         st.rerun()
 
 with cols[1]:
+    config_editor = next(p for p in svc.ui_pages if p.label == "Config editor")
     if st.button("Manage config →", key="status-manage"):
-        # Path is relative to the main app script's directory (genesis_worker/ui/),
-        # not to this script. Plugin pages live in nested directories and need the
-        # ``..`` segment to reach siblings.
-        st.switch_page("../services/llama_swap/ui/config_editor.py")
+        st.switch_page(to_relative(config_editor.path))
