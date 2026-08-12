@@ -1,9 +1,8 @@
 """Tests for config.yaml generation (build pipeline + PyYAML emit + write-if-changed).
 
-The parity test against the live ``config.yaml`` is the key gate: every
-emitted entry's parsed ``cmd`` must equal the entry's parsed ``cmd`` in
-the current config.yaml. Byte-level diffs in the YAML representation
-are accepted (ADR-006); content equivalence is the gate.
+Pure unit tests: the build pipeline, the override path, and the
+write-if-changed behaviour. The parity check against the live
+``config.yaml`` was removed: it's been validated end-to-end.
 """
 
 from __future__ import annotations
@@ -89,29 +88,6 @@ def test_build_config_emits_one_entry_per_recipe(real_catalog, real_recipes: Rec
     for eid, data in entries:
         assert "cmd" in data and data["cmd"], f"empty cmd for {eid}"
         assert data["resolved_from"], f"missing resolved_from for {eid}"
-
-
-def test_no_overrides_matches_live_config(real_catalog, real_recipes: Recipes) -> None:
-    """Content-equivalence gate: parsed cmd strings must match the live config.yaml."""
-    live = yaml.safe_load((REPO_ROOT / "config.yaml").read_text())
-    live_models = live["models"]
-
-    entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
-    emitted = {eid: data for eid, data in entries}
-
-    # Same set of entry ids.
-    assert set(emitted) == set(live_models), (
-        f"only in emitted: {set(emitted) - set(live_models)}\n"
-        f"only in live: {set(live_models) - set(emitted)}"
-    )
-
-    # For each entry, the parsed cmd must be byte-identical.
-    for eid, data in emitted.items():
-        live_cmd = live_models[eid]["cmd"]
-        new_cmd = data["cmd"]
-        assert new_cmd == live_cmd, (
-            f"cmd mismatch for {eid}:\n  live: {live_cmd!r}\n  new:  {new_cmd!r}"
-        )
 
 
 def test_overrides_change_emitted_cmd(real_catalog, real_recipes: Recipes) -> None:
