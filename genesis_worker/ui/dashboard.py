@@ -2,28 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import streamlit as st
 
+from genesis_worker.ui._nav import to_relative as _to_relative
+
 worker = st.session_state["worker"]
-
-# st.switch_page resolves paths relative to the main app script's directory,
-# which for us is this file's directory (genesis_worker/ui/).
-_FRAMEWORK_UI = Path(__file__).parent
-
-
-def _to_relative(page_path: Path) -> str:
-    """Return ``page_path`` as a path string relative to the main script's dir.
-
-    ``st.switch_page`` requires a file path relative to the directory of the
-    main app script (``genesis_worker/ui/app.py``). ``Path.relative_to``
-    refuses ``..`` segments, so we use ``os.path.relpath`` which handles
-    sibling directories like ``../services/llama_swap/ui/status.py``.
-    """
-    import os.path
-
-    return os.path.relpath(str(page_path), start=str(_FRAMEWORK_UI))
 
 
 st.title("Genesis Worker")
@@ -149,7 +132,7 @@ if not acquirable:
 else:
     if len(acquirable) == 1:
         info = acquirable[0]
-        if st.button(f"Open {info.display_name} acquire", key="dashboard-acquire-go"):
+        if st.button(f"Get new model with {info.display_name}", key="dashboard-acquire-go"):
             st.switch_page(_to_relative(worker.source(info.name).ui_pages[0].path))
     else:
         choice_info = st.selectbox(
@@ -158,7 +141,7 @@ else:
             format_func=lambda s: s.display_name,
             key="dashboard-acquire-source",
         )
-        if choice_info and st.button("Go", key="dashboard-acquire-go"):
+        if choice_info and st.button(f"Get new model with {choice_info.display_name}", key="dashboard-acquire-go"):
             st.switch_page(
                 _to_relative(worker.source(choice_info.name).ui_pages[0].path)
             )
