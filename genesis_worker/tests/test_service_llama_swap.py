@@ -172,3 +172,43 @@ def test_facade_regenerates_service_config(tmp_path: Path) -> None:
     )
     assert worker.regenerate_service_config("llama_swap") is True
     assert (tmp_path / "data" / "llama-swap" / "config.yaml").is_file()
+
+
+# ---------------------------------------------------------------------------
+# tail_log
+# ---------------------------------------------------------------------------
+
+
+def test_tail_log_returns_empty_when_file_missing(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    assert svc.tail_log() == ""
+
+
+def test_tail_log_returns_full_content_when_smaller_than_limit(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    log = tmp_path / "log" / "llama-swap.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("hello\nworld\n")
+    assert svc.tail_log(1024) == "hello\nworld\n"
+
+
+def test_tail_log_returns_only_last_n_bytes(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    log = tmp_path / "log" / "llama-swap.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    # 200 bytes of content; ask for 50.
+    log.write_bytes(b"x" * 100 + b"y" * 100)
+    tail = svc.tail_log(50)
+    assert len(tail) == 50
+    assert tail == "y" * 50
+
+
+def test_tail_log_replaces_invalid_utf8(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    log = tmp_path / "log" / "llama-swap.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(b"ok \xff garbage\n")
+    # No exception, replacement char somewhere in the output.
+    tail = svc.tail_log()
+    assert "ok " in tail
+    assert "garbage" in tail

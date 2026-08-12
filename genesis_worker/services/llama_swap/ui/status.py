@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.contracts import ServiceState
 from genesis_worker.utils.ui._nav import to_relative
 
 SERVICE_NAME = "llama_swap"
@@ -12,28 +11,35 @@ SERVICE_NAME = "llama_swap"
 worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
 
-st.header("llama-swap")
+# --- Service info ----------------------------------------------------------
+# Mirrors the dashboard's per-service card, but with st.title for the
+# service name (this is the page's heading) and only the Web UI button
+# in the nav row — the Admin button got us here.
+with st.container(border=True):
+    st.title(svc.display_name)
 
-status = worker.service_status(SERVICE_NAME)
-state_text = status.state.value.upper()
-if status.pid:
-    state_text += f"  (pid {status.pid})"
-st.write(f"State: **{state_text}**")
+    status = worker.service_status(SERVICE_NAME)
+    if status.state.value == "running":
+        st.badge("Running", color="green")
+    else:
+        st.badge("Stopped", color="gray")
 
-cols = st.columns([1, 1, 2])
-with cols[0]:
-    if status.state == ServiceState.RUNNING and st.button("Stop", key="status-stop"):
-        worker.stop_service(SERVICE_NAME)
-        st.rerun()
-    elif status.state == ServiceState.STOPPED and st.button("Start", key="status-start"):
-        worker.start_service(SERVICE_NAME)
-        st.rerun()
+    if status.state.value == "running":
+        if st.button("Stop", key="status-stop", use_container_width=True):
+            worker.stop_service(SERVICE_NAME)
+            st.rerun()
+    else:
+        if st.button("Start", key="status-start", use_container_width=True):
+            worker.start_service(SERVICE_NAME)
+            st.rerun()
 
-with cols[1]:
+    st.divider()
+
     endpoint = svc.web_ui_endpoint()
-    if status.state == ServiceState.RUNNING and endpoint:
-        st.link_button("Open Web UI ↗", endpoint)
+    if status.state.value == "running" and endpoint:
+        st.link_button("Open Web UI", endpoint, use_container_width=True)
 
+# --- Configuration ---------------------------------------------------------
 st.subheader("Configuration")
 config_path = svc.config_path
 last_gen = svc.last_generated_at()
@@ -60,3 +66,21 @@ with cols[1]:
     config_editor = next(p for p in svc.ui_pages if p.label == "Config editor")
     if st.button("Manage config →", key="status-manage"):
         st.switch_page(to_relative(config_editor.path))
+
+
+# --- Console ---------------------------------------------------------------
+# Live tail of the lifecycle log file. The fragment reruns on its own
+# schedule so the rest of the page stays stable while the user clicks
+# around.
+with st.container(border=True):
+    st.subheader("Console")
+
+    @st.fragment(run_every="2s")
+    def _console() -> None:
+        content = svc.tail_log(8 * 1024)
+        if content:
+            st.code(content, language=None)
+        else:
+            st.caption("No log output yet.")
+
+    _console()

@@ -75,6 +75,22 @@ class LlamaSwapService(InferenceService):
     def is_running(self) -> bool:
         return lifecycle.is_running(self._options.session_name)
 
+    def tail_log(self, n_bytes: int = 8192) -> str:
+        """Return the last ``n_bytes`` of the log file, or "" if missing.
+
+        The lifecycle pipes llama-swap's stdout/stderr into the log
+        file via ``tee -a``, so this is the canonical source for the
+        process's console output. UI pages that want a live tail wrap
+        this in a ``@st.fragment(run_every=...)``.
+        """
+        if not self._log_file.is_file():
+            return ""
+        with self._log_file.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - n_bytes))
+            return f.read().decode("utf-8", errors="replace")
+
     def public_host(self) -> str:
         """Hostname clients should use to reach this service.
 
