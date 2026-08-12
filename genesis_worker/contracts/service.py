@@ -10,6 +10,7 @@ from pathlib import Path
 from .catalog import Catalog
 from .context import ServiceContext
 from .plugin import Plugin
+from .ui import UiPage
 
 
 class ServiceState(StrEnum):
@@ -127,6 +128,14 @@ class InferenceService(Plugin):
 
     def agent_config_target(self) -> Path:
         raise NotImplementedError(f"{self.name} does not export agent config")
+
+    @property
+    def ui_pages(self) -> list[UiPage]:
+        """Pages this service contributes. Empty list = no management UI.
+
+        First entry is the landing page (ADR-010).
+        """
+        return []
 
 
 __all__ = [

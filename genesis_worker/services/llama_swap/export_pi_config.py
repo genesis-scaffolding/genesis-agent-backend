@@ -130,7 +130,14 @@ def _resolve_base_url(explicit: str | None) -> str:
         v = os.environ.get(env)
         if v:
             return _norm(v)
-    return DEFAULT_BASE_URL
+    # Fall back to the worker's hostname so pi-agent on a different
+    # machine reaches the worker over the LAN/VPN. ``127.0.0.1`` would
+    # point at the calling machine, not the worker.
+    try:
+        host = socket.gethostname()
+    except OSError:
+        host = "localhost"
+    return _norm(f"http://{host}:8080")
 
 
 def _norm(url: str) -> str:

@@ -1,18 +1,31 @@
-"""``config.yaml`` generation from catalog + recipes + overrides."""
+"""config.yaml generation: catalog + recipes + overrides → structured config + cmd.
+
+This module owns the whole pipeline:
+
+  1. :func:`walk_models` — filter LLM candidates, walk catalog, yield :class:`ModelMatch`
+  2. :func:`evaluate_recipe` — resolve fields (override > recipe > default > computed),
+     apply size-based fallbacks, render cmd
+  3. :func:`cmd_from_evaluated` — pure cmd formatter from the structured fields
+
+Both the YAML writer (:func:`build_config`) and the config editor UI
+(:func:`evaluate_all`) consume from this single pipeline.
+"""
 
 from __future__ import annotations
 
 import json
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from ...contracts import Catalog, ModelEntry
-from .recipes import Recipe
+from .recipes import Recipe, Recipes
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
 # one of these, the corresponding VRAM-saver flag is added. These are
@@ -21,6 +34,20 @@ from .recipes import Recipe
 DEFAULT_KV_QUANT_OVER = 25_000_000_000  # add -ctk q8_0 -ctv q8_0 above this
 DEFAULT_MMPROJ_OFFLOAD_OVER = 25_000_000_000  # add --no-mmproj-offload above this
 DEFAULT_BINARY_REL = "vendor/llama.cpp/build/bin/llama-server"
+
+_SAMPLING_FLAGS: dict[str, str] = {
+    "temp": "--temp",
+    "top_p": "--top-p",
+    "top_k": "--top-k",
+    "min_p": "--min-p",
+    "presence_penalty": "--presence-penalty",
+    "repeat_penalty": "--repeat-penalty",
+}
+
+
+# ===========================================================================
+# Types
+# ===========================================================================
 
 
 @dataclass(frozen=True)
@@ -37,49 +64,74 @@ class BuildOptions:
     default_binary_rel: str = DEFAULT_BINARY_REL
 
 
-_SAMPLING_FLAGS: dict[str, str] = {
-    "temp": "--temp",
-    "top_p": "--top-p",
-    "top_k": "--top-k",
-    "min_p": "--min-p",
-    "presence_penalty": "--presence-penalty",
-    "repeat_penalty": "--repeat-penalty",
-}
+@dataclass(frozen=True)
+class DetectedFiles:
+    """Auto-detected file paths for one model entry."""
+
+    main: Path | None
+    mmproj: Path | None
+    draft: Path | None
+    is_mtp: bool
+    weight_bytes: int
 
 
-# ---------------------------------------------------------------------------
-# Helpers (lifted from bin/build-config.py)
-# ---------------------------------------------------------------------------
+class FieldSource(StrEnum):
+    """Where an evaluated field's effective value came from."""
+
+    OVERRIDE = "override"  # from overrides.yaml
+    RECIPE = "recipe"  # from the matched recipe
+    DEFAULT = "default"  # from Recipes.default (fallback recipe)
+    COMPUTED = "computed"  # builder's size-based fallback (kv_cache, mmproj_offload)
 
 
-def _opt(recipe: Recipe, default_recipe: Recipe | None, key: str) -> Any:
-    """Resolve an option: recipe's value if set, else default recipe's.
+@dataclass(frozen=True)
+class EvaluatedConfig:
+    """Effective config for one model: every overridable field, with provenance."""
 
-    The ``default`` recipe acts as a single source of truth for shared
-    knobs (``ctx_min``, ``parallel``, sampling, etc.) so individual
-    recipes only need to mention what they override.
-    """
-    val = getattr(recipe, key, None)
-    if val is not None and val != {} and val != []:
-        return val
-    if default_recipe is not None:
-        val = getattr(default_recipe, key, None)
-        if val is not None and val != {} and val != []:
-            return val
-    return None
+    name: str
+    entry_id: str
+    matched_recipe: str | None
+    binary: str
+    files: DetectedFiles
+
+    kv_cache: str | None
+    mmproj_offload: bool | None
+    spec: dict[str, Any] | None
+    ctx_min: int | None
+    parallel: int | None
+    reasoning_budget: int | None
+    reasoning_budget_message: str | None
+    chat_template_file: str | None
+    sampling: dict[str, Any]
+    chat_template_kwargs: dict[str, Any]
+
+    provenance: dict[str, FieldSource]
+    cmd: str
+
+    hardcoded_flags: tuple[str, ...] = (
+        "--jinja",
+        "-fa on",
+        "--port ${PORT}",
+        "--host 127.0.0.1",
+    )
 
 
-def _resolve_binary(binary: str, repo_root: Path) -> str:
-    """Relative binaries resolve against the checkout root."""
-    p = Path(binary)
-    if not p.is_absolute():
-        p = repo_root / p
-    return str(p.resolve())
+@dataclass(frozen=True)
+class ModelMatch:
+    """One catalog entry * one matched recipe - what the walker yields."""
+
+    entry_id: str
+    entry: ModelEntry
+    source: str
+    recipe: Recipe
+    multi_match: bool
+    files: DetectedFiles
+    entry_overrides: dict[str, Any] | None
 
 
-# ---------------------------------------------------------------------------
-# File auto-detection
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Catalog walk helpers
+# ===========================================================================
 
 
 def _is_llm_candidate(entry: ModelEntry, source: str) -> bool:
@@ -91,17 +143,6 @@ def _is_llm_candidate(entry: ModelEntry, source: str) -> bool:
     if source == "huggingface":
         return any(p.filename.lower().endswith(".gguf") for p in entry.pieces)
     return any(p.role not in ("config",) for p in entry.pieces)
-
-
-@dataclass(frozen=True)
-class DetectedFiles:
-    """Auto-detected file paths for one model entry."""
-
-    main: Path | None
-    mmproj: Path | None
-    draft: Path | None
-    is_mtp: bool
-    weight_bytes: int
 
 
 def detect_files(entry: ModelEntry) -> DetectedFiles:
@@ -128,136 +169,12 @@ def detect_files(entry: ModelEntry) -> DetectedFiles:
     )
 
 
-# ---------------------------------------------------------------------------
-# Command building
-# ---------------------------------------------------------------------------
-
-
-def build_cmd(
-    recipe: Recipe,
-    files: DetectedFiles,
-    *,
-    default_recipe: Recipe | None = None,
-    binary_override: str | None = None,
-    options: BuildOptions,
-    overrides: dict[str, Any] | None = None,
-) -> str:
-    """Compose the llama-server command line for one model entry.
-
-    Returns a multi-line shell string with backslash continuations.
-    Options not set on ``recipe`` fall back to ``default_recipe``;
-    options present in ``overrides`` win over both.
-
-    Binary resolution order: recipe.binary -> CLI --binary ->
-    default.binary -> options.default_binary_rel.
-    """
-    ovr = overrides or {}
-    binary_str = (
-        recipe.binary
-        or binary_override
-        or (default_recipe.binary if default_recipe else None)
-        or options.default_binary_rel
-    )
-    resolved_binary = _resolve_binary(binary_str, options.repo_root)
-
-    sections: list[str] = []
-    sections.append(f"{resolved_binary} \\")
-    sections.append(f"  --model {files.main} \\")
-
-    if files.mmproj:
-        sections.append(f"  --mmproj {files.mmproj} \\")
-        mmproj_offload = ovr.get("mmproj_offload", recipe.mmproj_offload)
-        if mmproj_offload is None and default_recipe:
-            mmproj_offload = default_recipe.mmproj_offload
-        if mmproj_offload is True:
-            offload = True
-        elif mmproj_offload is False:
-            offload = False
-        else:
-            offload = files.weight_bytes > options.mmproj_offload_over
-        if offload:
-            sections.append("  --no-mmproj-offload \\")
-
-    spec = ovr.get("spec", recipe.spec) or {}
-    if isinstance(spec, dict) and spec.get("type") == "draft-mtp" and files.is_mtp:
-        spec_parts = ["--spec-type", "draft-mtp"]
-        if "n_max" in spec:
-            spec_parts.extend(["--spec-draft-n-max", str(spec["n_max"])])
-        if "p_min" in spec:
-            spec_parts.extend(["--spec-draft-p-min", str(spec["p_min"])])
-        sections.append("  " + " ".join(spec_parts) + " \\")
-        if files.draft:
-            sections.append(f"  --model-draft {files.draft} \\")
-
-    runtime: list[str] = []
-    kv_dtype = ovr.get("kv_cache", recipe.kv_cache)
-    if kv_dtype is None and default_recipe:
-        kv_dtype = default_recipe.kv_cache
-    if kv_dtype in ("q8_0", "q4_0"):
-        runtime.extend(["-ctk", kv_dtype, "-ctv", kv_dtype])
-    elif files.weight_bytes > options.kv_quant_over:
-        runtime.extend(["-ctk", "q8_0", "-ctv", "q8_0"])
-
-    ctx_min = ovr.get("ctx_min", recipe.ctx_min)
-    if ctx_min is None and default_recipe:
-        ctx_min = default_recipe.ctx_min
-    if ctx_min is not None:
-        runtime.extend(["--fit-ctx", str(ctx_min)])
-
-    parallel = ovr.get("parallel", recipe.parallel)
-    if parallel is None and default_recipe:
-        parallel = default_recipe.parallel
-    if parallel is not None:
-        runtime.extend(["--parallel", str(parallel)])
-
-    reasoning_budget = ovr.get("reasoning_budget", recipe.reasoning_budget)
-    if reasoning_budget is None and default_recipe:
-        reasoning_budget = default_recipe.reasoning_budget
-    if reasoning_budget is not None and reasoning_budget >= 0:
-        runtime.extend(["--reasoning-budget", str(reasoning_budget)])
-
-    reasoning_budget_message = ovr.get(
-        "reasoning_budget_message",
-        recipe.reasoning_budget_message,
-    )
-    if reasoning_budget_message is None and default_recipe:
-        reasoning_budget_message = default_recipe.reasoning_budget_message
-    if reasoning_budget_message:
-        runtime.extend(["--reasoning-budget-message", shlex.quote(reasoning_budget_message)])
-
-    runtime.extend(["--jinja", "-fa", "on"])
-    sections.append("  " + " ".join(runtime) + " \\")
-
-    sections.append("  --port ${PORT} --host 127.0.0.1 \\")
-
-    chat_template_file = ovr.get("chat_template_file", recipe.chat_template_file)
-    if chat_template_file is None and default_recipe:
-        chat_template_file = default_recipe.chat_template_file
-    if chat_template_file:
-        sections.append(f"  --chat-template-file {chat_template_file} \\")
-
-    sampling = ovr.get("sampling", recipe.sampling) or {}
-    sampling_parts: list[str] = []
-    for k, flag in _SAMPLING_FLAGS.items():
-        if k in sampling:
-            sampling_parts.extend([flag, str(sampling[k])])
-    if sampling_parts:
-        sections.append("  " + " ".join(sampling_parts) + " \\")
-
-    ctk = ovr.get("chat_template_kwargs", recipe.chat_template_kwargs)
-    if ctk:
-        ctk_json = json.dumps(ctk, separators=(",", ":"))
-        sections.append(f"  --chat-template-kwargs '{ctk_json}'")
-
-    if sections and sections[-1].endswith(" \\"):
-        sections[-1] = sections[-1][:-2]
-
-    return "\n".join(sections)
-
-
-# ---------------------------------------------------------------------------
-# Entry ID + display name
-# ---------------------------------------------------------------------------
+def _resolve_binary(binary: str, repo_root: Path) -> str:
+    """Relative binaries resolve against the checkout root."""
+    p = Path(binary)
+    if not p.is_absolute():
+        p = repo_root / p
+    return str(p.resolve())
 
 
 def make_entry_id(
@@ -310,69 +227,21 @@ def make_display_name(name: str, recipe: Recipe, multi_match: bool) -> str:
     return base
 
 
-# ---------------------------------------------------------------------------
-# Build pipeline
-# ---------------------------------------------------------------------------
-
-
-def build_entry(
-    entry: ModelEntry,
-    recipe: Recipe,
-    *,
-    source: str,
-    all_ids: set[str],
-    multi_match: bool,
-    default_recipe: Recipe | None = None,
-    binary_override: str | None = None,
-    options: BuildOptions,
-    entry_id_override: str | None = None,
-    overrides: dict[str, Any] | None = None,
-) -> tuple[str, dict]:
-    files = detect_files(entry)
-    if entry_id_override is None:
-        entry_id = make_entry_id(
-            entry.name,
-            recipe,
-            multi_match=multi_match,
-            all_ids=all_ids,
-            source=source,
-        )
-    else:
-        entry_id = entry_id_override
-    display = make_display_name(entry.name, recipe, multi_match)
-    cmd = build_cmd(
-        recipe,
-        files,
-        default_recipe=default_recipe,
-        binary_override=binary_override,
-        options=options,
-        overrides=overrides,
-    )
-    return entry_id, {
-        "name": display,
-        "cmd": cmd + "\n",
-        "proxy": "http://127.0.0.1:${PORT}",
-        "ttl": 0,
-        "resolved_from": recipe.name,
-    }
-
-
-def build_config(
+def walk_models(
     catalog: Catalog,
-    recipes,
-    overrides: dict[str, dict] | None = None,
+    recipes: Recipes,
     *,
+    overrides: dict[str, dict[str, Any]] | None = None,
     binary_override: str | None = None,
     options: BuildOptions,
-) -> list[tuple[str, dict]]:
-    """Walk the catalog, match recipes, apply overrides, emit entries.
+) -> Iterator[ModelMatch]:
+    """Walk catalog with same filter as config.yaml. Yields per-model-match.
 
-    ``recipes`` is a :class:`Recipes` object (the ``default`` and
-    ``matchable`` lists live there). ``overrides`` is the
-    ``{entry_id: {field: value}}`` dict from :class:`OverridesStore`.
+    This is the single source of truth for "which entries make it into
+    config.yaml". Both :func:`build_config` (yaml writer) and
+    :func:`evaluate_all` (config editor UI) iterate from this.
     """
-    overrides = overrides or {}
-    entries: list[tuple[str, dict]] = []
+    ovr = overrides or {}
     all_ids: set[str] = set()
 
     for source_key, entries_for_source in catalog.by_source().items():
@@ -383,12 +252,9 @@ def build_config(
             if not resolved.matched:
                 continue
             multi = len(resolved.matched) > 1
+            files = detect_files(entry)
 
             for recipe in resolved.matched:
-                # Compute the entry_id first so we can look up overrides
-                # keyed by it. make_entry_id mutates all_ids as a side
-                # effect, so calling it before passing overrides is the
-                # only correct order.
                 entry_id = make_entry_id(
                     entry.name,
                     recipe,
@@ -396,21 +262,407 @@ def build_config(
                     all_ids=all_ids,
                     source=source_key,
                 )
-                _, data = build_entry(
-                    entry,
-                    recipe,
+                yield ModelMatch(
+                    entry_id=entry_id,
+                    entry=entry,
                     source=source_key,
-                    all_ids=all_ids,
+                    recipe=recipe,
                     multi_match=multi,
-                    default_recipe=recipes.default,
-                    binary_override=binary_override,
-                    options=options,
-                    entry_id_override=entry_id,
-                    overrides=overrides.get(entry_id),
+                    files=files,
+                    entry_overrides=ovr.get(entry_id),
                 )
-                entries.append((entry_id, data))
 
+
+# ===========================================================================
+# Field resolution (provenance)
+# ===========================================================================
+
+
+def _source_simple(
+    ovr: dict[str, Any], recipe: Recipe, default: Recipe | None, key: str
+) -> FieldSource:
+    """Source for a field that resolves via override > recipe > default."""
+    if key in ovr:
+        return FieldSource.OVERRIDE
+    val = getattr(recipe, key, None)
+    if val is not None and val != {} and val != []:
+        return FieldSource.RECIPE
+    if default is not None:
+        val = getattr(default, key, None)
+        if val is not None and val != {} and val != []:
+            return FieldSource.DEFAULT
+    return FieldSource.COMPUTED
+
+
+def _source_recipe_only(ovr: dict[str, Any], recipe: Recipe, key: str) -> FieldSource:
+    """Source for fields that never fall back from recipe to default."""
+    if key in ovr:
+        return FieldSource.OVERRIDE
+    return FieldSource.RECIPE
+
+
+# ===========================================================================
+# Evaluation pipeline
+# ===========================================================================
+
+
+def evaluate_recipe(
+    recipe: Recipe,
+    files: DetectedFiles,
+    *,
+    entry_id: str,
+    name: str,
+    default_recipe: Recipe | None = None,
+    binary_override: str | None = None,
+    options: BuildOptions,
+    overrides: dict[str, Any] | None = None,
+) -> EvaluatedConfig:
+    """Resolve every overridable field, apply fallbacks, render cmd.
+
+    Precedence: ``override > recipe > default_recipe > computed``.
+    Size-based fallbacks for ``kv_cache`` and ``mmproj_offload`` fire
+    here so the rendered cmd and the structured view never disagree.
+    """
+    ovr = overrides or {}
+
+    # --- binary (4-level) ---
+    binary_str = (
+        ovr.get("binary")
+        or recipe.binary
+        or binary_override
+        or (default_recipe.binary if default_recipe else None)
+        or options.default_binary_rel
+    )
+    resolved_binary = _resolve_binary(binary_str, options.repo_root)
+    if "binary" in ovr:
+        binary_source = FieldSource.OVERRIDE
+    elif recipe.binary:
+        binary_source = FieldSource.RECIPE
+    elif binary_override:
+        binary_source = FieldSource.COMPUTED
+    elif default_recipe and default_recipe.binary:
+        binary_source = FieldSource.DEFAULT
+    else:
+        binary_source = FieldSource.COMPUTED
+
+    # --- simple fields (parallel, ctx_min, etc.) ---
+    parallel = ovr.get("parallel", recipe.parallel)
+    if parallel is None and default_recipe:
+        parallel = default_recipe.parallel
+
+    ctx_min = ovr.get("ctx_min", recipe.ctx_min)
+    if ctx_min is None and default_recipe:
+        ctx_min = default_recipe.ctx_min
+
+    reasoning_budget = ovr.get("reasoning_budget", recipe.reasoning_budget)
+    if reasoning_budget is None and default_recipe:
+        reasoning_budget = default_recipe.reasoning_budget
+
+    reasoning_budget_message = ovr.get(
+        "reasoning_budget_message", recipe.reasoning_budget_message
+    )
+    if reasoning_budget_message is None and default_recipe:
+        reasoning_budget_message = default_recipe.reasoning_budget_message
+
+    chat_template_file = ovr.get("chat_template_file", recipe.chat_template_file)
+    if chat_template_file is None and default_recipe:
+        chat_template_file = default_recipe.chat_template_file
+
+    spec = ovr.get("spec", recipe.spec)
+
+    # --- kv_cache with size-based fallback ---
+    kv_cache = ovr.get("kv_cache", recipe.kv_cache)
+    if kv_cache is None and default_recipe:
+        kv_cache = default_recipe.kv_cache
+    if kv_cache is None and files.weight_bytes > options.kv_quant_over:
+        kv_cache = "q8_0"
+
+    # --- mmproj_offload with size-based fallback ---
+    mmproj_offload = ovr.get("mmproj_offload", recipe.mmproj_offload)
+    if mmproj_offload is None and default_recipe:
+        mmproj_offload = default_recipe.mmproj_offload
+    if mmproj_offload is None and files.weight_bytes > options.mmproj_offload_over:
+        mmproj_offload = True
+
+    # --- sampling / chat_template_kwargs (no default fallback) ---
+    sampling = ovr.get("sampling", recipe.sampling) or {}
+    chat_template_kwargs = ovr.get("chat_template_kwargs", recipe.chat_template_kwargs)
+
+    provenance: dict[str, FieldSource] = {
+        "binary": binary_source,
+        "kv_cache": _source_simple(ovr, recipe, default_recipe, "kv_cache"),
+        "mmproj_offload": _source_simple(ovr, recipe, default_recipe, "mmproj_offload"),
+        "spec": _source_simple(ovr, recipe, default_recipe, "spec"),
+        "ctx_min": _source_simple(ovr, recipe, default_recipe, "ctx_min"),
+        "parallel": _source_simple(ovr, recipe, default_recipe, "parallel"),
+        "reasoning_budget": _source_simple(ovr, recipe, default_recipe, "reasoning_budget"),
+        "reasoning_budget_message": _source_simple(
+            ovr, recipe, default_recipe, "reasoning_budget_message"
+        ),
+        "chat_template_file": _source_simple(
+            ovr, recipe, default_recipe, "chat_template_file"
+        ),
+        "sampling": _source_recipe_only(ovr, recipe, "sampling"),
+        "chat_template_kwargs": _source_recipe_only(ovr, recipe, "chat_template_kwargs"),
+    }
+
+    cmd = cmd_from_evaluated_dict(
+        binary=resolved_binary,
+        files=files,
+        kv_cache=kv_cache,
+        mmproj_offload=mmproj_offload,
+        spec=spec,
+        ctx_min=ctx_min,
+        parallel=parallel,
+        reasoning_budget=reasoning_budget,
+        reasoning_budget_message=reasoning_budget_message,
+        chat_template_file=chat_template_file,
+        sampling=sampling,
+        chat_template_kwargs=chat_template_kwargs,
+    )
+
+    return EvaluatedConfig(
+        name=name,
+        entry_id=entry_id,
+        matched_recipe=recipe.name,
+        binary=resolved_binary,
+        files=files,
+        kv_cache=kv_cache,
+        mmproj_offload=mmproj_offload,
+        spec=spec,
+        ctx_min=ctx_min,
+        parallel=parallel,
+        reasoning_budget=reasoning_budget,
+        reasoning_budget_message=reasoning_budget_message,
+        chat_template_file=chat_template_file,
+        sampling=sampling,
+        chat_template_kwargs=chat_template_kwargs,
+        provenance=provenance,
+        cmd=cmd,
+    )
+
+
+def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
+    """Format the cmd string from an EvaluatedConfig (convenience wrapper)."""
+    return cmd_from_evaluated_dict(
+        binary=evaluated.binary,
+        files=evaluated.files,
+        kv_cache=evaluated.kv_cache,
+        mmproj_offload=evaluated.mmproj_offload,
+        spec=evaluated.spec,
+        ctx_min=evaluated.ctx_min,
+        parallel=evaluated.parallel,
+        reasoning_budget=evaluated.reasoning_budget,
+        reasoning_budget_message=evaluated.reasoning_budget_message,
+        chat_template_file=evaluated.chat_template_file,
+        sampling=evaluated.sampling,
+        chat_template_kwargs=evaluated.chat_template_kwargs,
+    )
+
+
+def cmd_from_evaluated_dict(
+    *,
+    binary: str,
+    files: DetectedFiles,
+    kv_cache: str | None,
+    mmproj_offload: bool | None,
+    spec: dict[str, Any] | None,
+    ctx_min: int | None,
+    parallel: int | None,
+    reasoning_budget: int | None,
+    reasoning_budget_message: str | None,
+    chat_template_file: str | None,
+    sampling: dict[str, Any],
+    chat_template_kwargs: dict[str, Any] | None,
+) -> str:
+    """Format the llama-server cmd string from resolved fields.
+
+    Reads the structured fields directly (no re-resolution). Conditional
+    emission depends on the files (``--no-mmproj-offload`` only when an
+    mmproj is present; ``--spec-type draft-mtp`` only when files indicate
+    MTP support).
+    """
+    sections: list[str] = []
+    sections.append(f"{binary} \\")
+    sections.append(f"  --model {files.main} \\")
+
+    if files.mmproj and mmproj_offload is True:
+        sections.append("  --no-mmproj-offload \\")
+
+    if (
+        spec
+        and isinstance(spec, dict)
+        and spec.get("type") == "draft-mtp"
+        and files.is_mtp
+    ):
+        spec_parts = ["--spec-type", "draft-mtp"]
+        if "n_max" in spec:
+            spec_parts.extend(["--spec-draft-n-max", str(spec["n_max"])])
+        if "p_min" in spec:
+            spec_parts.extend(["--spec-draft-p-min", str(spec["p_min"])])
+        sections.append("  " + " ".join(spec_parts) + " \\")
+        if files.draft:
+            sections.append(f"  --model-draft {files.draft} \\")
+
+    runtime: list[str] = []
+    if kv_cache in ("q8_0", "q4_0"):
+        runtime.extend(["-ctk", kv_cache, "-ctv", kv_cache])
+
+    if ctx_min is not None:
+        runtime.extend(["--fit-ctx", str(ctx_min)])
+
+    if parallel is not None:
+        runtime.extend(["--parallel", str(parallel)])
+
+    if reasoning_budget is not None and reasoning_budget >= 0:
+        runtime.extend(["--reasoning-budget", str(reasoning_budget)])
+
+    if reasoning_budget_message:
+        runtime.extend(
+            ["--reasoning-budget-message", shlex.quote(reasoning_budget_message)]
+        )
+
+    runtime.extend(["--jinja", "-fa", "on"])
+    sections.append("  " + " ".join(runtime) + " \\")
+
+    sections.append("  --port ${PORT} --host 127.0.0.1 \\")
+
+    if chat_template_file:
+        sections.append(f"  --chat-template-file {chat_template_file} \\")
+
+    if sampling:
+        sampling_parts: list[str] = []
+        for k, flag in _SAMPLING_FLAGS.items():
+            if k in sampling:
+                sampling_parts.extend([flag, str(sampling[k])])
+        if sampling_parts:
+            sections.append("  " + " ".join(sampling_parts) + " \\")
+
+    if chat_template_kwargs:
+        ctk_json = json.dumps(chat_template_kwargs, separators=(",", ":"))
+        sections.append(f"  --chat-template-kwargs '{ctk_json}'")
+
+    if sections and sections[-1].endswith(" \\"):
+        sections[-1] = sections[-1][:-2]
+
+    return "\n".join(sections)
+
+
+def evaluate_all(
+    catalog: Catalog,
+    recipes: Recipes,
+    overrides: dict[str, dict[str, Any]] | None = None,
+    *,
+    binary_override: str | None = None,
+    options: BuildOptions,
+) -> dict[str, EvaluatedConfig]:
+    """Evaluate every LLM catalog entry. Returns ``{entry_id: EvaluatedConfig}``.
+
+    Uses the same filter as :func:`build_config`, so the UI sees only
+    models that actually make it into config.yaml.
+    """
+    out: dict[str, EvaluatedConfig] = {}
+    for match in walk_models(
+        catalog,
+        recipes,
+        overrides=overrides,
+        binary_override=binary_override,
+        options=options,
+    ):
+        evaluated = evaluate_recipe(
+            match.recipe,
+            match.files,
+            entry_id=match.entry_id,
+            name=make_display_name(match.entry.name, match.recipe, match.multi_match),
+            default_recipe=recipes.default,
+            binary_override=binary_override,
+            options=options,
+            overrides=match.entry_overrides,
+        )
+        out[match.entry_id] = evaluated
+    return out
+
+
+# ===========================================================================
+# build_entry / build_config — YAML write path
+# ===========================================================================
+
+
+def build_entry(
+    entry: ModelEntry,
+    recipe: Recipe,
+    *,
+    entry_id: str,
+    multi_match: bool,
+    default_recipe: Recipe | None = None,
+    binary_override: str | None = None,
+    options: BuildOptions,
+    overrides: dict[str, Any] | None = None,
+) -> tuple[str, dict]:
+    """Build one config.yaml entry by evaluating the recipe.
+
+    Returns ``(entry_id, data)`` where ``data`` is the dict that
+    :func:`emit_payload` serializes.
+    """
+    files = detect_files(entry)
+    display = make_display_name(entry.name, recipe, multi_match)
+    evaluated = evaluate_recipe(
+        recipe,
+        files,
+        entry_id=entry_id,
+        name=display,
+        default_recipe=default_recipe,
+        binary_override=binary_override,
+        options=options,
+        overrides=overrides,
+    )
+    return entry_id, {
+        "name": evaluated.name,
+        "cmd": evaluated.cmd + "\n",
+        "proxy": "http://127.0.0.1:${PORT}",
+        "ttl": 0,
+        "resolved_from": evaluated.matched_recipe,
+    }
+
+
+def build_config(
+    catalog: Catalog,
+    recipes: Recipes,
+    overrides: dict[str, dict[str, Any]] | None = None,
+    *,
+    binary_override: str | None = None,
+    options: BuildOptions,
+) -> list[tuple[str, dict]]:
+    """Walk the catalog, match recipes, apply overrides, emit entries.
+
+    Uses :func:`walk_models` as the filter (single source of truth for
+    "which entries make it into config.yaml").
+    """
+    entries: list[tuple[str, dict]] = []
+    for match in walk_models(
+        catalog,
+        recipes,
+        overrides=overrides,
+        binary_override=binary_override,
+        options=options,
+    ):
+        _, data = build_entry(
+            match.entry,
+            match.recipe,
+            entry_id=match.entry_id,
+            multi_match=match.multi_match,
+            default_recipe=recipes.default,
+            binary_override=binary_override,
+            options=options,
+            overrides=match.entry_overrides,
+        )
+        entries.append((match.entry_id, data))
     return entries
+
+
+# ===========================================================================
+# YAML emission
+# ===========================================================================
 
 
 def emit_payload(
@@ -507,7 +759,6 @@ def read_generated_at(path: Path) -> str | None:
         text = path.read_text()
     except (FileNotFoundError, OSError):
         return None
-    # YAML field form first (newer writers, more reliable).
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError:
@@ -516,7 +767,6 @@ def read_generated_at(path: Path) -> str | None:
         value = raw.get("generated_at")
         if isinstance(value, str):
             return value
-    # Legacy header comment form (bin/build-config.py, until Phase 10).
     comment_match = re.search(
         r"^#\s*llama-swap config generated (\S+)\s*$",
         text,
@@ -536,16 +786,25 @@ def is_config_stale(config_path: Path, *, catalog_generated_at: str) -> bool:
 
 
 __all__ = [
+    "DEFAULT_BINARY_REL",
+    "DEFAULT_KV_QUANT_OVER",
+    "DEFAULT_MMPROJ_OFFLOAD_OVER",
     "BuildOptions",
     "DetectedFiles",
-    "build_cmd",
+    "EvaluatedConfig",
+    "FieldSource",
+    "ModelMatch",
     "build_config",
     "build_entry",
+    "cmd_from_evaluated",
+    "cmd_from_evaluated_dict",
     "detect_files",
-    "emit_payload",
+    "evaluate_all",
+    "evaluate_recipe",
     "is_config_stale",
     "make_display_name",
     "make_entry_id",
     "read_generated_at",
+    "walk_models",
     "write_config",
 ]

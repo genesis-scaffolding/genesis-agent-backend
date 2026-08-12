@@ -10,6 +10,7 @@ from .acquire import AcquireSession
 from .catalog import DiscoveredModel
 from .context import SourceContext
 from .plugin import Plugin
+from .ui import UiPage
 
 
 class ModelSource(Plugin):
@@ -39,6 +40,14 @@ class ModelSource(Plugin):
     def start_acquire(self, repo_id: str) -> AcquireSession:
         """Begin acquiring ``repo_id``. Only meaningful when ``can_acquire``."""
         raise NotImplementedError(f"{self.name} does not support acquisition")
+
+    @property
+    def ui_pages(self) -> list[UiPage]:
+        """Pages this source contributes. Empty list = no management UI.
+
+        First entry is the landing page (ADR-010).
+        """
+        return []
 
 
 __all__ = ["ModelSource"]

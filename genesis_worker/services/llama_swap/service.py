@@ -15,10 +15,18 @@ from ...contracts import (
     ServiceStatus,
     StartResult,
     StopResult,
+    UiPage,
 )
 from . import lifecycle
 from .export_pi_config import build_provider, write_models_json
-from .generate_config import BuildOptions, build_config, read_generated_at, write_config
+from .generate_config import (
+    BuildOptions,
+    EvaluatedConfig,
+    build_config,
+    evaluate_all,
+    read_generated_at,
+    write_config,
+)
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
 from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
@@ -59,7 +67,7 @@ class LlamaSwapService(InferenceService):
             can_serve_llm=True,
             can_serve_image=False,
             can_train_models=False,
-            has_web_ui=False,
+            has_web_ui=True,
         )
 
     def resource_estimate(self) -> ServiceResourceEstimate:
@@ -74,10 +82,58 @@ class LlamaSwapService(InferenceService):
     def is_running(self) -> bool:
         return lifecycle.is_running(self._options.session_name)
 
+    def tail_log(self, n_bytes: int = 8192) -> str:
+        """Return the last ``n_bytes`` of the log file, or "" if missing.
+
+        The lifecycle pipes llama-swap's stdout/stderr into the log
+        file via ``tee -a``, so this is the canonical source for the
+        process's console output. UI pages that want a live tail wrap
+        this in a ``@st.fragment(run_every=...)``.
+        """
+        if not self._log_file.is_file():
+            return ""
+        with self._log_file.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - n_bytes))
+            return f.read().decode("utf-8", errors="replace")
+
+    def public_host(self) -> str:
+        """Hostname clients should use to reach this service.
+
+        Defaults to ``socket.gethostname()`` so the dashboard, pi-agent
+        exports, and web-UI links are reachable from other machines on
+        the LAN/VPN — not from ``127.0.0.1`` (which points at the calling
+        machine, not the worker) and not from ``0.0.0.0`` (a bind address,
+        not a connect address).
+        """
+        if self._options.public_host:
+            return self._options.public_host
+        import socket
+
+        try:
+            return socket.gethostname()
+        except OSError:
+            return "localhost"
+
+    def _port(self) -> int:
+        # listen_addr is "host:port" — we want the port for URL building.
+        try:
+            return int(self._options.listen_addr.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            return 8080
+
     def runtime_endpoint(self) -> str | None:
+        """OpenAI-compatible API base URL (``/v1``). Used by pi-agent."""
         if not self.is_running():
             return None
-        return f"http://{self._options.listen_addr}/v1"
+        return f"http://{self.public_host()}:{self._port()}/v1"
+
+    def web_ui_endpoint(self) -> str | None:
+        """Web UI URL. Used by the dashboard's 'Open Web UI' button."""
+        if not self.is_running():
+            return None
+        return f"http://{self.public_host()}:{self._port()}/"
 
     def start(self) -> StartResult:
         return lifecycle.start_swap(
@@ -131,6 +187,36 @@ class LlamaSwapService(InferenceService):
     def last_generated_at(self) -> str | None:
         return read_generated_at(self._config_path)
 
+    def evaluate_model_config(self, catalog: Catalog) -> dict[str, EvaluatedConfig]:
+        """Resolve every catalog entry's effective config (structured).
+
+        Walks the catalog with the same recipe + overrides as
+        :meth:`regenerate_config`, but returns structured fields instead
+        of writing yaml. Used by the config editor UI to render and
+        edit.
+        """
+        return evaluate_all(
+            catalog,
+            self._recipes.load(),
+            overrides=self._overrides.load(),
+            options=self._build_options,
+        )
+
+    def list_overrides(self) -> dict[str, dict]:
+        return self._overrides.load()
+
+    def save_overrides_for_entry(self, entry_id: str, fields: dict) -> None:
+        """Write/clear this entry's override block. ``{}`` clears it.
+
+        Other entries' overrides are preserved.
+        """
+        entries = self._overrides.load()
+        if fields:
+            entries[entry_id] = fields
+        else:
+            entries.pop(entry_id, None)
+        self._overrides.save(entries)
+
     # --- pi-agent export ---------------------------------------------------
 
     def export_for_agent(self, *, base_url: str | None = None) -> dict:
@@ -142,6 +228,16 @@ class LlamaSwapService(InferenceService):
     def agent_config_target(self) -> Path:
         base = os.environ.get("PI_INSTALL_DIR")
         return (Path(base) if base else Path.home() / ".pi" / "agent") / "models.json"
+
+    @property
+    def ui_pages(self) -> list[UiPage]:
+        ui_dir = Path(__file__).parent / "ui"
+        return [
+            UiPage("Status",        ":material/monitor:",   ui_dir / "status.py"),
+            UiPage("Config editor", ":material/tune:",      ui_dir / "config_editor.py"),
+            UiPage("Recipes view",  ":material/menu_book:", ui_dir / "recipes_view.py"),
+            UiPage("Pi export",     ":material/download:",  ui_dir / "pi_export.py"),
+        ]
 
 
 __all__ = ["LlamaSwapService"]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,25 @@ from .paths import repo_root, xdg_path
 
 # The directory the worker owns under each XDG base. Change it here to rename them all.
 XDG_BASE = "genesis-worker"
+
+
+@lru_cache(maxsize=1)
+def _read_models_root() -> str | None:
+    """Read ``MODELS_ROOT`` from os.environ or the repo-root ``.env``.
+
+    pydantic-settings reads ``.env`` via dotenv but doesn't populate
+    ``os.environ``, so a value in ``.env`` is invisible to naive env-var
+    reads. We check both places.
+    """
+    if "MODELS_ROOT" in os.environ:
+        return os.environ["MODELS_ROOT"]
+    try:
+        from dotenv import dotenv_values
+
+        values = dotenv_values(".env")
+    except Exception:  # noqa: BLE001 — no .env or unreadable; fall through
+        return None
+    return values.get("MODELS_ROOT") or None
 
 
 class PathsSettings(BaseModel):
@@ -27,6 +48,12 @@ class PathsSettings(BaseModel):
     def resolved_vault_path(self) -> Path:
         if self.vault_path is not None:
             return self.vault_path
+        # Backward-compat: legacy `bin/` scripts (and users with existing
+        # `.env` files from the pre-framework era) set ``MODELS_ROOT``. Honour
+        # it as a synonym for the vault root so migration is silent.
+        legacy = _read_models_root()
+        if legacy is not None:
+            return Path(legacy)
         return self.data_dir / "vault"
 
     @property

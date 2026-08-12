@@ -80,8 +80,12 @@ def test_registry_constructs_each_service_exactly_once() -> None:
 
 def test_service_defaults_when_no_option_slice(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path))
-    assert svc._options.listen_addr == "127.0.0.1:8080"
+    # Default is 0.0.0.0:8080 so the service is reachable from the
+    # LAN/VPN, not just localhost. Users who want a different bind
+    # address override via GENESIS_SERVICES__LLAMA_SWAP__LISTEN_ADDR.
+    assert svc._options.listen_addr == "0.0.0.0:8080"
     assert svc._options.session_name == "swap"
+    assert svc._options.public_host is None  # falls back to socket.gethostname()
 
 
 def test_registry_scopes_paths_by_dir_name() -> None:
@@ -103,7 +107,7 @@ def test_llama_swap_capabilities_declares_llm_serving(tmp_path: Path) -> None:
     assert caps.can_export_for_agent
     assert not caps.can_serve_image
     assert not caps.can_train_models
-    assert not caps.has_web_ui
+    assert caps.has_web_ui  # llama-swap has its own web UI on :8080
 
 
 def test_is_available_tracks_the_binary_only(tmp_path: Path, monkeypatch) -> None:

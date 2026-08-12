@@ -9,6 +9,8 @@ import pytest
 
 PLUGIN_AXES = ("sources", "services")
 CONTRACT = "genesis_worker.contracts"
+UTILS = "genesis_worker.utils"
+ALLOWED_TOP_LEVEL = (CONTRACT, UTILS)
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -42,23 +44,27 @@ def _imported_modules(tree: ast.AST, module_path: Path) -> list[str]:
 
 
 def _violations(module_path: Path) -> list[str]:
-    """Framework modules this plugin file reaches for, beyond the contract."""
+    """Framework modules this plugin file reaches for, beyond the allowed surfaces."""
     own_plugin = ".".join(_package_of(module_path)[:3])  # genesis_worker.<axis>.<plugin>
     tree = ast.parse(module_path.read_text())
     return [
         name
         for name in _imported_modules(tree, module_path)
-        if not name.startswith(CONTRACT) and not name.startswith(own_plugin)
+        if not any(name.startswith(top) for top in ALLOWED_TOP_LEVEL)
+        and not name.startswith(own_plugin)
     ]
 
 
 @pytest.mark.parametrize("module_path", _plugin_modules(), ids=lambda p: p.stem)
-def test_plugin_imports_only_the_contract(module_path: Path) -> None:
-    """A plugin may import its own package and genesis_worker.contracts. Nothing else."""
+def test_plugin_imports_only_allowed_surfaces(module_path: Path) -> None:
+    """A plugin may import its own package, genesis_worker.contracts, and genesis_worker.utils.
+
+    Nothing else under genesis_worker (ADR-009).
+    """
     offenders = _violations(module_path)
     assert not offenders, (
         f"{module_path.relative_to(PACKAGE_ROOT)} reaches into the framework: "
-        f"{offenders}. Plugins may only import {CONTRACT} (ADR-009)."
+        f"{offenders}. Plugins may only import {' or '.join(ALLOWED_TOP_LEVEL)} (ADR-009)."
     )
 
 
@@ -76,6 +82,19 @@ def test_the_boundary_check_detects_a_violation(tmp_path: Path) -> None:
         leaky.unlink()
 
 
+def test_the_boundary_check_allows_utils(tmp_path: Path) -> None:
+    """A plugin may import from genesis_worker.utils — the walker must not flag it."""
+    leaky = PACKAGE_ROOT / "services" / "llama_swap" / "_boundary_probe.py"
+    leaky.write_text(
+        "from ...utils.ui._nav import to_relative\n"
+        "from ...contracts import Catalog\n"
+    )
+    try:
+        assert _violations(leaky) == []
+    finally:
+        leaky.unlink()
+
+
 def test_framework_does_not_import_plugin_internals() -> None:
     """The framework talks to plugins through the registries, never their submodules."""
     offenders: list[str] = []
@@ -87,3 +106,22 @@ def test_framework_does_not_import_plugin_internals() -> None:
             if len(parts) > 3 and parts[1] in PLUGIN_AXES:
                 offenders.append(f"{path.name}: {name}")
     assert not offenders, f"framework reaches into plugin internals: {offenders}"
+
+
+def test_utils_is_a_leaf_package() -> None:
+    """genesis_worker.utils must be self-contained — it imports nothing else from the package.
+
+    The point of the utils surface is that it stays a sink for shared
+    helpers, not a node in the framework's dependency graph. If a util
+    ever needs contracts, settings, or a plugin, that need is the
+    framework's, not the util's, and the import belongs at the call site.
+    """
+    utils_root = PACKAGE_ROOT / "utils"
+    if not utils_root.is_dir():
+        pytest.skip("utils/ not present")
+    offenders: list[str] = []
+    for path in utils_root.rglob("*.py"):
+        for name in _imported_modules(ast.parse(path.read_text()), path):
+            if not name.startswith(UTILS):
+                offenders.append(f"{path.relative_to(PACKAGE_ROOT)}: {name}")
+    assert not offenders, f"utils reaches outside its own package: {offenders}"

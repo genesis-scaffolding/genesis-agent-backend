@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 from .catalog_build import CatalogService
@@ -11,6 +12,9 @@ from .registries import ServiceRegistry, SourceRegistry
 
 if TYPE_CHECKING:
     from .settings import Settings
+
+
+_TERMINAL_KINDS = frozenset({"complete", "failed", "cancelled"})
 
 
 class GenesisWorker:
@@ -36,6 +40,12 @@ class GenesisWorker:
         # Cached catalog. ``catalog()`` returns the most recent rescan;
         # ``rescan_catalog()`` always re-walks.
         self._catalog_cache: Catalog | None = None
+
+        # Active acquire sessions, keyed by an opaque id. Pages and CLIs
+        # call ``start_acquire`` and store the returned session object;
+        # the facade also tracks them centrally so other surfaces (the
+        # session_list page, the CLI) can list and cancel them.
+        self._sessions: dict[str, tuple[str, AcquireSession]] = {}
 
     # --- Settings -----------------------------------------------------------
 
@@ -86,8 +96,58 @@ class GenesisWorker:
         return self._service_registry.get(name)
 
     def start_acquire(self, source_name: str, repo_id: str) -> AcquireSession:
-        """Begin acquiring ``repo_id`` from ``source_name``."""
-        return self._source_registry.get(source_name).start_acquire(repo_id)
+        """Begin acquiring ``repo_id`` from ``source_name``.
+
+        The session is registered centrally so ``list_acquire_sessions``
+        and the per-source session-list page can see it. The caller
+        keeps a direct reference to the session object; cancellation and
+        step retrieval work on that reference, not on the id.
+        """
+        session = self._source_registry.get(source_name).start_acquire(repo_id)
+        sid = uuid.uuid4().hex
+        session._facade_id = sid  # type: ignore[attr-defined]
+        self._sessions[sid] = (source_name, session)
+        return session
+
+    def acquire_step(self, session: AcquireSession):
+        return session.current_step()
+
+    def submit_acquire(self, session: AcquireSession, choice):
+        return session.submit(choice)
+
+    def cancel_acquire(self, session: AcquireSession) -> None:
+        """Cancel an in-flight session. Idempotent."""
+        session.cancel()
+
+    def list_acquire_sessions(self, source_name: str | None = None) -> list[dict]:
+        """Return summaries of non-terminal sessions.
+
+        Each entry: ``id``, ``source``, ``repo_id``, ``state``, ``session``.
+        Terminal sessions (complete / failed / cancelled) are dropped from
+        the registry as a side effect.
+        """
+        out: list[dict] = []
+        for sid, (src, sess) in list(self._sessions.items()):
+            try:
+                step = sess.current_step()
+            except Exception:  # noqa: BLE001 — stale session; skip
+                self._sessions.pop(sid, None)
+                continue
+            if step.kind in _TERMINAL_KINDS:
+                self._sessions.pop(sid, None)
+                continue
+            if source_name is not None and src != source_name:
+                continue
+            out.append(
+                {
+                    "id": sid,
+                    "source": src,
+                    "repo_id": getattr(sess, "repo_id", "?"),
+                    "state": step.kind,
+                    "session": sess,
+                }
+            )
+        return out
 
     def regenerate_service_config(self, service_name: str) -> bool:
         """Regenerate one service's config against the current catalog."""
@@ -115,6 +175,25 @@ class GenesisWorker:
             )
             for svc in self._service_registry.all()
         ]
+
+    def start_service(self, name: str):
+        return self._service_registry.get(name).start()
+
+    def stop_service(self, name: str):
+        return self._service_registry.get(name).stop()
+
+    def service_status(self, name: str):
+        return self._service_registry.get(name).status()
+
+    def collect_metrics(self):
+        from .metrics import collect_metrics as _collect
+
+        return _collect()
+
+    def collect_host_info(self):
+        from .host_info import collect_host_info as _collect
+
+        return _collect()
 
 
 def _default_settings() -> Settings:

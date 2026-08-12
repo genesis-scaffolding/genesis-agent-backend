@@ -32,6 +32,7 @@ from .service import (
     StopResult,
 )
 from .source import ModelSource
+from .ui import UiPage
 
 __all__ = [
     "COMPONENT_DIRS",
@@ -59,6 +60,7 @@ __all__ = [
     "SourceContext",
     "StartResult",
     "StopResult",
+    "UiPage",
     "classify",
     "role_sort_key",
 ]
