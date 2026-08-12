@@ -23,6 +23,7 @@ from __future__ import annotations
 import http.server
 import json
 import socket
+import subprocess
 import threading
 from pathlib import Path
 
@@ -197,6 +198,103 @@ def test_stop_is_idempotent(fake_swap_env) -> None:
     result = lifecycle.stop_swap(session)
     assert result.ok
     assert "no session" in result.message
+
+
+def test_stop_swap_waits_for_children_before_tearing_down_tmux(
+    tmp_path: Path,
+) -> None:
+    """When a child takes a moment to shut down, stop_swap waits for it.
+
+    Models the leak scenario: a tmux session runs a script exec'd as
+    ``llama-server`` so pgrep -f llama-server matches the real process.
+    When the script receives SIGINT, it sleeps briefly then exits —
+    modelling a model loader mid-flush. stop_swap observes the child
+    exit and returns ok=True WITHOUT the hard-cleanup fallback.
+    """
+    if subprocess.run(["which", "tmux"], capture_output=True, check=False).returncode != 0:
+        pytest.skip("tmux not available")
+
+    session = "swap-graceful-test"
+    subprocess.run(
+        ["tmux", "kill-session", "-t", session], check=False, capture_output=True
+    )
+
+    # Write the fixture via Path.write_text (not a shell heredoc) so the
+    # test runner's own bash command line doesn't contain the substring
+    # "llama-server". That keeps pgrep -f llama-server matched only to
+    # the real process under test.
+    server = tmp_path / "llama-server"
+    server.write_text(
+        "#!/usr/bin/env bash\n"
+        "trap 'sleep 1; exit 0' INT\n"
+        "while true; do sleep 60; done\n"
+    )
+    server.chmod(0o755)
+
+    # ``exec`` ensures the running bash IS the process, so pgrep matches
+    # its argv. ``send-keys C-c`` later delivers SIGINT to that process.
+    subprocess.run(
+        [
+            "tmux", "new-session", "-d", "-s", session,
+            f"exec {server}",
+        ],
+        check=False,
+    )
+    # Brief settle so the bash inside tmux is fully spawned before we
+    # ask stop_swap to manage it.
+    import time
+
+    time.sleep(0.2)
+
+    result = lifecycle.stop_swap(session, shutdown_timeout_s=10.0)
+
+    assert result.ok
+    assert "forced child cleanup" not in result.message
+    assert lifecycle.is_running(session) is False
+
+
+def test_stop_swap_falls_back_to_hard_cleanup_on_timeout(
+    tmp_path: Path,
+) -> None:
+    """When a child ignores SIGINT past the timeout, hard-kill cleans up.
+
+    The fixture script traps and ignores SIGINT, so the wait loop runs
+    out. stop_swap must then pkill the orphan and report success.
+    """
+    if subprocess.run(["which", "tmux"], capture_output=True, check=False).returncode != 0:
+        pytest.skip("tmux not available")
+
+    session = "swap-hardcleanup-test"
+    subprocess.run(
+        ["tmux", "kill-session", "-t", session], check=False, capture_output=True
+    )
+
+    server = tmp_path / "llama-server"
+    server.write_text(
+        "#!/usr/bin/env bash\n"
+        "trap '' INT\n"
+        "while true; do sleep 60; done\n"
+    )
+    server.chmod(0o755)
+
+    subprocess.run(
+        [
+            "tmux", "new-session", "-d", "-s", session,
+            f"exec {server}",
+        ],
+        check=False,
+    )
+    # Brief settle so the bash inside tmux is fully spawned before we
+    # ask stop_swap to manage it.
+    import time
+
+    time.sleep(0.2)
+
+    # Short timeout forces the fallback path.
+    result = lifecycle.stop_swap(session, shutdown_timeout_s=1.5)
+    assert result.ok
+    assert "forced child cleanup" in result.message
+    assert lifecycle.is_running(session) is False
 
 
 def test_start_fails_when_binary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
