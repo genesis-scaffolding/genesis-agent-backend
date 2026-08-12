@@ -1,4 +1,4 @@
-"""Static-ish host information for the dashboard.
+"""Collect host information for the dashboard. Best-effort, no new dependencies.
 
 Distinct from ``metrics``: host info changes only on system events
 (boot, network reconnect), while metrics are continuously varying.
@@ -12,18 +12,8 @@ import socket
 import subprocess
 import time
 import urllib.request
-from dataclasses import dataclass
 
-
-@dataclass(frozen=True)
-class HostInfo:
-    hostname: str
-    os: str            # e.g., "Linux 6.5.0-arch1-1"
-    arch: str          # e.g., "x86_64"
-    python: str        # e.g., "3.11.7"
-    uptime_s: int | None
-    public_ip: str | None
-    tailscale_ip: str | None
+from .models import HostInfo
 
 
 def collect_host_info() -> HostInfo:
@@ -72,4 +62,4 @@ def collect_host_info() -> HostInfo:
     )
 
 
-__all__ = ["HostInfo", "collect_host_info"]
+__all__ = ["collect_host_info"]

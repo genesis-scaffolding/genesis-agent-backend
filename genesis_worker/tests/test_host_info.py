@@ -1,8 +1,9 @@
-"""Tests for genesis_worker.host."""
+"""Tests for genesis_worker.host_info."""
 
 from __future__ import annotations
 
-from genesis_worker.host import HostInfo, collect_host_info
+from genesis_worker.host_info import collect_host_info
+from genesis_worker.models import HostInfo
 
 
 def test_collect_returns_dataclass() -> None:
