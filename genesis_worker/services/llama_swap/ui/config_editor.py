@@ -1,30 +1,66 @@
-"""Override editor for the llama-swap service."""
+"""Inspect the live config.yaml used by llama-swap. Per-model overrides ship next."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
-worker = st.session_state["worker"]
-svc = worker.service("llama_swap")
+SERVICE_NAME = "llama_swap"
 
-st.header("Config editor")
-st.caption("Per-model overrides. Saved to the overrides store on the service.")
+worker = st.session_state["worker"]
+svc = worker.service(SERVICE_NAME)
+
+st.title("Config editor")
+st.caption("Inspect the live config.yaml. Per-model overrides coming soon.")
 
 catalog = worker.catalog()
-by_source = catalog.by_source()
-total = sum(len(v) for v in by_source.values())
-if total == 0:
-    st.info("No models in the catalog. Rescan from the dashboard.")
+config_models = svc.read_config_models()
+
+# --- Missing config -------------------------------------------------------
+if not config_models:
+    st.error(
+        f"No config.yaml at `{svc.config_path}`. "
+        "Regenerate from the catalog + recipes to populate it."
+    )
+    if st.button("Regenerate config", key="regen-missing"):
+        ok = worker.regenerate_service_config(SERVICE_NAME)
+        if ok:
+            st.success("regenerated")
+        else:
+            st.info("already up to date")
+        st.rerun()
     st.stop()
 
-for entries in by_source.values():
-    for entry in entries:
-        with st.expander(entry.name):
-            st.code(str(entry), language="yaml")
-            st.caption("Override editing ships in plan-003-chunk-3+ once recipes are migrated.")
-            override = st.checkbox(
-                "Override defaults", key=f"override-{entry.name}", value=False
+# --- Stale indicator ------------------------------------------------------
+last_gen = svc.last_generated_at()
+if last_gen is None or last_gen != catalog.generated_at:
+    st.warning(
+        f"Config is stale (last generated `{last_gen or 'never'}`). "
+        "Regenerate to pick up new models."
+    )
+
+# --- Per-model expanders --------------------------------------------------
+# Compact list shows the binary basename next to each entry_id, so the user
+# can spot the odd one out (e.g. a model pinned to a custom llama.cpp
+# build) without expanding anything.
+for entry_id, entry in config_models.items():
+    binary_name = Path(entry.binary).name or "(no binary)"
+    with st.expander(f"{entry_id}  →  {binary_name}"):
+        st.subheader(entry.name)
+
+        st.markdown("**Binary**")
+        st.code(entry.binary)
+
+        st.markdown("**Flags**")
+        if entry.flags:
+            st.dataframe(
+                [{"Flag": flag, "Value": str(value)} for flag, value in entry.flags],
+                hide_index=True,
+                width="stretch",
             )
-            if override:
-                st.text_input("Context size", key=f"ctx-{entry.name}")
-                st.text_input("KV cache quant", key=f"kvq-{entry.name}")
+        else:
+            st.caption("No flags.")
+
+        with st.expander("Raw cmd"):
+            st.code(entry.cmd)

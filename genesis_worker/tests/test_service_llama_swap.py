@@ -212,3 +212,46 @@ def test_tail_log_replaces_invalid_utf8(tmp_path: Path) -> None:
     tail = svc.tail_log()
     assert "ok " in tail
     assert "garbage" in tail
+
+
+# ---------------------------------------------------------------------------
+# read_config_models
+# ---------------------------------------------------------------------------
+
+
+def test_read_config_models_returns_empty_when_file_missing(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    assert svc.read_config_models() == {}
+
+
+def test_read_config_models_parses_entries(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    config = tmp_path / "data" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "models:\n"
+        "  foo:\n"
+        '    name: "Foo"\n'
+        "    cmd: |\n"
+        "      /path/to/llama-server \\\n"
+        "        --model /foo.gguf \\\n"
+        "        --jinja\n"
+        '    proxy: "http://127.0.0.1:${PORT}"\n'
+        "    ttl: 0\n"
+    )
+    entries = svc.read_config_models()
+    assert set(entries) == {"foo"}
+    foo = entries["foo"]
+    assert foo.name == "Foo"
+    assert foo.binary == "/path/to/llama-server"
+    assert foo.flags == [("--model", "/foo.gguf"), ("--jinja", True)]
+    assert foo.proxy == "http://127.0.0.1:${PORT}"
+    assert foo.ttl == 0
+
+
+def test_read_config_models_handles_empty_models_block(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    config = tmp_path / "data" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("models: {}\n")
+    assert svc.read_config_models() == {}

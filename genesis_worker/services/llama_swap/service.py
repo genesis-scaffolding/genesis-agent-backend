@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 from ...contracts import (
     Catalog,
@@ -22,7 +25,20 @@ from .export_pi_config import build_provider, write_models_json
 from .generate_config import BuildOptions, build_config, read_generated_at, write_config
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
+from .parse_cmd import parse_cmd
 from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
+
+
+@dataclass(frozen=True)
+class ModelConfigEntry:
+    """One entry from config.yaml's ``models:`` block, with the cmd pre-parsed."""
+
+    name: str
+    cmd: str
+    binary: str
+    flags: list[tuple[str, str | bool]]
+    proxy: str
+    ttl: int
 
 
 class LlamaSwapService(InferenceService):
@@ -179,6 +195,31 @@ class LlamaSwapService(InferenceService):
 
     def last_generated_at(self) -> str | None:
         return read_generated_at(self._config_path)
+
+    def read_config_models(self) -> dict[str, ModelConfigEntry]:
+        """Parse the live config.yaml and return each model's structured entry.
+
+        Returns ``{}`` if config.yaml does not exist. Lets
+        ``yaml.YAMLError`` propagate on malformed input so the caller can
+        decide how to surface it.
+        """
+        if not self._config_path.is_file():
+            return {}
+        raw = yaml.safe_load(self._config_path.read_text())
+        models = (raw or {}).get("models") or {}
+        out: dict[str, ModelConfigEntry] = {}
+        for entry_id, body in models.items():
+            cmd = body.get("cmd", "") or ""
+            parsed = parse_cmd(cmd)
+            out[entry_id] = ModelConfigEntry(
+                name=body.get("name", entry_id),
+                cmd=cmd,
+                binary=parsed.binary,
+                flags=parsed.flags,
+                proxy=body.get("proxy", ""),
+                ttl=body.get("ttl", 0),
+            )
+        return out
 
     # --- pi-agent export ---------------------------------------------------
 
