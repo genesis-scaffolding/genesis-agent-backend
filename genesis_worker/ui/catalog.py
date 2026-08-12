@@ -5,13 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis_worker.ui._nav import to_relative as _to_relative
-
-
-def _format_bytes(n: int) -> str:
-    if n < 1024 ** 3:
-        return f"{n / 1024 ** 2:.1f} MB"
-    return f"{n / 1024 ** 3:.1f} GB"
-
+from genesis_worker.ui._render import format_bytes, render_entry
 
 worker = st.session_state["worker"]
 
@@ -35,7 +29,7 @@ with st.container(border=True):
         e.total_bytes for entries in catalog_by_source.values() for e in entries
     )
     st.markdown(
-        f"**Total:** {total_entries} models, {_format_bytes(total_bytes)}"
+        f"**Total:** {total_entries} models, {format_bytes(total_bytes)}"
     )
 
     for info in sources:
@@ -46,7 +40,7 @@ with st.container(border=True):
         bytes_ = sum(e.total_bytes for e in entries)
         st.markdown(
             f"- **{info.display_name}**: {len(entries)} models, "
-            f"{_format_bytes(bytes_)}"
+            f"{format_bytes(bytes_)}"
         )
 
     st.divider()
@@ -116,6 +110,6 @@ with st.container(border=True):
                     st.caption("No entries from this source.")
                     continue
                 for entry in entries:
-                    label = f"{entry.name}  ({_format_bytes(entry.total_bytes)})"
+                    label = f"{entry.name}  ({format_bytes(entry.total_bytes)})"
                     with st.expander(label):
-                        st.code(str(entry), language="yaml")
+                        render_entry(entry)
