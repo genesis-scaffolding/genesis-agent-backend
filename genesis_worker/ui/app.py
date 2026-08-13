@@ -26,27 +26,27 @@ st.set_page_config(
 )
 
 
-def _page(path: Path, title: str, icon: str) -> st.Page:
-    return st.Page(str(path), title=title, icon=icon)
+def _page(path: Path, title: str, icon: str, url_path: str | None) -> st.Page:
+    return st.Page(str(path), title=title, icon=icon, url_path=url_path)
 
 
 nav: dict[str, list[st.Page]] = {
     "Overview": [
-        _page(_FRAMEWORK_UI / "dashboard.py", "Dashboard", ":material/dashboard:"),
-        _page(_FRAMEWORK_UI / "catalog.py", "Catalog", ":material/folder:"),
+        _page(_FRAMEWORK_UI / "dashboard.py", "Dashboard", ":material/dashboard:", None),
+        _page(_FRAMEWORK_UI / "catalog.py", "Catalog", ":material/folder:", None),
     ],
 }
 
 for svc_info in worker.list_services():
     svc = worker.service(svc_info.name)
     nav[svc_info.display_name] = [
-        _page(p.path, p.label, p.icon) for p in svc.ui_pages
+        _page(p.path, p.label, p.icon, p.url_path) for p in svc.ui_pages
     ]
 
 for src_info in worker.list_sources():
     src = worker.source(src_info.name)
     nav[src_info.display_name] = [
-        _page(p.path, p.label, p.icon) for p in src.ui_pages
+        _page(p.path, p.label, p.icon, p.url_path) for p in src.ui_pages
     ]
 
 st.navigation(nav).run()
