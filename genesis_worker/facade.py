@@ -34,8 +34,13 @@ class GenesisWorker:
 
         # Catalog service uses the source registry; consumers can call
         # either ``worker.catalog_service.rescan()`` or the convenience
-        # ``worker.rescan_catalog()``.
-        self._catalog_service = CatalogService(self._source_registry)
+        # ``worker.rescan_catalog()``. The catalog is persisted at
+        # ``state_dir/catalog.json`` so its ``generated_at`` is stable across
+        # streamlit restarts when the vault hasn't changed (ADR-011).
+        self._catalog_service = CatalogService(
+            self._source_registry,
+            catalog_path=self._settings.paths.state_dir / "catalog.json",
+        )
 
         # Cached catalog. ``catalog()`` returns the most recent rescan;
         # ``rescan_catalog()`` always re-walks.
@@ -84,7 +89,14 @@ class GenesisWorker:
         Use :meth:`rescan_catalog` to force a fresh walk.
         """
         if self._catalog_cache is None:
-            self._catalog_cache = self._catalog_service.rescan()
+            # Try the persisted file first; fall back to a fresh rescan.
+            from .catalog_io import load_catalog
+
+            loaded = load_catalog(self._settings.paths.state_dir / "catalog.json")
+            if loaded is not None:
+                self._catalog_cache = loaded
+            else:
+                self._catalog_cache = self._catalog_service.rescan()
         return self._catalog_cache
 
     # --- Source / service inspection (for UI / CLI listings) ---------------
