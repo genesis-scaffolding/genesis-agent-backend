@@ -44,7 +44,7 @@ def test_registry_unknown_service_raises() -> None:
 
 
 def test_registry_all_returns_every_service() -> None:
-    assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {"llama_swap"}
+    assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {"llama_swap", "cptr"}
 
 
 def test_abstract_service_cannot_be_instantiated(tmp_path: Path) -> None:
