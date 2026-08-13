@@ -250,6 +250,12 @@ st.title("Config editor")
 st.caption("Inspect the live config + override individual model fields.")
 st.markdown(f"`{svc.config_path}`")
 
+regen_key = "regen-config-editor"
+if st.button("↻ Regenerate config", key=regen_key):
+    ok = worker.regenerate_service_config(SERVICE_NAME)
+    st.success("Regenerated") if ok else st.info("Already up to date")
+    st.rerun()
+
 catalog = worker.catalog()
 configs = svc.evaluate_model_config(catalog)
 overrides_store = svc.list_overrides()

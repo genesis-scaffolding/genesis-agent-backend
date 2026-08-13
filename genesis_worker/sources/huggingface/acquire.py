@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 
 from huggingface_hub import HfApi
@@ -421,6 +423,7 @@ class HfAcquireSession(AcquireSession):
             if main is None:
                 raise RuntimeError("internal: no selected_main when downloading")
             selected = [main, *self._state.selected_aux]
+            total_files = sum(len(g.paths) for g in selected)
             done = 0
             total = sum(s.size for s in selected if s.size is not None)
             for group in selected:
@@ -440,12 +443,23 @@ class HfAcquireSession(AcquireSession):
                         )
                         return
                     try:
-                        download(
-                            repo_id=self._state.repo_id,
-                            filename=path,
-                            cache_dir=str(self._cache_dir),
-                            revision=self._revision,
-                        )
+                        stderr_capture = StringIO()
+                        old_stderr = sys.stderr
+                        sys.stderr = stderr_capture
+                        try:
+                            download(
+                                repo_id=self._state.repo_id,
+                                filename=path,
+                                cache_dir=str(self._cache_dir),
+                                revision=self._revision,
+                            )
+                        finally:
+                            sys.stderr = old_stderr
+                        captured = stderr_capture.getvalue()
+                        if captured:
+                            for line in captured.rstrip().splitlines():
+                                if line.strip():
+                                    self._log_tail.append(f"[stderr] {line}")
                     except Exception as exc:  # noqa: BLE001
                         self._state.last_step = AcquireStep(
                             kind="failed",
@@ -467,6 +481,11 @@ class HfAcquireSession(AcquireSession):
                         )
                         return
                     done += group.size or 0
+                    file_index = min(done, total_files)
+                    self._log_tail.append(
+                        f"Progress: {done}/{total} bytes "
+                        f"({file_index}/{total_files} files)"
+                    )
                     self._state.last_step = AcquireStep(
                         kind="downloading",
                         title=f"Downloading {self._state.repo_id}",

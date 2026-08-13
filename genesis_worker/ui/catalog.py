@@ -23,6 +23,9 @@ with st.container(border=True):
     missing = "  — MISSING" if not vault.exists() else ""
     st.markdown(f"**Path:** `{vault}`{missing}")
 
+    if catalog.generated_at:
+        st.markdown(f"**Generated:** {catalog.generated_at}")
+
     total_entries = sum(len(v) for v in catalog_by_source.values())
     total_bytes = sum(e.total_bytes for entries in catalog_by_source.values() for e in entries)
     st.markdown(f"**Total:** {total_entries} models, {format_bytes(total_bytes)}")
