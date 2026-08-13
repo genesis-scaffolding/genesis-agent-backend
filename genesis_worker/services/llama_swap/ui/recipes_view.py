@@ -8,7 +8,7 @@ import yaml
 worker = st.session_state["worker"]
 svc = worker.service("llama_swap")
 
-st.header("Recipes")
+st.title("Recipes")
 st.caption("Read-only. Edits happen in the repo-root recipes.yaml during v1.")
 st.markdown(f"`{svc.recipes_path}`")
 

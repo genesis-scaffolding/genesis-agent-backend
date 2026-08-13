@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from genesis_worker.catalog_build import CatalogService
+from genesis_worker.catalog_build import CatalogService, compute_content_hash
+from genesis_worker.contracts import ModelEntry, ModelPiece
 from genesis_worker.registries import SourceRegistry
 from genesis_worker.settings import PathsSettings, Settings
 
@@ -37,30 +39,33 @@ def registry_for(fake_vault: Path) -> SourceRegistry:
 
 def test_rescan_merges_hf_and_lms(registry_for: SourceRegistry, fake_vault: Path) -> None:
     cat = CatalogService(registry_for).rescan()
-    assert len(cat.huggingface) == 1
-    assert len(cat.lmstudio) == 1
-    assert cat.huggingface[0].name == "acme/demo"
-    assert cat.lmstudio[0].name == "acme/demo-lm"
+    grouped = cat.by_source()
+    assert len(grouped["huggingface"]) == 1
+    assert len(grouped["lmstudio"]) == 1
+    assert grouped["huggingface"][0].name == "acme/demo"
+    assert grouped["lmstudio"][0].name == "acme/demo-lm"
     assert cat.root == str(fake_vault)
 
 
 def test_rescan_populates_total_bytes(registry_for: SourceRegistry) -> None:
     cat = CatalogService(registry_for).rescan()
-    assert cat.huggingface[0].total_bytes == 1024
-    assert cat.lmstudio[0].total_bytes == 512
+    grouped = cat.by_source()
+    assert grouped["huggingface"][0].total_bytes == 1024
+    assert grouped["lmstudio"][0].total_bytes == 512
 
 
 def test_rescan_handles_empty_vault(tmp_path: Path) -> None:
     registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
     cat = CatalogService(registry).rescan()
-    assert cat.huggingface == []
-    assert cat.lmstudio == []
+    assert cat.by_source() == {}
+    assert cat.entries == []
 
 
 def test_rescan_records_source_label(registry_for: SourceRegistry) -> None:
     cat = CatalogService(registry_for).rescan()
-    assert cat.huggingface[0].source == "huggingface"
-    assert cat.lmstudio[0].source == "lmstudio"
+    grouped = cat.by_source()
+    assert grouped["huggingface"][0].source == "huggingface"
+    assert grouped["lmstudio"][0].source == "lmstudio"
 
 
 # ---------------------------------------------------------------------------
@@ -69,21 +74,19 @@ def test_rescan_records_source_label(registry_for: SourceRegistry) -> None:
 
 
 def test_by_source_groups_entries(tmp_path: Path) -> None:
-    """``by_source()`` returns ``{field_name: [entries]}`` for every source field."""
+    """``by_source()`` groups entries by their ``source`` field."""
     registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
     cat = CatalogService(registry).rescan()
     grouped = cat.by_source()
-    assert set(grouped) == {"huggingface", "lmstudio"}
-    # Same object identity — accessor returns the field directly.
-    assert grouped["huggingface"] is cat.huggingface
-    assert grouped["lmstudio"] is cat.lmstudio
+    # Empty vault → no entries → no groups.
+    assert grouped == {}
 
 
 def test_by_source_works_for_empty_catalog(tmp_path: Path) -> None:
-    """An empty catalog returns ``{huggingface: [], lmstudio: []}``."""
+    """An empty catalog returns an empty grouping."""
     registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
     cat = CatalogService(registry).rescan()
-    assert cat.by_source() == {"huggingface": [], "lmstudio": []}
+    assert cat.by_source() == {}
 
 
 def test_by_source_after_population(registry_for: SourceRegistry) -> None:
@@ -94,3 +97,136 @@ def test_by_source_after_population(registry_for: SourceRegistry) -> None:
     assert len(grouped["lmstudio"]) == 1
     assert grouped["huggingface"][0].name == "acme/demo"
     assert grouped["lmstudio"][0].name == "acme/demo-lm"
+
+
+# ---------------------------------------------------------------------------
+# compute_content_hash — stable identity for the catalog
+# ---------------------------------------------------------------------------
+
+
+def _entry(name: str, source: str, total_bytes: int, pieces: list[ModelPiece]) -> ModelEntry:
+    return ModelEntry(
+        name=name,
+        source=source,
+        pieces=pieces,
+        total_bytes=total_bytes,
+        directory="",
+    )
+
+
+def _piece(role: str, filename: str, n: int) -> ModelPiece:
+    return ModelPiece(role=role, filename=filename, path=Path("/x"), bytes=n)
+
+
+def test_compute_content_hash_is_stable_across_calls() -> None:
+    """Same input → same hash. Pure function."""
+    entries = [_entry("a/b", "huggingface", 100, [_piece("main", "x.gguf", 100)])]
+    assert compute_content_hash(entries) == compute_content_hash(entries)
+
+
+def test_compute_content_hash_is_stable_under_reordering() -> None:
+    """Entry order doesn't matter — sort is by (source, name)."""
+    a = _entry("a/b", "huggingface", 100, [_piece("main", "x.gguf", 100)])
+    b = _entry("c/d", "lmstudio", 200, [_piece("main", "y.gguf", 200)])
+    assert compute_content_hash([a, b]) == compute_content_hash([b, a])
+
+
+def test_compute_content_hash_changes_when_piece_bytes_change() -> None:
+    e1 = _entry("a/b", "huggingface", 100, [_piece("main", "x.gguf", 100)])
+    e2 = _entry("a/b", "huggingface", 200, [_piece("main", "x.gguf", 200)])
+    assert compute_content_hash([e1]) != compute_content_hash([e2])
+
+
+def test_compute_content_hash_changes_when_piece_filename_changes() -> None:
+    e1 = _entry("a/b", "huggingface", 100, [_piece("main", "x.gguf", 100)])
+    e2 = _entry("a/b", "huggingface", 100, [_piece("main", "y.gguf", 100)])
+    assert compute_content_hash([e1]) != compute_content_hash([e2])
+
+
+def test_compute_content_hash_empty_is_stable() -> None:
+    """Empty entries → known-stable hash."""
+    expected = hashlib.sha256(b"[]").hexdigest()
+    assert compute_content_hash([]) == expected
+    assert compute_content_hash([]) == compute_content_hash([])
+
+
+def test_compute_content_hash_ignores_directory_notes_extra(tmp_path: Path) -> None:
+    """directory/notes/extra are not part of the hash."""
+    p = _piece("main", "x.gguf", 100)
+    base = ModelEntry(
+        name="a/b", source="huggingface", pieces=[p],
+        total_bytes=100, directory="/old/path", notes=[], extra={},
+    )
+    same = ModelEntry(
+        name="a/b", source="huggingface", pieces=[p],
+        total_bytes=100, directory="/totally/different", notes=["x"], extra={"k": "v"},
+    )
+    assert compute_content_hash([base]) == compute_content_hash([same])
+
+
+# ---------------------------------------------------------------------------
+# CatalogService — persistence + stable generated_at
+# ---------------------------------------------------------------------------
+
+
+def test_rescan_persists_on_first_call(registry_for: SourceRegistry, tmp_path: Path) -> None:
+    """First rescan writes catalog.json with a fresh generated_at."""
+    cat_path = tmp_path / "catalog.json"
+    svc = CatalogService(registry_for, catalog_path=cat_path)
+    cat = svc.rescan()
+    assert cat_path.is_file()
+    assert cat.generated_at  # non-empty
+
+
+def test_rescan_reuses_generated_at_when_content_unchanged(
+    registry_for: SourceRegistry, tmp_path: Path
+) -> None:
+    """Second rescan with no disk changes: file is not rewritten, generated_at matches disk."""
+    cat_path = tmp_path / "catalog.json"
+    svc = CatalogService(registry_for, catalog_path=cat_path)
+    first = svc.rescan()
+    mtime_after_first = cat_path.stat().st_mtime
+
+    second = svc.rescan()
+    assert second.generated_at == first.generated_at
+    # File untouched.
+    assert cat_path.stat().st_mtime == mtime_after_first
+
+
+def test_rescan_advances_generated_at_when_content_changes(
+    fake_vault: Path, tmp_path: Path
+) -> None:
+    """A new model in the vault → hash changes → file is rewritten, content_hash advances."""
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault)))
+    cat_path = tmp_path / "catalog.json"
+    svc = CatalogService(registry, catalog_path=cat_path)
+
+    first = svc.rescan()
+    first_hash = first.content_hash
+    mtime_after_first = cat_path.stat().st_mtime
+
+    # Add a new model directory.
+    new_repo = fake_vault / "huggingface" / "hub" / "models--new--one"
+    snapshot = new_repo / "snapshots" / "deadbeef"
+    snapshot.mkdir(parents=True)
+    (snapshot / "x.gguf").write_bytes(b"\x00" * 4096)
+    (new_repo / "refs" / "main").parent.mkdir(parents=True, exist_ok=True)
+    (new_repo / "refs" / "main").write_text("deadbeef")
+
+    second = svc.rescan()
+    # Hash must change; generated_at may coincide at second resolution but the
+    # file is rewritten because the hash differs.
+    assert second.content_hash != first_hash
+    assert cat_path.stat().st_mtime >= mtime_after_first
+
+
+def test_rescan_without_persistence_keeps_legacy_behaviour(tmp_path: Path) -> None:
+    """Without catalog_path, every rescan produces a fresh generated_at."""
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
+    svc = CatalogService(registry)
+    first = svc.rescan()
+    svc.rescan()
+    # generated_at has seconds resolution; both calls within the same second may
+    # coincide. The point is: no file is written.
+    assert first.generated_at  # populated
+    assert not (tmp_path / "catalog.json").exists()

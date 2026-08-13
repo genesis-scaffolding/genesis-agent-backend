@@ -250,6 +250,12 @@ st.title("Config editor")
 st.caption("Inspect the live config + override individual model fields.")
 st.markdown(f"`{svc.config_path}`")
 
+regen_key = "regen-config-editor"
+if st.button("↻ Regenerate config", key=regen_key):
+    ok = worker.regenerate_service_config(SERVICE_NAME)
+    st.success("Regenerated") if ok else st.info("Already up to date")
+    st.rerun()
+
 catalog = worker.catalog()
 configs = svc.evaluate_model_config(catalog)
 overrides_store = svc.list_overrides()
@@ -268,36 +274,38 @@ if last_gen is None or last_gen != catalog.generated_at:
         "Regenerate to pick up new models."
     )
 
-for entry_id, cfg in configs.items():
-    binary_name = Path(cfg.binary).name or "(no binary)"
-    label = (
-        f"{entry_id}  →  {binary_name}"
-        if cfg.matched_recipe is None
-        else f"{entry_id}  →  {binary_name}   (recipe: {cfg.matched_recipe})"
-    )
-    with st.expander(label):
-        st.subheader(cfg.name)
+with st.container(border=True):
+    st.subheader("Models")
+    for entry_id, cfg in configs.items():
+        binary_name = Path(cfg.binary).name or "(no binary)"
+        label = (
+            f"{entry_id}  →  {binary_name}"
+            if cfg.matched_recipe is None
+            else f"{entry_id}  →  {binary_name}   (recipe: {cfg.matched_recipe})"
+        )
+        with st.expander(label):
+            st.subheader(cfg.name)
 
-        st.markdown("**Files** _(auto-detected)_")
-        if cfg.files.main:
-            st.markdown(f"- model:    `{cfg.files.main}`")
-        if cfg.files.mmproj:
-            st.markdown(f"- mmproj:   `{cfg.files.mmproj}`")
-        if cfg.files.draft:
-            st.markdown(f"- draft:    `{cfg.files.draft}`")
-        if cfg.files.weight_bytes:
-            st.caption(f"weight: {cfg.files.weight_bytes / 1e9:.2f} GB")
+            st.markdown("**Files** _(auto-detected)_")
+            if cfg.files.main:
+                st.markdown(f"- model:    `{cfg.files.main}`")
+            if cfg.files.mmproj:
+                st.markdown(f"- mmproj:   `{cfg.files.mmproj}`")
+            if cfg.files.draft:
+                st.markdown(f"- draft:    `{cfg.files.draft}`")
+            if cfg.files.weight_bytes:
+                st.caption(f"weight: {cfg.files.weight_bytes / 1e9:.2f} GB")
 
-        st.divider()
+            st.divider()
 
-        st.markdown("**Effective configuration**")
-        _render_effective(cfg)
+            st.markdown("**Effective configuration**")
+            _render_effective(cfg)
 
-        st.divider()
+            st.divider()
 
-        _render_override_form(svc, entry_id, cfg, overrides_store.get(entry_id, {}))
+            _render_override_form(svc, entry_id, cfg, overrides_store.get(entry_id, {}))
 
-        st.divider()
+            st.divider()
 
-        with st.expander("Raw cmd"):
-            st.code(cfg.cmd)
+            with st.expander("Raw cmd"):
+                st.code(cfg.cmd)

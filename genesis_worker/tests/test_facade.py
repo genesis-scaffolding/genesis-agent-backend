@@ -70,3 +70,21 @@ def test_service_capabilities_distinguishes_web_ui(tmp_path: Path) -> None:
     # The contract documents that has_web_ui is about the service's own web UI
     # (e.g. llama-swap's :8080), not worker-managed Streamlit pages.
     assert caps.has_web_ui is True
+
+
+def test_facade_catalog_persists_across_instances(tmp_path: Path, monkeypatch) -> None:
+    """A catalog written by one worker survives across worker restarts."""
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.settings import PathsSettings, Settings
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    settings = Settings(paths=PathsSettings(state_dir=state_dir))
+    w1 = _GW(settings=settings)
+    first = w1.rescan_catalog()
+    assert (state_dir / "catalog.json").is_file()
+
+    w2 = _GW(settings=settings)
+    loaded = w2.catalog()
+    assert loaded.generated_at == first.generated_at
+    assert loaded.content_hash == first.content_hash

@@ -225,7 +225,7 @@ def test_evaluate_model_config_returns_empty_for_empty_catalog(tmp_path: Path) -
 
     catalog = Catalog(
         root=str(tmp_path), generated_at="2026-01-01T00:00:00+00:00",
-        huggingface=[], lmstudio=[],
+        content_hash="x", entries=[],
     )
     assert svc.evaluate_model_config(catalog) == {}
 

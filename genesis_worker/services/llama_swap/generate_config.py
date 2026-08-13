@@ -145,6 +145,22 @@ def _is_llm_candidate(entry: ModelEntry, source: str) -> bool:
     return any(p.role not in ("config",) for p in entry.pieces)
 
 
+def short_source_label(source: str) -> str:
+    """Stable short label for entry IDs. Strip non-alphanumerics and
+    lowercase, then take the first three characters.
+
+    Deterministic across runs and over arbitrarily-named future
+    sources. Historically ``"huggingface"`` and ``"lmstudio"`` had
+    hand-chosen labels (``"hf"``, ``"lms"``); after ADR-011 the labels
+    are derived, so they differ. That's fine — entry IDs regenerate
+    on every config rebuild.
+    """
+    if not source:
+        return "x"
+    cleaned = "".join(c for c in source.lower() if c.isalnum())
+    return (cleaned[:3] or "x")
+
+
 def detect_files(entry: ModelEntry) -> DetectedFiles:
     """Pick main / mmproj / draft paths from a catalog entry's pieces.
 
@@ -205,7 +221,7 @@ def make_entry_id(
             all_ids.add(candidate)
             return candidate
 
-    src_short = "hf" if source == "huggingface" else "lms"
+    src_short = short_source_label(source)
     candidate = f"{base}-{src_short}"
     if candidate not in all_ids:
         all_ids.add(candidate)
@@ -805,6 +821,7 @@ __all__ = [
     "make_display_name",
     "make_entry_id",
     "read_generated_at",
+    "short_source_label",
     "walk_models",
     "write_config",
 ]
