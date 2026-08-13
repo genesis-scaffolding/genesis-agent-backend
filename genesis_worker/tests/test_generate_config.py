@@ -240,13 +240,13 @@ def test_evaluate_all_filters_out_image_models(tmp_path: Path) -> None:
     catalog = Catalog(
         root="/tmp/vault",
         generated_at="2026-01-01T00:00:00+00:00",
-        huggingface=[
+        content_hash="x",
+        entries=[
             # GGUF — should pass filter and (with a matching recipe) yield an entry
             _gguf_entry("foo/llm-gguf"),
             # Image model (no GGUF pieces) — should be filtered out
             _image_entry("foo/some-sdxl"),
         ],
-        lmstudio=[],
     )
     recipes = Recipes(default=_recipe(parallel=1), matchable=[])
     out = evaluate_all(
@@ -259,8 +259,8 @@ def test_evaluate_all_returns_empty_when_no_match(tmp_path: Path) -> None:
     catalog = Catalog(
         root="/tmp/vault",
         generated_at="2026-01-01T00:00:00+00:00",
-        huggingface=[_gguf_entry("foo/llm")],
-        lmstudio=[],
+        content_hash="x",
+        entries=[_gguf_entry("foo/llm")],
     )
     recipes = Recipes(default=None, matchable=[])
     out = evaluate_all(
@@ -273,8 +273,8 @@ def test_evaluate_all_includes_overrides(tmp_path: Path) -> None:
     catalog = Catalog(
         root="/tmp/vault",
         generated_at="2026-01-01T00:00:00+00:00",
-        huggingface=[_gguf_entry("foo/llm")],
-        lmstudio=[],
+        content_hash="x",
+        entries=[_gguf_entry("foo/llm")],
     )
     recipes = Recipes(default=_recipe(parallel=1), matchable=[])
     out = evaluate_all(

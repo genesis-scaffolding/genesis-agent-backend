@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 from .contracts import Catalog, DiscoveredModel, ModelEntry
@@ -33,9 +35,8 @@ class CatalogService:
 
 
 def _build_catalog(discovered: list[DiscoveredModel], *, root: str) -> Catalog:
-    by_source: dict[str, list[ModelEntry]] = {"huggingface": [], "lmstudio": []}
-    for d in discovered:
-        entry = ModelEntry(
+    entries = [
+        ModelEntry(
             name=d.native_id,
             source=d.source,
             pieces=list(d.pieces),
@@ -44,13 +45,33 @@ def _build_catalog(discovered: list[DiscoveredModel], *, root: str) -> Catalog:
             notes=list(d.notes),
             extra=dict(d.extra),
         )
-        by_source.setdefault(d.source, []).append(entry)
+        for d in discovered
+    ]
     return Catalog(
         root=root,
         generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        huggingface=by_source.get("huggingface", []),
-        lmstudio=by_source.get("lmstudio", []),
+        content_hash=compute_content_hash(entries),
+        entries=entries,
     )
 
 
-__all__ = ["CatalogService"]
+def compute_content_hash(entries: list[ModelEntry]) -> str:
+    """Deterministic sha256-hex over the catalog's content-bearing fields.
+
+    Excludes ``directory``, ``notes``, and ``extra`` because those don't
+    affect what llama-swap would generate. Includes piece-level
+    ``role`` / ``filename`` / ``bytes`` so file additions and deletions
+    flip the hash.
+    """
+    norm = []
+    for e in sorted(entries, key=lambda x: (x.source, x.name)):
+        pieces = sorted(
+            ((p.role, p.filename, p.bytes) for p in e.pieces),
+            key=lambda t: (t[1], t[0], t[2]),
+        )
+        norm.append([e.source, e.name, e.total_bytes, pieces])
+    blob = json.dumps(norm, sort_keys=False, separators=(",", ":")).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+__all__ = ["CatalogService", "compute_content_hash"]

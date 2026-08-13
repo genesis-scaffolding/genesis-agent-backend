@@ -55,6 +55,7 @@ Migration is deferred because:
 - It changes the running `llama-swap`'s `config.yaml` path. Doing this while llama-swap is up requires downtime.
 - It's a one-time operation; no value in shipping it as part of v1.
 - ~~The new code's default paths already point at repo-root when those files exist there (ADR-004), so v1 works without migration.~~ **Revised by ADR-009:** `genesis_worker` now writes to `<data_dir>/llama-swap/` and reads recipes bundled inside the plugin, so it never touches the repo-root files. The two live side by side: `bin/` + `Makefile` drive the running llama-swap from repo-root state, and the package operates entirely on XDG paths. Migration is now a cutover of which one you run, not a file move.
+- ~~The new code's `Catalog` model carries named `huggingface` / `lmstudio` fields for byte-equivalence with `bin/catalog.py`'s YAML output.~~ **Retired by [ADR-011](adr-011-persistent-catalog-and-source-agnostic-shape.md):** the validation gate is closed, the framework/plugin boundary is the right organizing principle, and `Catalog` is now source-agnostic with a stable content hash.
 
 ## Status
 Accepted; the state-file rationale is revised by [ADR-009](adr-009-framework-plugin-boundary.md).

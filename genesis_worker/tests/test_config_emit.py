@@ -46,7 +46,7 @@ def real_recipes() -> Recipes:
 
 def test_detect_files_picks_largest_main(real_catalog) -> None:
     """For an entry with multiple main pieces, the largest is chosen."""
-    entry = real_catalog.huggingface[0]
+    entry = real_catalog.by_source()["huggingface"][0]
     files = detect_files(entry)
     if any(p.role == "main" for p in entry.pieces):
         assert files.main is not None

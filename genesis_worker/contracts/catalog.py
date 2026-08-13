@@ -46,22 +46,21 @@ class ModelEntry(BaseModel):
 class Catalog(BaseModel):
     """The unified catalog.
 
-    ``huggingface`` and ``lmstudio`` are named fields so the YAML output keeps the
-    shape ``bin/catalog.py`` produces (ADR-008). ADR-009 records this as a known
-    boundary exception; ``by_source()`` is how consumers avoid depending on it.
+    Source-agnostic: entries carry their own ``source`` (a string set by the
+    source plugin's ``name``). ``by_source()`` groups entries by that string.
+    See ADR-011 for why the named-field legacy was retired.
     """
 
+    schema_version: int = 1
     root: str
     generated_at: str
-    huggingface: list[ModelEntry] = Field(default_factory=list)
-    lmstudio: list[ModelEntry] = Field(default_factory=list)
+    content_hash: str
+    entries: list[ModelEntry] = Field(default_factory=list)
 
     def by_source(self) -> dict[str, list[ModelEntry]]:
         result: dict[str, list[ModelEntry]] = {}
-        for field_name in type(self).model_fields:
-            value = getattr(self, field_name)
-            if isinstance(value, list) and all(isinstance(v, ModelEntry) for v in value):
-                result[field_name] = value
+        for entry in self.entries:
+            result.setdefault(entry.source, []).append(entry)
         return result
 
 
