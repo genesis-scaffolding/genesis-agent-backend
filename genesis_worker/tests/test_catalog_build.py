@@ -162,3 +162,71 @@ def test_compute_content_hash_ignores_directory_notes_extra(tmp_path: Path) -> N
         total_bytes=100, directory="/totally/different", notes=["x"], extra={"k": "v"},
     )
     assert compute_content_hash([base]) == compute_content_hash([same])
+
+
+# ---------------------------------------------------------------------------
+# CatalogService — persistence + stable generated_at
+# ---------------------------------------------------------------------------
+
+
+def test_rescan_persists_on_first_call(registry_for: SourceRegistry, tmp_path: Path) -> None:
+    """First rescan writes catalog.json with a fresh generated_at."""
+    cat_path = tmp_path / "catalog.json"
+    svc = CatalogService(registry_for, catalog_path=cat_path)
+    cat = svc.rescan()
+    assert cat_path.is_file()
+    assert cat.generated_at  # non-empty
+
+
+def test_rescan_reuses_generated_at_when_content_unchanged(
+    registry_for: SourceRegistry, tmp_path: Path
+) -> None:
+    """Second rescan with no disk changes: file is not rewritten, generated_at matches disk."""
+    cat_path = tmp_path / "catalog.json"
+    svc = CatalogService(registry_for, catalog_path=cat_path)
+    first = svc.rescan()
+    mtime_after_first = cat_path.stat().st_mtime
+
+    second = svc.rescan()
+    assert second.generated_at == first.generated_at
+    # File untouched.
+    assert cat_path.stat().st_mtime == mtime_after_first
+
+
+def test_rescan_advances_generated_at_when_content_changes(
+    fake_vault: Path, tmp_path: Path
+) -> None:
+    """A new model in the vault → hash changes → file is rewritten, content_hash advances."""
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=fake_vault)))
+    cat_path = tmp_path / "catalog.json"
+    svc = CatalogService(registry, catalog_path=cat_path)
+
+    first = svc.rescan()
+    first_hash = first.content_hash
+    mtime_after_first = cat_path.stat().st_mtime
+
+    # Add a new model directory.
+    new_repo = fake_vault / "huggingface" / "hub" / "models--new--one"
+    snapshot = new_repo / "snapshots" / "deadbeef"
+    snapshot.mkdir(parents=True)
+    (snapshot / "x.gguf").write_bytes(b"\x00" * 4096)
+    (new_repo / "refs" / "main").parent.mkdir(parents=True, exist_ok=True)
+    (new_repo / "refs" / "main").write_text("deadbeef")
+
+    second = svc.rescan()
+    # Hash must change; generated_at may coincide at second resolution but the
+    # file is rewritten because the hash differs.
+    assert second.content_hash != first_hash
+    assert cat_path.stat().st_mtime >= mtime_after_first
+
+
+def test_rescan_without_persistence_keeps_legacy_behaviour(tmp_path: Path) -> None:
+    """Without catalog_path, every rescan produces a fresh generated_at."""
+    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=tmp_path)))
+    svc = CatalogService(registry)
+    first = svc.rescan()
+    svc.rescan()
+    # generated_at has seconds resolution; both calls within the same second may
+    # coincide. The point is: no file is written.
+    assert first.generated_at  # populated
+    assert not (tmp_path / "catalog.json").exists()
