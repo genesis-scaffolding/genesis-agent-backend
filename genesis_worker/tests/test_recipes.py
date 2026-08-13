@@ -8,7 +8,18 @@ import pytest
 import yaml
 
 from genesis_worker.paths import repo_root
-from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
+from genesis_worker.services.llama_swap.recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
+
+
+def test_bundled_default_recipe_has_no_binary() -> None:
+    """spec-007: the default recipe's binary field is removed; the framework
+    resolves the binary from the installable state instead."""
+    body = yaml.safe_load(BUNDLED_RECIPES_PATH.read_text())
+    default = body["recipes"]["default"]
+    assert "binary" not in default, (
+        "default recipe should not pin a binary; the framework manages it. "
+        f"Found: {default.get('binary')!r}"
+    )
 
 
 @pytest.fixture

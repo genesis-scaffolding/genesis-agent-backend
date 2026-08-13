@@ -205,6 +205,63 @@ def test_binary_falls_back_to_default_rel(options: BuildOptions) -> None:
     assert evaluated.provenance["binary"] == FieldSource.COMPUTED
 
 
+def test_default_binary_in_cascade(tmp_path: Path) -> None:
+    """``options.default_binary`` wins over the default recipe's binary and the legacy path."""
+    from genesis_worker.services.llama_swap.recipes import Recipe
+
+    default_binary = str(tmp_path / "framework-managed-llama-server")
+    options = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=default_binary,
+    )
+    recipe = _recipe()
+    default_recipe = Recipe(name="default", binary="vendor/somewhere/llama-server")
+    evaluated = _evaluate(recipe, options, default_recipe=default_recipe)
+    assert evaluated.binary == default_binary
+    assert evaluated.provenance["binary"] == FieldSource.COMPUTED
+
+
+def test_default_binary_none_falls_through_to_legacy(options: BuildOptions) -> None:
+    """``default_binary=None` keeps the legacy path as the resolved binary."""
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, options)
+    expected = str((options.repo_root / "vendor/llama.cpp/build/bin/llama-server").resolve())
+    assert evaluated.binary == expected
+
+
+def test_default_binary_loses_to_recipe_binary(tmp_path: Path) -> None:
+    """A per-model recipe's binary (e.g. bonsai) beats the service-managed default."""
+    options = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(tmp_path / "framework-llama-server"),
+    )
+    recipe = _recipe(binary="vendor/prism-llama.cpp/build/bin/llama-server")
+    evaluated = _evaluate(recipe, options)
+    assert evaluated.binary == str(
+        (tmp_path / "vendor/prism-llama.cpp/build/bin/llama-server").resolve()
+    )
+    assert evaluated.provenance["binary"] == FieldSource.RECIPE
+
+
+def test_cmd_emits_kv_unified_hardcoded(options: BuildOptions) -> None:
+    """``--kv-unified`` is hardcoded; b10375's default is off for ``n_slots=1``."""
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, options)
+    assert "--kv-unified" in evaluated.cmd
+    assert "--kv-unified" in evaluated.hardcoded_flags
+
+
+def test_cmd_emits_kv_unified_even_with_recipe_binary(tmp_path: Path) -> None:
+    """Per-model recipe binary doesn't suppress the hardcoded flags."""
+    options = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(tmp_path / "framework-llama-server"),
+    )
+    recipe = _recipe(binary="vendor/prism-llama.cpp/build/bin/llama-server")
+    evaluated = _evaluate(recipe, options)
+    assert "--kv-unified" in evaluated.cmd
+
+
 # ---------------------------------------------------------------------------
 # Sampling / chat_template_kwargs (no default-recipe fallback)
 # ---------------------------------------------------------------------------

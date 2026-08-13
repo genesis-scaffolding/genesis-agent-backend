@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -24,6 +25,15 @@ class LlamaSwapOptions(BaseModel):
     kv_quant_over_bytes: int = 25_000_000_000
     mmproj_offload_over_bytes: int = 25_000_000_000
     default_binary_rel: str = "vendor/llama.cpp/build/bin/llama-server"
+    # Which framework-managed llama-server binary the config generator
+    # should use as the default. ``"auto"`` picks via hardware detection:
+    # NVIDIA GPU + cuda installed → cuda; else vulkan; else cpu. The
+    # explicit ``"cuda" / "cpu" / "vulkan"`` overrides auto when the
+    # matching installable is on disk. ``None`` falls back to the legacy
+    # ``default_binary_rel`` path. Default is ``"auto"`` so the framework-
+    # managed binary wins without a one-time setup step. Override via
+    # ``GENESIS_SERVICES__LLAMA_SWAP__LLAMA_SERVER_VARIANT``.
+    llama_server_variant: Literal["auto", "cuda", "cpu", "vulkan"] | None = "auto"
 
     config_path: Path | None = None
     recipes_path: Path | None = None

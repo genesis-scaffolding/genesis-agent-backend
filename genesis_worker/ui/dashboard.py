@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from genesis_worker.utils.ui._install_flow import render_inline_install
 from genesis_worker.utils.ui._nav import to_relative as _to_relative
 
 worker = st.session_state["worker"]
@@ -113,6 +114,15 @@ with st.container(border=True):
                         ):
                             worker.stop_service(info.name)
                             st.rerun()
+                    elif not svc.is_available() and caps.can_install:
+                        installable = svc.primary_installable()
+                        if installable is not None:
+                            render_inline_install(
+                                installable,
+                                key_prefix=f"dash-{info.name}",
+                            )
+                        else:
+                            st.caption("Not installed")
                     else:
                         if st.button(
                             "Start",

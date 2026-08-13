@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
+import shlex
 import subprocess
 import time
 import urllib.error
@@ -16,6 +16,7 @@ _DEFAULT_HEALTH_TIMEOUT_S = 60.0
 
 
 def start_swap(
+    binary: Path,
     config: Path,
     listen_addr: str,
     session_name: str,
@@ -28,8 +29,8 @@ def start_swap(
     message on any failure mode (binary missing, config missing, did
     not become ready in time).
     """
-    if shutil.which("llama-swap") is None:
-        return StartResult(ok=False, message="llama-swap not on PATH")
+    if not binary.is_file():
+        return StartResult(ok=False, message=f"binary not found: {binary}")
     if not config.is_file():
         return StartResult(ok=False, message=f"config not found: {config}")
 
@@ -52,7 +53,8 @@ def start_swap(
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = (
-        f"llama-swap --config {config} -listen {listen_addr} -watch-config 2>&1 | tee -a {log_file}"
+        f"{shlex.quote(str(binary))} --config {shlex.quote(str(config))} "
+        f"-listen {listen_addr} -watch-config 2>&1 | tee -a {shlex.quote(str(log_file))}"
     )
     result = subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, cmd],

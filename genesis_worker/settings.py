@@ -10,10 +10,63 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .contracts import SecretsAccessor
 from .paths import repo_root, xdg_path
 
 # The directory the worker owns under each XDG base. Change it here to rename them all.
 XDG_BASE = "genesis-worker"
+
+
+@lru_cache(maxsize=1)
+def _read_secret_key(key: str) -> str | None:
+    """Read a secret from os.environ or the repo-root ``.env``.
+
+    Cached for the process lifetime. ``Settings(secrets=SecretsSettings(...))``
+    can override explicitly. Mirrors the existing ``_read_models_root``
+    pattern: pydantic-settings reads ``.env`` for its own fields but does
+    not populate ``os.environ``, so the dotenv fallback is required.
+    """
+    if key in os.environ:
+        v = os.environ[key]
+        return v if v else None
+    try:
+        from dotenv import dotenv_values
+
+        values = dotenv_values(".env")
+    except Exception:  # noqa: BLE001 — no .env or unreadable; fall through
+        return None
+    if not isinstance(values, dict):
+        return None
+    v = values.get(key)
+    return v if v else None
+
+
+class SecretsSettings(BaseModel):
+    """Framework-managed secrets. Plugins ask via :class:`SecretsAccessor`.
+
+    Bound to env via ``GENESIS_SECRETS__<KEY>`` (and the repo-root ``.env``
+    via ``Settings.env_file`` plus the ``_read_secret_key`` fallback).
+    """
+
+    github_token: str | None = Field(
+        default_factory=lambda: _read_secret_key("GENESIS_SECRETS__GITHUB_TOKEN")
+    )
+
+    def accessor(self) -> SecretsAccessor:
+        return _SettingsSecretsAccessor(self)
+
+
+class _SettingsSecretsAccessor(SecretsAccessor):
+    """Wraps a :class:`SecretsSettings` for the framework plugin contract."""
+
+    def __init__(self, settings: SecretsSettings) -> None:
+        self._data = settings.model_dump()
+
+    def get(self, name: str) -> str | None:
+        value = self._data.get(name)
+        if value is None or value == "":
+            return None
+        return str(value)
 
 
 @lru_cache(maxsize=1)
@@ -66,6 +119,8 @@ class Settings(BaseSettings):
 
     ``sources`` and ``services`` map a plugin name to its option slice. The
     framework never reads inside a slice; the plugin parses it at construction.
+    ``secrets`` is a typed store for framework-managed tokens (e.g. the
+    GitHub PAT used by service-install code paths).
     """
 
     model_config = SettingsConfigDict(
@@ -78,12 +133,23 @@ class Settings(BaseSettings):
     paths: PathsSettings = Field(default_factory=PathsSettings)
     sources: dict[str, dict[str, Any]] = Field(default_factory=dict)
     services: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    secrets: SecretsSettings = Field(default_factory=SecretsSettings)
 
     def options_for(self, axis: str, name: str) -> dict[str, Any]:
         return dict(getattr(self, axis).get(name, {}))
 
+    def secret(self, name: str) -> str | None:
+        """Read a framework-managed secret by name.
+
+        Returns ``None`` when the secret is unset. Plugins should use
+        ``ctx.secrets.get(name)`` rather than calling this directly.
+        """
+        return self.secrets.accessor().get(name)
+
 
 __all__ = [
     "PathsSettings",
+    "SecretsAccessor",
+    "SecretsSettings",
     "Settings",
 ]

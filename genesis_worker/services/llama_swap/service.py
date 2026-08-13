@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-import shutil
+import subprocess
 from pathlib import Path
 
 from ...contracts import (
@@ -11,6 +11,7 @@ from ...contracts import (
     InferenceService,
     ServiceCapabilities,
     ServiceContext,
+    ServiceInstall,
     ServiceResourceEstimate,
     ServiceStatus,
     StartResult,
@@ -27,6 +28,7 @@ from .generate_config import (
     read_generated_at,
     write_config,
 )
+from .installs import LlamaServerCPU, LlamaServerCUDA, LlamaServerVulkan, LlamaSwapBinary
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
 from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
@@ -50,15 +52,34 @@ class LlamaSwapService(InferenceService):
 
         self._recipes = RecipesStore(self._recipes_path)
         self._overrides = OverridesStore(self._overrides_path)
-        self._build_options = BuildOptions(
-            repo_root=ctx.repo_root,
-            kv_quant_over=opts.kv_quant_over_bytes,
-            mmproj_offload_over=opts.mmproj_offload_over_bytes,
-            default_binary_rel=opts.default_binary_rel,
+
+        self._llama_swap_install = LlamaSwapBinary(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+        self._llama_server_cuda_install = LlamaServerCUDA(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+        self._llama_server_cpu_install = LlamaServerCPU(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+        self._llama_server_vulkan_install = LlamaServerVulkan(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
         )
 
     def is_available(self) -> bool:
-        return shutil.which("llama-swap") is not None
+        return self._llama_swap_install.binary_path() is not None
 
     def capabilities(self) -> ServiceCapabilities:
         return ServiceCapabilities(
@@ -68,7 +89,146 @@ class LlamaSwapService(InferenceService):
             can_serve_image=False,
             can_train_models=False,
             has_web_ui=True,
+            can_install=True,
         )
+
+    def installs(self) -> list[ServiceInstall]:
+        return [
+            self._llama_swap_install,
+            self._llama_server_cuda_install,
+            self._llama_server_cpu_install,
+            self._llama_server_vulkan_install,
+        ]
+
+    def primary_installable(self) -> ServiceInstall | None:
+        """The llama-swap binary. The llama-server variants are not 'primary' — they
+        stay on the Binaries page because the variant pick (CUDA vs CPU vs Vulkan)
+        doesn't fit on the dashboard.
+        """
+        return self._llama_swap_install
+
+    def uninstall_installable(self, name: str, *, version: str | None = None) -> None:
+        """Remove an installable's installed version. Refuses if the service is running.
+
+        Without this guard, deleting the on-disk binary while the
+        process is running is a silent no-op: the running binary was
+        already exec'd into memory, so deletion succeeds, but our
+        later ``start()`` call can't find the file. Refusing up front
+        surfaces the conflict explicitly.
+        """
+        if self.is_running():
+            raise RuntimeError(
+                f"cannot uninstall {name!r} while {self.display_name} is running — "
+                "stop the service first"
+            )
+        for installable in self.installs():
+            if installable.name == name:
+                installable.uninstall(version=version)
+                return
+        raise KeyError(f"unknown installable {name!r}")
+
+    # --- llama-server variant resolution -----------------------------------
+    # The framework manages three llama-server installables (cuda / cpu /
+    # vulkan). The variant setting picks which one's binary the config
+    # generator uses as the default. ``auto`` runs ``nvidia-smi`` to
+    # decide between CUDA and the rest. ``None`` falls back to the legacy
+    # ``default_binary_rel`` path.
+
+    @property
+    def llama_server_variant(self) -> str | None:
+        return self._options.llama_server_variant
+
+    def set_llama_server_variant(self, variant: str | None) -> None:
+        """UI write path. ``None`` reverts to legacy fallback."""
+        if variant not in ("auto", "cuda", "cpu", "vulkan", None):
+            raise ValueError(
+                f"unknown variant {variant!r}; expected auto/cuda/cpu/vulkan or None"
+            )
+        self._options.llama_server_variant = variant  # type: ignore[assignment]
+
+    def _default_llama_server_binary(self) -> str | None:
+        """Resolve the configured variant to an installed binary path."""
+        variant = self.llama_server_variant
+        if variant is None:
+            return None
+        if variant == "auto":
+            return self._auto_resolve()
+        return self._variant_binary(f"llama-server-{variant}")
+
+    def _auto_resolve(self) -> str | None:
+        """Priority: NVIDIA + cuda installed → cuda; else vulkan; else cpu."""
+        if self._has_nvidia_gpu():
+            binary = self._variant_binary("llama-server-cuda")
+            if binary is not None:
+                return binary
+        binary = self._variant_binary("llama-server-vulkan")
+        if binary is not None:
+            return binary
+        return self._variant_binary("llama-server-cpu")
+
+    def _has_nvidia_gpu(self) -> bool:
+        """Probe ``nvidia-smi -L``. Robust against missing binary and hangs."""
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "-L"],
+                capture_output=True,
+                timeout=5,
+                text=True,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+        return result.returncode == 0 and "GPU" in result.stdout
+
+    def _variant_binary(self, name: str) -> str | None:
+        """Look up an installed variant by its installable name."""
+        for installable in self.installs():
+            if installable.name == name:
+                bp = installable.binary_path()
+                if bp is not None:
+                    return str(bp)
+        return None
+
+    def _build_options(self) -> BuildOptions:
+        """Build :class:`BuildOptions` with ``default_binary`` re-resolved.
+
+        Re-resolved on every call so newly installed variants are picked
+        up on the next config regen without restarting the worker.
+        """
+        return BuildOptions(
+            repo_root=self._ctx.repo_root,
+            kv_quant_over=self._options.kv_quant_over_bytes,
+            mmproj_offload_over=self._options.mmproj_offload_over_bytes,
+            default_binary=self._default_llama_server_binary(),
+            default_binary_rel=self._options.default_binary_rel,
+        )
+
+    def is_ready_to_serve(self) -> bool:
+        """True iff a llama-server binary is reachable for config generation.
+
+        Checked: the configured variant's binary is installed, or the
+        legacy ``default_binary_rel`` resolves to an existing file.
+        The Status and Config editor gates the "Regenerate config"
+        button on this so the user can't write a config whose cmd
+        references a missing binary.
+        """
+        if self._default_llama_server_binary() is not None:
+            return True
+        return self._legacy_binary_exists()
+
+    def _legacy_binary_exists(self) -> bool:
+        legacy = self._options.default_binary_rel
+        if legacy is None:
+            return False
+        path = Path(legacy)
+        if not path.is_absolute():
+            path = self._ctx.repo_root / path
+        return path.is_file()
+
+    def effective_llama_server_binary(self) -> str | None:
+        """Public name for the resolved binary path. The Status page uses
+        this to show what the config will pick."""
+        return self._default_llama_server_binary()
 
     def resource_estimate(self) -> ServiceResourceEstimate:
         return ServiceResourceEstimate(
@@ -136,7 +296,11 @@ class LlamaSwapService(InferenceService):
         return f"http://{self.public_host()}:{self._port()}/"
 
     def start(self) -> StartResult:
+        binary = self._llama_swap_install.binary_path()
+        if binary is None:
+            return StartResult(ok=False, message="llama-swap binary not installed")
         return lifecycle.start_swap(
+            binary=binary,
             config=self._config_path,
             listen_addr=self._options.listen_addr,
             session_name=self._options.session_name,
@@ -175,7 +339,7 @@ class LlamaSwapService(InferenceService):
             catalog,
             self._recipes.load(),
             overrides=self._overrides.load(),
-            options=self._build_options,
+            options=self._build_options(),
         )
         return write_config(
             self._config_path,
@@ -199,7 +363,7 @@ class LlamaSwapService(InferenceService):
             catalog,
             self._recipes.load(),
             overrides=self._overrides.load(),
-            options=self._build_options,
+            options=self._build_options(),
         )
 
     def list_overrides(self) -> dict[str, dict]:
@@ -234,6 +398,7 @@ class LlamaSwapService(InferenceService):
         ui_dir = Path(__file__).parent / "ui"
         return [
             UiPage("Status",        ":material/monitor:",   ui_dir / "status.py"),
+            UiPage("Binaries",      ":material/inventory_2:", ui_dir / "binaries.py"),
             UiPage("Config editor", ":material/tune:",      ui_dir / "config_editor.py"),
             UiPage("Recipes view",  ":material/menu_book:", ui_dir / "recipes_view.py"),
             UiPage("Pi export",     ":material/download:",  ui_dir / "pi_export.py"),

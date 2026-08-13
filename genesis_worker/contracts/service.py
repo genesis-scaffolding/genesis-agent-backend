@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .catalog import Catalog
 from .context import ServiceContext
+from .install import ServiceInstall
 from .plugin import Plugin
 from .ui import UiPage
 
@@ -32,6 +33,7 @@ class ServiceCapabilities:
     can_serve_image: bool
     can_train_models: bool
     has_web_ui: bool
+    can_install: bool = False
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,22 @@ class InferenceService(Plugin):
 
     @abstractmethod
     def wait_ready(self, timeout_s: float) -> bool: ...
+
+    # can_install
+
+    def installs(self) -> list[ServiceInstall]:
+        """Installables this plugin exposes. Empty list when ``can_install=False``."""
+        return []
+
+    def primary_installable(self) -> ServiceInstall | None:
+        """The installable whose presence makes ``is_available()`` True, if any.
+
+        The dashboard's one-click install button is driven by this. Default
+        ``None`` — services with no install axis or where the install details
+        are not yet modeled render their existing Start/Stop UI even when
+        unavailable.
+        """
+        return None
 
     # can_generate_config
 

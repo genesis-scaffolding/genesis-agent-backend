@@ -142,7 +142,6 @@ recipes:
   # cascaded defaults for any field a recipe omits.
   # ---------------------------------------------------------------------
   default:
-    binary: "vendor/llama.cpp/build/bin/llama-server"   # stock llama.cpp
     ctx_min: 131072                   # 128k floor for --fit-ctx (2^17)
     parallel: 1
     sampling:

@@ -111,12 +111,43 @@ def _render_override_form(
         new_overrides: dict = {}
 
         if cfg.binary is not None:
-            binary_default = current_overrides.get("binary", cfg.binary)
-            new_overrides["binary"] = st.text_input(
+            variant_options: list[str] = ["(use cascade)", "Custom path…"]
+            variant_values: list[str | None] = [None, "__custom__"]
+            for installable in svc.installs():
+                if not installable.name.startswith("llama-server-"):
+                    continue
+                bp = installable.binary_path()
+                if bp is None:
+                    continue
+                variant_options.append(f"{installable.name} ({bp})")
+                variant_values.append(str(bp))
+
+            current = current_overrides.get("binary")
+            if current is None:
+                current_idx = 0
+            elif current in variant_values:
+                current_idx = variant_values.index(current)
+            else:
+                current_idx = 1  # Custom path
+
+            choice = st.selectbox(
                 "Binary",
-                value=binary_default,
+                variant_options,
+                index=current_idx,
                 key=f"ov-{entry_id}-binary",
             )
+            if choice == "(use cascade)":
+                pass
+            elif choice == "Custom path…":
+                custom_default = current if current not in variant_values else ""
+                new_overrides["binary"] = st.text_input(
+                    "Custom binary path",
+                    value=custom_default,
+                    key=f"ov-{entry_id}-binary-custom",
+                )
+            else:
+                idx = variant_options.index(choice)
+                new_overrides["binary"] = variant_values[idx]
 
         if cfg.kv_cache is not None or "kv_cache" in current_overrides:
             kv_default = current_overrides.get("kv_cache", cfg.kv_cache or "")
@@ -251,7 +282,13 @@ st.caption("Inspect the live config + override individual model fields.")
 st.markdown(f"`{svc.config_path}`")
 
 regen_key = "regen-config-editor"
-if st.button("↻ Regenerate config", key=regen_key):
+ready = svc.is_ready_to_serve()
+if not ready:
+    st.warning(
+        "No llama-server binary is available. Install a variant via the "
+        "Binaries page or set the legacy fallback to a valid path."
+    )
+if st.button("↻ Regenerate config", key=regen_key, disabled=not ready):
     ok = worker.regenerate_service_config(SERVICE_NAME)
     st.success("Regenerated") if ok else st.info("Already up to date")
     st.rerun()
