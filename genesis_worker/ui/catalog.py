@@ -9,6 +9,23 @@ from genesis_worker.utils.ui._nav import to_relative as _to_relative
 
 worker = st.session_state["worker"]
 
+# --- Auto-refresh on acquire completion --------------------------------------
+# The acquire-session registry on the worker tracks every in-flight session.
+# When a new one transitions to ``complete`` since the last render, we rescan
+# the catalog so the user sees their newly downloaded model without having to
+# click "Rescan catalog". The set is updated after the comparison so a session
+# that completes mid-render triggers exactly one toast.
+last_seen_complete: set[str] = st.session_state.setdefault(
+    "catalog_last_seen_complete", set()
+)
+current_sessions = worker.list_acquire_sessions()
+newly_complete = {s["id"] for s in current_sessions if s["state"] == "complete"}
+if newly_complete - last_seen_complete:
+    catalog = worker.rescan_catalog()
+    total = sum(len(v) for v in catalog.by_source().values())
+    st.toast(f"Auto-refreshed after download — {total} models now")
+last_seen_complete |= newly_complete
+
 st.title("Model Catalog")
 
 # --- Section 1: vault summary + refresh -------------------------------------
@@ -40,8 +57,8 @@ with st.container(border=True):
 
     st.divider()
 
-    # Rescan is a destructive-feeling action (writes to ~/.cache/genesis-worker/),
-    # so we disable the button while running, show a spinner, and toast the count.
+    # Rescan rewrites state_dir/catalog.json when content has changed; we
+    # disable the button while running so the user doesn't double-click.
     rescanning = st.session_state.get("catalog_rescanning", False)
     if st.button(
         "↻ Rescan catalog",
