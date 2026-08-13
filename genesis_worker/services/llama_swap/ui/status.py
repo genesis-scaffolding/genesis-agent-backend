@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from genesis_worker.utils.ui._install_flow import render_inline_install
 from genesis_worker.utils.ui._nav import to_relative
 
 SERVICE_NAME = "llama_swap"
@@ -27,6 +28,12 @@ with st.container(border=True):
         if st.button("Stop", key="status-stop"):
             worker.stop_service(SERVICE_NAME)
             st.rerun()
+    elif not svc.is_available():
+        installable = svc.primary_installable()
+        if installable is not None:
+            render_inline_install(installable, key_prefix="status-llama_swap")
+        else:
+            st.caption("Not installed")
     else:
         if st.button("Start", key="status-start"):
             worker.start_service(SERVICE_NAME)

@@ -105,6 +105,13 @@ class LlamaSwapService(InferenceService):
             self._llama_server_vulkan_install,
         ]
 
+    def primary_installable(self) -> ServiceInstall | None:
+        """The llama-swap binary. The llama-server variants are not 'primary' — they
+        stay on the Binaries page because the variant pick (CUDA vs CPU vs Vulkan)
+        doesn't fit on the dashboard.
+        """
+        return self._llama_swap_install
+
     def uninstall_installable(self, name: str, *, version: str | None = None) -> None:
         """Remove an installable's installed version. Refuses if the service is running.
 

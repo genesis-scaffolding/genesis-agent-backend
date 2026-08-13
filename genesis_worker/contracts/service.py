@@ -112,6 +112,16 @@ class InferenceService(Plugin):
         """Installables this plugin exposes. Empty list when ``can_install=False``."""
         return []
 
+    def primary_installable(self) -> ServiceInstall | None:
+        """The installable whose presence makes ``is_available()`` True, if any.
+
+        The dashboard's one-click install button is driven by this. Default
+        ``None`` — services with no install axis or where the install details
+        are not yet modeled render their existing Start/Stop UI even when
+        unavailable.
+        """
+        return None
+
     # can_generate_config
 
     @property

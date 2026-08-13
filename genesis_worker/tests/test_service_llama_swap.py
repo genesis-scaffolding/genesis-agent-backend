@@ -278,6 +278,23 @@ def test_is_available_false_when_no_install(tmp_path: Path) -> None:
     assert svc.is_available() is False
 
 
+def test_primary_installable_returns_llama_swap_install(tmp_path: Path) -> None:
+    """The dashboard's install button drives the llama-swap binary, not a llama-server variant."""
+    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    primary = svc.primary_installable()
+    assert isinstance(primary, LlamaSwapBinary)
+    assert primary.name == "llama-swap"
+
+
+def test_primary_installable_is_set_even_when_not_installed(tmp_path: Path) -> None:
+    """The dashboard install button is gated by ``is_available()``, not by the installable existing."""
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    assert svc.is_available() is False
+    assert svc.primary_installable() is not None
+
+
 def test_is_available_true_when_llama_swap_installed(tmp_path: Path) -> None:
     """A laid-down v0.4.5 install with a real binary at the expected path."""
     from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
