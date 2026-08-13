@@ -123,15 +123,17 @@ Two callers in `genesis_worker/services/llama_swap/generate_config.py` use hardc
 
 ```python
 def short_source_label(source: str) -> str:
-    """Stable short label for entry IDs. Take consonants + first letters.
-    'huggingface' -> 'hf'; 'lmstudio' -> 'lms'; 'comfyui' -> 'cm'.
+    """Stable short label for entry IDs. Lowercase, strip non-alphanumerics,
+    take the first three characters.
+    'huggingface' -> 'hug'; 'lmstudio' -> 'lms'; 'comfyui' -> 'com'.
     """
     if not source:
         return "x"
-    # First letter of each underscore-delimited segment, up to 3 chars.
-    parts = source.split("_")
-    return "".join(p[0] for p in parts)[:3] or source[:3]
+    cleaned = "".join(c for c in source.lower() if c.isalnum())
+    return cleaned[:3] or "x"
 ```
+
+The historical hand-chosen labels (`"hf"`, `"lms"`) are intentionally not preserved — entry IDs regenerate on every config rebuild, and the new rule works uniformly for any future source.
 
 This rule is deterministic and survives adding new sources without per-source special cases.
 

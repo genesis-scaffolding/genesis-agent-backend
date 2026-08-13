@@ -21,6 +21,7 @@ from genesis_worker.services.llama_swap.generate_config import (
     detect_files,
     make_display_name,
     make_entry_id,
+    short_source_label,
     write_config,
 )
 from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
@@ -71,6 +72,26 @@ def test_make_entry_id_collision_suffixing(real_recipes: Recipes) -> None:
     )
     assert eid_thinking != eid_instruct
     assert "thinking" in eid_thinking or eid_thinking != eid_instruct
+
+
+def test_short_source_label_known_sources() -> None:
+    """Known sources produce deterministic short labels (first 3 alnum chars)."""
+    assert short_source_label("huggingface") == "hug"
+    assert short_source_label("lmstudio") == "lms"
+
+
+def test_short_source_label_handles_new_sources() -> None:
+    """A future source gets a deterministic short label without hardcoding."""
+    assert short_source_label("comfyui") == "com"
+    assert short_source_label("model_scope") == "mod"
+    assert short_source_label("civitai") == "civ"
+    assert short_source_label("Civit-AI") == "civ"
+
+
+def test_short_source_label_empty_returns_sentinel() -> None:
+    """Empty string returns a sentinel."""
+    assert short_source_label("") == "x"
+    assert short_source_label("___") == "x"
 
 
 def test_make_display_name_appends_variant() -> None:

@@ -63,7 +63,7 @@ class Catalog(BaseModel):
 
 ### Short-source label
 
-`genesis_worker/services/llama_swap/generate_config.py:208` currently does `src_short = "hf" if source == "huggingface" else "lms"`. Replace with a generic `short_source_label(source: str) -> str` helper that takes the first letter of each underscore-delimited segment, up to 3 characters. `"huggingface" → "hf"`, `"lmstudio" → "lms"`, `"comfyui" → "cm"`. Deterministic, no per-source special cases.
+`genesis_worker/services/llama_swap/generate_config.py:208` currently does `src_short = "hf" if source == "huggingface" else "lms"`. Replace with a generic `short_source_label(source: str) -> str` helper that lowercases the source, strips non-alphanumerics, and takes the first three characters. `"huggingface" → "hug"`, `"lmstudio" → "lms"`, `"comfyui" → "com"`. Deterministic, no per-source special cases. The historical hand-chosen labels (`"hf"`, `"lms"`) are intentionally not preserved — entry IDs regenerate on every config rebuild, and the new rule works uniformly for any future source.
 
 `_is_llm_candidate`'s `if source == "huggingface"` check stays — it's a per-source content filter (HF entries must contain `.gguf`), not a registry-of-names.
 
