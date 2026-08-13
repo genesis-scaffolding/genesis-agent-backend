@@ -9,7 +9,7 @@ import streamlit as st
 worker = st.session_state["worker"]
 svc = worker.service("llama_swap")
 
-st.header("Pi export")
+st.title("Pi export")
 st.caption("Export the pi-agent config (models.json) for llama-swap.")
 
 if st.button("Preview", key="pi-preview"):

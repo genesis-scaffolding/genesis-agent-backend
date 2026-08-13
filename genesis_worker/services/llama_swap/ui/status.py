@@ -11,9 +11,11 @@ SERVICE_NAME = "llama_swap"
 worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
 
+st.title(svc.display_name)
+
 # --- Service info + Configuration ------------------------------------------
 with st.container(border=True):
-    st.title(svc.display_name)
+    st.header("Service info")
 
     status = worker.service_status(SERVICE_NAME)
     if status.state.value == "running":
