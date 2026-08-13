@@ -140,16 +140,16 @@ def test_wait_ready_returns_false_on_timeout() -> None:
 
 
 @pytest.fixture
-def fake_swap_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Build a fake llama-swap on PATH and a writable /v1/models response.
+def fake_swap_env(tmp_path: Path):
+    """Build a fake llama-swap shim and a writable /v1/models response.
 
-    Yields the (config_path, listen_addr, session_name, log_file) tuple
-    the lifecycle helpers expect. Cleans up the tmux session on teardown.
+    Yields the (binary, config_path, listen_addr, session_name, log_file)
+    tuple the lifecycle helpers expect. Cleans up the tmux session on
+    teardown. No PATH manipulation — lifecycle takes binary explicitly.
     """
     port = _free_port()
     models_file = _make_models_json(tmp_path)
-    _make_fake_llama_swap(tmp_path, models_file, port)
-    monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ.get('PATH', '')}")
+    shim = _make_fake_llama_swap(tmp_path, models_file, port)
 
     config = tmp_path / "config.yaml"
     config.write_text("# fake config for test\n")
@@ -157,7 +157,7 @@ def fake_swap_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     session = "swap-test"
     log = tmp_path / "swap.log"
 
-    yield config, listen, session, log
+    yield shim, config, listen, session, log
 
     # Teardown: kill the session if it's still around.
     import subprocess
@@ -167,7 +167,7 @@ def fake_swap_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_start_then_status_running_then_stop(fake_swap_env) -> None:
     """Full lifecycle: start -> status==RUNNING -> stop -> status==STOPPED."""
-    config, listen, session, log = fake_swap_env
+    binary, config, listen, session, log = fake_swap_env
 
     # Start serves /v1/models from the http.server we already started.
     body = json.dumps({"data": [{"id": "x"}]}).encode()
@@ -175,7 +175,7 @@ def test_start_then_status_running_then_stop(fake_swap_env) -> None:
     _serve_in_background(port, body)
 
     result = lifecycle.start_swap(
-        config=config, listen_addr=listen, session_name=session,
+        binary=binary, config=config, listen_addr=listen, session_name=session,
         log_file=log, health_timeout_s=5.0,
     )
     assert result.ok, f"start_swap failed: {result.message}"
@@ -194,7 +194,7 @@ def test_start_then_status_running_then_stop(fake_swap_env) -> None:
 
 def test_stop_is_idempotent(fake_swap_env) -> None:
     """stop_swap returns ok=True when there's nothing to stop."""
-    _, _, session, _ = fake_swap_env
+    _, _, _, session, _ = fake_swap_env
     result = lifecycle.stop_swap(session)
     assert result.ok
     assert "no session" in result.message
@@ -297,24 +297,30 @@ def test_stop_swap_falls_back_to_hard_cleanup_on_timeout(
     assert lifecycle.is_running(session) is False
 
 
-def test_start_fails_when_binary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no llama-swap on PATH, start_swap returns ok=False with a clear message."""
-    # Strip PATH down to just essentials (no llama-swap).
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+def test_start_fails_when_binary_missing(tmp_path: Path) -> None:
+    """A binary path that doesn't exist fails before any tmux activity."""
     config = tmp_path / "config.yaml"
     config.write_text("x: 1\n")
     result = lifecycle.start_swap(
-        config=config, listen_addr="127.0.0.1:1",
-        session_name="swap-noop", log_file=tmp_path / "log",
+        binary=tmp_path / "missing-llama-swap",
+        config=config,
+        listen_addr="127.0.0.1:1",
+        session_name="swap-noop-binary",
+        log_file=tmp_path / "log",
         health_timeout_s=0.1,
     )
     assert result.ok is False
-    assert "PATH" in result.message
+    assert "binary not found" in result.message
+    assert not lifecycle.is_running("swap-noop-binary")
 
 
 def test_start_fails_when_config_missing(tmp_path: Path) -> None:
     """A missing config file fails before any tmux activity."""
+    binary = tmp_path / "fake-llama-swap"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
     result = lifecycle.start_swap(
+        binary=binary,
         config=tmp_path / "missing.yaml",
         listen_addr="127.0.0.1:1",
         session_name="swap-noop",

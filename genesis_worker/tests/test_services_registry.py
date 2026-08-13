@@ -110,17 +110,27 @@ def test_llama_swap_capabilities_declares_llm_serving(tmp_path: Path) -> None:
     assert caps.has_web_ui  # llama-swap has its own web UI on :8080
 
 
-def test_is_available_tracks_the_binary_only(tmp_path: Path, monkeypatch) -> None:
+def test_is_available_tracks_the_binary_only(tmp_path: Path) -> None:
     """Availability means the binary is installed. A missing config is not
     unavailability — the UI offers to generate one (ADR-009)."""
+    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+
     svc = LlamaSwapService(service_ctx(tmp_path))
     assert not svc.config_path.exists()
-
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/llama-swap")
-    assert svc.is_available() is True
-
-    monkeypatch.setattr("shutil.which", lambda _: None)
     assert svc.is_available() is False
+
+    # Lay down a v0.4.5 install with a real binary at the expected path.
+    installable = svc.installs()[0]
+    assert isinstance(installable, LlamaSwapBinary)
+    version = "v0.4.5"
+    install_root = installable._layout.installs_root / version
+    install_root.mkdir(parents=True)
+    binary = install_root / "llama-swap"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    installable._layout.set_current_symlink(version)
+
+    assert svc.is_available() is True
 
 
 def test_lifecycle_methods_exist(tmp_path: Path) -> None:

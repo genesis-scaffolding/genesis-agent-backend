@@ -6,7 +6,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from .catalog_build import CatalogService
-from .contracts import AcquireSession, Catalog, InferenceService, ModelSource
+from .contracts import AcquireSession, Catalog, InferenceService, ModelSource, SecretsAccessor
 from .models import ServiceInfo, SourceInfo
 from .registries import ServiceRegistry, SourceRegistry
 
@@ -75,6 +75,19 @@ class GenesisWorker:
     def catalog_service(self) -> CatalogService:
         """The :class:`CatalogService` — escape hatch for advanced consumers."""
         return self._catalog_service
+
+    @property
+    def secrets(self) -> SecretsAccessor:
+        """Framework-managed secrets accessor (ADR-012).
+
+        Plugins read secrets via ``ctx.secrets.get(name)``; this method is
+        for tests and CLIs that need direct access.
+        """
+        return self._settings.secrets.accessor()
+
+    def secret(self, name: str) -> str | None:
+        """Convenience: ``self.secrets.get(name)``."""
+        return self._settings.secrets.accessor().get(name)
 
     # --- Catalog ------------------------------------------------------------
 

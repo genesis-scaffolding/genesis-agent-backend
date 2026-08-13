@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from genesis_worker.contracts import ServiceContext, SourceContext
+from genesis_worker.contracts import (
+    NoSecretsAccessor,
+    SecretsAccessor,
+    ServiceContext,
+    SourceContext,
+)
 
 
 def _dirs(root: Path) -> dict[str, Path]:
@@ -24,6 +29,7 @@ def source_ctx(
     name: str = "test-source",
     local_path: Path | None = None,
     options: dict[str, Any] | None = None,
+    secrets: SecretsAccessor | None = None,
 ) -> SourceContext:
     root = root if root is not None else (local_path or Path("."))
     return SourceContext(
@@ -32,6 +38,7 @@ def source_ctx(
         options=options or {},
         local_path=local_path if local_path is not None else root / "vault",
         vault_path=root / "vault",
+        secrets=secrets if secrets is not None else NoSecretsAccessor(),
         **_dirs(root),
     )
 
@@ -41,11 +48,13 @@ def service_ctx(
     *,
     name: str = "test-service",
     options: dict[str, Any] | None = None,
+    secrets: SecretsAccessor | None = None,
 ) -> ServiceContext:
     return ServiceContext(
         name=name,
         repo_root=root,
         options=options or {},
+        secrets=secrets if secrets is not None else NoSecretsAccessor(),
         **_dirs(root),
     )
 

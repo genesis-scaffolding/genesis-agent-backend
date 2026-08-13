@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 from ...contracts import (
@@ -11,6 +10,7 @@ from ...contracts import (
     InferenceService,
     ServiceCapabilities,
     ServiceContext,
+    ServiceInstall,
     ServiceResourceEstimate,
     ServiceStatus,
     StartResult,
@@ -27,6 +27,7 @@ from .generate_config import (
     read_generated_at,
     write_config,
 )
+from .installs import LlamaServerCPU, LlamaServerCUDA, LlamaServerVulkan, LlamaSwapBinary
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
 from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
@@ -57,8 +58,33 @@ class LlamaSwapService(InferenceService):
             default_binary_rel=opts.default_binary_rel,
         )
 
+        self._llama_swap_install = LlamaSwapBinary(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+        self._llama_server_cuda_install = LlamaServerCUDA(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+        self._llama_server_cpu_install = LlamaServerCPU(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+        self._llama_server_vulkan_install = LlamaServerVulkan(
+            data_dir=ctx.data_dir,
+            cache_dir=ctx.cache_dir,
+            state_dir=ctx.state_dir,
+            secrets=ctx.secrets,
+        )
+
     def is_available(self) -> bool:
-        return shutil.which("llama-swap") is not None
+        return self._llama_swap_install.binary_path() is not None
 
     def capabilities(self) -> ServiceCapabilities:
         return ServiceCapabilities(
@@ -68,7 +94,36 @@ class LlamaSwapService(InferenceService):
             can_serve_image=False,
             can_train_models=False,
             has_web_ui=True,
+            can_install=True,
         )
+
+    def installs(self) -> list[ServiceInstall]:
+        return [
+            self._llama_swap_install,
+            self._llama_server_cuda_install,
+            self._llama_server_cpu_install,
+            self._llama_server_vulkan_install,
+        ]
+
+    def uninstall_installable(self, name: str, *, version: str | None = None) -> None:
+        """Remove an installable's installed version. Refuses if the service is running.
+
+        Without this guard, deleting the on-disk binary while the
+        process is running is a silent no-op: the running binary was
+        already exec'd into memory, so deletion succeeds, but our
+        later ``start()`` call can't find the file. Refusing up front
+        surfaces the conflict explicitly.
+        """
+        if self.is_running():
+            raise RuntimeError(
+                f"cannot uninstall {name!r} while {self.display_name} is running — "
+                "stop the service first"
+            )
+        for installable in self.installs():
+            if installable.name == name:
+                installable.uninstall(version=version)
+                return
+        raise KeyError(f"unknown installable {name!r}")
 
     def resource_estimate(self) -> ServiceResourceEstimate:
         return ServiceResourceEstimate(
@@ -136,7 +191,11 @@ class LlamaSwapService(InferenceService):
         return f"http://{self.public_host()}:{self._port()}/"
 
     def start(self) -> StartResult:
+        binary = self._llama_swap_install.binary_path()
+        if binary is None:
+            return StartResult(ok=False, message="llama-swap binary not installed")
         return lifecycle.start_swap(
+            binary=binary,
             config=self._config_path,
             listen_addr=self._options.listen_addr,
             session_name=self._options.session_name,
@@ -234,6 +293,7 @@ class LlamaSwapService(InferenceService):
         ui_dir = Path(__file__).parent / "ui"
         return [
             UiPage("Status",        ":material/monitor:",   ui_dir / "status.py"),
+            UiPage("Binaries",      ":material/inventory_2:", ui_dir / "binaries.py"),
             UiPage("Config editor", ":material/tune:",      ui_dir / "config_editor.py"),
             UiPage("Recipes view",  ":material/menu_book:", ui_dir / "recipes_view.py"),
             UiPage("Pi export",     ":material/download:",  ui_dir / "pi_export.py"),

@@ -67,6 +67,25 @@ with st.container(border=True):
             st.switch_page(to_relative(config_editor.path))
 
 
+# --- Binaries --------------------------------------------------------------
+
+with st.container(border=True):
+    st.subheader("Binaries")
+
+    for installable in svc.installs():
+        version = installable.installed_version() or "—"
+        state = "installed" if installable.binary_path() else "not installed"
+        cols = st.columns([3, 2, 1])
+        with cols[0]:
+            st.markdown(f"**{installable.name}**")
+        with cols[1]:
+            st.write(f"{state} · {version}")
+        with cols[2]:
+            binaries_page = next(p for p in svc.ui_pages if p.label == "Binaries")
+            if st.button("Manage →", key=f"status-binaries-{installable.name}"):
+                st.switch_page(to_relative(binaries_page.path))
+
+
 # --- Console ---------------------------------------------------------------
 # Live tail of the lifecycle log file. The fragment reruns on its own
 # schedule so the rest of the page stays stable while the user clicks

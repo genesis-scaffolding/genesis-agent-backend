@@ -87,6 +87,7 @@ class SourceRegistry(_Registry):
             options=options,
             local_path=self._resolve_local_path(cls, options),
             vault_path=self.vault_path,
+            secrets=self._settings.secrets.accessor(),
             **self._dirs(cls),
         )
 
@@ -125,6 +126,7 @@ class ServiceRegistry(_Registry):
             name=cls.name,
             repo_root=self._settings.paths.resolved_repo_root,
             options=self._settings.options_for("services", cls.name),
+            secrets=self._settings.secrets.accessor(),
             **self._dirs(cls),
         )
 
