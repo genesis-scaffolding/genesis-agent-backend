@@ -56,12 +56,19 @@ class BuildOptions:
 
     ``repo_root`` has no default on purpose: relative binary paths in recipes resolve
     against it, and a plugin cannot know where the checkout lives. The framework does.
+
+    ``default_binary`` is the resolved framework-managed llama-server binary path
+    (chosen via the service's variant setting). It beats the default recipe's
+    bundled ``binary`` field but loses to per-model recipe ``binary`` overrides
+    (e.g. bonsai → prism-llama.cpp). ``default_binary_rel`` stays as the final
+    safety net for users who haven't migrated to the variant workflow.
     """
 
     repo_root: Path
     kv_quant_over: int = DEFAULT_KV_QUANT_OVER
     mmproj_offload_over: int = DEFAULT_MMPROJ_OFFLOAD_OVER
     default_binary_rel: str = DEFAULT_BINARY_REL
+    default_binary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +116,7 @@ class EvaluatedConfig:
     cmd: str
 
     hardcoded_flags: tuple[str, ...] = (
+        "--kv-unified",
         "--jinja",
         "-fa on",
         "--port ${PORT}",
@@ -341,10 +349,11 @@ def evaluate_recipe(
     """
     ovr = overrides or {}
 
-    # --- binary (4-level) ---
+    # --- binary (5-level) ---
     binary_str = (
         ovr.get("binary")
         or recipe.binary
+        or options.default_binary
         or binary_override
         or (default_recipe.binary if default_recipe else None)
         or options.default_binary_rel
@@ -354,7 +363,7 @@ def evaluate_recipe(
         binary_source = FieldSource.OVERRIDE
     elif recipe.binary:
         binary_source = FieldSource.RECIPE
-    elif binary_override:
+    elif options.default_binary or binary_override:
         binary_source = FieldSource.COMPUTED
     elif default_recipe and default_recipe.binary:
         binary_source = FieldSource.DEFAULT
@@ -538,7 +547,7 @@ def cmd_from_evaluated_dict(
             ["--reasoning-budget-message", shlex.quote(reasoning_budget_message)]
         )
 
-    runtime.extend(["--jinja", "-fa", "on"])
+    runtime.extend(["--kv-unified", "--jinja", "-fa", "on"])
     sections.append("  " + " ".join(runtime) + " \\")
 
     sections.append("  --port ${PORT} --host 127.0.0.1 \\")

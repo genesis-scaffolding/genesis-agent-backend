@@ -342,6 +342,217 @@ def test_llama_server_cuda_binary_path_resolves_nested_layout(tmp_path: Path) ->
     assert installable.binary_path() == binary
 
 
+# ---------------------------------------------------------------------------
+# Variant resolution: the Heart of spec-007
+# ---------------------------------------------------------------------------
+
+
+def _install_variant(svc: LlamaSwapService, name: str, version: str = "v1") -> Path:
+    """Lay down a fake install for the named variant, return the binary path."""
+    for installable in svc.installs():
+        if installable.name == name:
+            layout = installable._layout  # type: ignore[attr-defined]  # noqa: SLF001
+            install_root = layout.installs_root / version
+            install_root.mkdir(parents=True)
+            binary = install_root / "llama-server"
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+            layout.set_current_symlink(version)
+            return binary
+    raise KeyError(name)
+
+
+def _variant_for_name(svc: LlamaSwapService, name: str):
+    """Return the installable instance for the named variant."""
+    for installable in svc.installs():
+        if installable.name == name:
+            return installable
+    raise KeyError(name)
+
+
+def test_variant_resolution_explicit_installed(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "cuda"}))
+    binary = _install_variant(svc, "llama-server-cuda")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_variant_resolution_explicit_missing_returns_none(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "cuda"}))
+    # No install laid down.
+    assert svc._default_llama_server_binary() is None  # noqa: SLF001
+
+
+def test_variant_resolution_default_is_auto() -> None:
+    """The default value of ``LlamaSwapOptions.llama_server_variant`` is ``"auto"``."""
+    from genesis_worker.services.llama_swap.options import LlamaSwapOptions
+
+    assert LlamaSwapOptions().llama_server_variant == "auto"
+
+
+def test_variant_resolution_unset_returns_none(tmp_path: Path) -> None:
+    """Explicit ``None`` → cascade falls back to legacy fallback."""
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": None}))
+    assert svc._default_llama_server_binary() is None  # noqa: SLF001
+
+
+def test_variant_resolution_auto_picks_cuda_when_nvidia(tmp_path: Path, monkeypatch) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
+    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: True)
+    binary = _install_variant(svc, "llama-server-cuda")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_variant_resolution_auto_picks_vulkan_when_no_nvidia(tmp_path: Path, monkeypatch) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
+    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
+    binary = _install_variant(svc, "llama-server-vulkan")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_variant_resolution_auto_falls_back_to_cpu(tmp_path: Path, monkeypatch) -> None:
+    """No NVIDIA, no Vulkan installed — CPU is the last resort."""
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
+    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
+    binary = _install_variant(svc, "llama-server-cpu")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_variant_resolution_auto_returns_none_when_nothing_installed(tmp_path: Path, monkeypatch) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
+    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
+    assert svc._default_llama_server_binary() is None  # noqa: SLF001
+
+
+def test_is_ready_to_serve_true_with_variant_installed(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "cuda"}))
+    _install_variant(svc, "llama-server-cuda")
+    assert svc.is_ready_to_serve() is True
+
+
+def test_is_ready_to_serve_false_when_variant_missing_and_legacy_missing(tmp_path: Path) -> None:
+    """Variant set, no install, no legacy path → not ready."""
+    svc = LlamaSwapService(
+        service_ctx(
+            tmp_path,
+            options={"llama_server_variant": "cuda", "default_binary_rel": "/nonexistent/path"},
+        )
+    )
+    assert svc.is_ready_to_serve() is False
+
+
+def test_is_ready_to_serve_true_with_legacy_path_exists(tmp_path: Path) -> None:
+    """Variant unset, legacy path exists → ready (legacy fallback works)."""
+    legacy = tmp_path / "legacy-server"
+    legacy.write_text("#!/bin/sh\nexit 0\n")
+    legacy.chmod(0o755)
+    svc = LlamaSwapService(
+        service_ctx(
+            tmp_path,
+            options={"llama_server_variant": None, "default_binary_rel": str(legacy)},
+        )
+    )
+    assert svc.is_ready_to_serve() is True
+
+
+def test_set_llama_server_variant_persists_in_service_options(tmp_path: Path) -> None:
+    """Setting via the API updates the read-back property."""
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": None}))
+    assert svc.llama_server_variant is None
+    svc.set_llama_server_variant("cuda")
+    assert svc.llama_server_variant == "cuda"
+    svc.set_llama_server_variant(None)
+    assert svc.llama_server_variant is None
+
+
+def test_set_llama_server_variant_rejects_unknown(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    with pytest.raises(ValueError, match="unknown variant"):
+        svc.set_llama_server_variant("metaverse")
+
+
+def test_evaluate_model_config_uses_framework_binary_for_qwen_recipe(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A qwen3.6 entry evaluates to the framework-managed binary, not the legacy path."""
+    from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
+
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "cuda"}))
+    binary = _install_variant(svc, "llama-server-cuda")
+
+    catalog = Catalog(
+        root=str(tmp_path),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            ModelEntry(
+                source="huggingface",
+                name="org/qwen3.6-gguf",
+                total_bytes=1_000_000_000,
+                directory=str(tmp_path / "org" / "qwen3.6-gguf"),
+                pieces=[
+                    ModelPiece(
+                        path=tmp_path / "model.gguf",
+                        filename="model.gguf",
+                        bytes=1_000_000_000,
+                        role="main",
+                    )
+                ],
+                notes=[],
+                extra={},
+            )
+        ],
+    )
+    configs = svc.evaluate_model_config(catalog)
+    # qwen3.6 has multiple recipes (thinking + instruct), so the entry ID gets a suffix.
+    assert "qwen3-6-gguf-thinking" in configs
+    assert configs["qwen3-6-gguf-thinking"].binary == str(binary)
+
+
+def test_evaluate_model_config_falls_back_to_legacy_when_no_variant(
+    tmp_path: Path,
+) -> None:
+    """No variant installed, no variant setting → legacy path is used."""
+    from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
+
+    legacy = tmp_path / "legacy-server"
+    legacy.write_text("#!/bin/sh\nexit 0\n")
+    legacy.chmod(0o755)
+
+    svc = LlamaSwapService(
+        service_ctx(
+            tmp_path,
+            options={"llama_server_variant": None, "default_binary_rel": str(legacy)},
+        )
+    )
+
+    catalog = Catalog(
+        root=str(tmp_path),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            ModelEntry(
+                source="huggingface",
+                name="org/qwen3.6-gguf",
+                total_bytes=1_000_000_000,
+                directory=str(tmp_path / "org" / "qwen3.6-gguf"),
+                pieces=[
+                    ModelPiece(
+                        path=tmp_path / "model.gguf",
+                        filename="model.gguf",
+                        bytes=1_000_000_000,
+                        role="main",
+                    )
+                ],
+                notes=[],
+                extra={},
+            )
+        ],
+    )
+    configs = svc.evaluate_model_config(catalog)
+    assert "qwen3-6-gguf-thinking" in configs
+    assert configs["qwen3-6-gguf-thinking"].binary == str(legacy)
+
+
 def test_installs_returns_four_entries_duplicate(tmp_path: Path) -> None:
     """Sanity check: variant ordering on each construction."""
     svc = LlamaSwapService(service_ctx(tmp_path))

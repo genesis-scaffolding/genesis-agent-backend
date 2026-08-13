@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from ...contracts import (
@@ -51,12 +52,6 @@ class LlamaSwapService(InferenceService):
 
         self._recipes = RecipesStore(self._recipes_path)
         self._overrides = OverridesStore(self._overrides_path)
-        self._build_options = BuildOptions(
-            repo_root=ctx.repo_root,
-            kv_quant_over=opts.kv_quant_over_bytes,
-            mmproj_offload_over=opts.mmproj_offload_over_bytes,
-            default_binary_rel=opts.default_binary_rel,
-        )
 
         self._llama_swap_install = LlamaSwapBinary(
             data_dir=ctx.data_dir,
@@ -131,6 +126,109 @@ class LlamaSwapService(InferenceService):
                 installable.uninstall(version=version)
                 return
         raise KeyError(f"unknown installable {name!r}")
+
+    # --- llama-server variant resolution -----------------------------------
+    # The framework manages three llama-server installables (cuda / cpu /
+    # vulkan). The variant setting picks which one's binary the config
+    # generator uses as the default. ``auto`` runs ``nvidia-smi`` to
+    # decide between CUDA and the rest. ``None`` falls back to the legacy
+    # ``default_binary_rel`` path.
+
+    @property
+    def llama_server_variant(self) -> str | None:
+        return self._options.llama_server_variant
+
+    def set_llama_server_variant(self, variant: str | None) -> None:
+        """UI write path. ``None`` reverts to legacy fallback."""
+        if variant not in ("auto", "cuda", "cpu", "vulkan", None):
+            raise ValueError(
+                f"unknown variant {variant!r}; expected auto/cuda/cpu/vulkan or None"
+            )
+        self._options.llama_server_variant = variant  # type: ignore[assignment]
+
+    def _default_llama_server_binary(self) -> str | None:
+        """Resolve the configured variant to an installed binary path."""
+        variant = self.llama_server_variant
+        if variant is None:
+            return None
+        if variant == "auto":
+            return self._auto_resolve()
+        return self._variant_binary(f"llama-server-{variant}")
+
+    def _auto_resolve(self) -> str | None:
+        """Priority: NVIDIA + cuda installed → cuda; else vulkan; else cpu."""
+        if self._has_nvidia_gpu():
+            binary = self._variant_binary("llama-server-cuda")
+            if binary is not None:
+                return binary
+        binary = self._variant_binary("llama-server-vulkan")
+        if binary is not None:
+            return binary
+        return self._variant_binary("llama-server-cpu")
+
+    def _has_nvidia_gpu(self) -> bool:
+        """Probe ``nvidia-smi -L``. Robust against missing binary and hangs."""
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "-L"],
+                capture_output=True,
+                timeout=5,
+                text=True,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+        return result.returncode == 0 and "GPU" in result.stdout
+
+    def _variant_binary(self, name: str) -> str | None:
+        """Look up an installed variant by its installable name."""
+        for installable in self.installs():
+            if installable.name == name:
+                bp = installable.binary_path()
+                if bp is not None:
+                    return str(bp)
+        return None
+
+    def _build_options(self) -> BuildOptions:
+        """Build :class:`BuildOptions` with ``default_binary`` re-resolved.
+
+        Re-resolved on every call so newly installed variants are picked
+        up on the next config regen without restarting the worker.
+        """
+        return BuildOptions(
+            repo_root=self._ctx.repo_root,
+            kv_quant_over=self._options.kv_quant_over_bytes,
+            mmproj_offload_over=self._options.mmproj_offload_over_bytes,
+            default_binary=self._default_llama_server_binary(),
+            default_binary_rel=self._options.default_binary_rel,
+        )
+
+    def is_ready_to_serve(self) -> bool:
+        """True iff a llama-server binary is reachable for config generation.
+
+        Checked: the configured variant's binary is installed, or the
+        legacy ``default_binary_rel`` resolves to an existing file.
+        The Status and Config editor gates the "Regenerate config"
+        button on this so the user can't write a config whose cmd
+        references a missing binary.
+        """
+        if self._default_llama_server_binary() is not None:
+            return True
+        return self._legacy_binary_exists()
+
+    def _legacy_binary_exists(self) -> bool:
+        legacy = self._options.default_binary_rel
+        if legacy is None:
+            return False
+        path = Path(legacy)
+        if not path.is_absolute():
+            path = self._ctx.repo_root / path
+        return path.is_file()
+
+    def effective_llama_server_binary(self) -> str | None:
+        """Public name for the resolved binary path. The Status page uses
+        this to show what the config will pick."""
+        return self._default_llama_server_binary()
 
     def resource_estimate(self) -> ServiceResourceEstimate:
         return ServiceResourceEstimate(
@@ -241,7 +339,7 @@ class LlamaSwapService(InferenceService):
             catalog,
             self._recipes.load(),
             overrides=self._overrides.load(),
-            options=self._build_options,
+            options=self._build_options(),
         )
         return write_config(
             self._config_path,
@@ -265,7 +363,7 @@ class LlamaSwapService(InferenceService):
             catalog,
             self._recipes.load(),
             overrides=self._overrides.load(),
-            options=self._build_options,
+            options=self._build_options(),
         )
 
     def list_overrides(self) -> dict[str, dict]:
