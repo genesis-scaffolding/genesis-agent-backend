@@ -232,6 +232,49 @@ recipes:
     reasoning_budget: 0
 
   # ---------------------------------------------------------------------
+  # Qwen3.6-27B-uncensored-heretic variant — shadows qwen3.6-27b for any
+  # model with that substring in the name. Tighter ctx and q4_0 KV.
+  # ---------------------------------------------------------------------
+  qwen3.6-27b-uncensored-heretic-thinking:
+    match: "qwen3.6-27b-uncensored-heretic"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    chat_template_kwargs:
+      preserve_thinking: true
+    spec:
+      type: draft-mtp
+      n_max: 2
+    kv_cache: q4_0
+    mmproj_offload: true
+    ctx_min: 40960
+    reasoning_budget: 16384
+    reasoning_budget_message: "Final answer:"
+
+  qwen3.6-27b-uncensored-heretic-instruct:
+    match: "qwen3.6-27b-uncensored-heretic"
+    sampling:
+      temp: 0.7
+      top_p: 0.8
+      top_k: 20
+      presence_penalty: 1.5
+      min_p: 0.0
+    chat_template_kwargs:
+      enable_thinking: false
+    spec:
+      type: draft-mtp
+      n_max: 2
+      p_min: 0.75
+    kv_cache: q4_0
+    mmproj_offload: true
+    ctx_min: 40960
+    reasoning_budget: 0
+
+  # ---------------------------------------------------------------------
   # Gemma 4 — all gemma-4-* quants share this. (Add gemma4-12b /
   # gemma4-26b overrides later if 12B and 26B need different sampling.)
   # Inherits ctx_min / parallel from default.
@@ -272,6 +315,19 @@ recipes:
       top_k: 20
     kv_cache: q8_0
     ctx_min: 150000
+
+  # ---------------------------------------------------------------------
+  # Rocinante XL — user-provided settings.
+  # ---------------------------------------------------------------------
+  rocinante-xl:
+    match: "rocinante-xl"
+    sampling:
+      temp: 0.75
+      top_p: 0.92
+      top_k: 100
+      repeat_penalty: 1.05
+    ctx_min: 16384
+    kv_cache: q8_0
 
   # ---------------------------------------------------------------------
   # LFM2 — LiquidAI LFM2.5 series. Recommended params: temp 0.1, top_k 50,

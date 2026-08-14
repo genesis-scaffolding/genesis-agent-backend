@@ -9,19 +9,16 @@ import re
 import secrets
 import shutil
 import tarfile
-import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
 from ...contracts import (
-    AcquireChoice,
     AcquireProgress,
     AcquireStep,
     InstallSession,
@@ -30,7 +27,13 @@ from ...contracts import (
     SecretsAccessor,
     ServiceInstall,
 )
-from ...utils.install import InstallLayout, Manifest, ManifestSource
+from ...utils.install import (
+    BackgroundInstallSession,
+    InstallLayout,
+    Manifest,
+    ManifestSource,
+    _Canceled,
+)
 
 _USER_AGENT = "genesis-worker"
 _GITHUB_TOKEN_NAME = "github_token"
@@ -39,9 +42,8 @@ _DEFAULT_RELEASE_CACHE_TTL_S = 15 * 60  # 15 min — well under the 60/hr unauth
 
 # --- exceptions -------------------------------------------------------------
 
-
-class _Canceled(Exception):
-    """Raised by ``_http_download`` when the cancel callback fires mid-stream."""
+# _Canceled is imported from utils.install; it is raised by _http_download
+# when the cancel callback fires mid-stream.
 
 
 # --- pure helpers -----------------------------------------------------------
@@ -316,14 +318,7 @@ class GithubReleaseTarball:
 # --- session ---------------------------------------------------------------
 
 
-@dataclass
-class _SessionState:
-    step: AcquireStep
-    canceled: bool = False
-    done: bool = False
-
-
-class _GithubReleaseInstallSession(InstallSession):
+class _GithubReleaseInstallSession(BackgroundInstallSession):
     """Streaming install session backed by ``GithubReleaseTarball``."""
 
     def __init__(
@@ -334,47 +329,19 @@ class _GithubReleaseInstallSession(InstallSession):
     ) -> None:
         self._backend = backend
         self._requested_version = requested_version
-        self._state = _SessionState(
-            step=AcquireStep(kind="fetching", title=f"installing {backend.name}")
-        )
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        super().__init__()
 
-    def current_step(self) -> AcquireStep:
-        return self._state.step
-
-    def submit(self, choice: AcquireChoice) -> AcquireStep:
-        return self._state.step
-
-    def cancel(self) -> None:
-        self._state.canceled = True
-
-    def wait(self) -> AcquireStep:
-        self._thread.join()
-        return self._state.step
-
-    def _publish(self, step: AcquireStep) -> None:
-        self._state.step = step
-
-    def _run(self) -> None:
-        try:
-            self._run_inner()
-        except _Canceled:
-            self._publish(AcquireStep(kind="cancelled", title="cancelled"))
-        except Exception as exc:  # noqa: BLE001 — background supervisor: any failure becomes a 'failed' step
-            self._publish(
-                AcquireStep(kind="failed", title=f"install failed: {exc}", error=str(exc))
-            )
-        finally:
-            self._state.done = True
+    @property
+    def _name(self) -> str:
+        return self._backend.name
 
     def _run_inner(self) -> None:
         backend = self._backend
         self._publish(
             AcquireStep(kind="fetching", title=f"querying {backend.name} releases")
         )
-        if self._state.canceled:
-            raise _Canceled()
+        if self._cancel.is_set():
+            raise _Canceled
         if self._requested_version:
             rel = _http_get_json(
                 backend.tag_url(self._requested_version),
@@ -385,8 +352,8 @@ class _GithubReleaseInstallSession(InstallSession):
                 backend.release_url(),
                 auth_token=backend._auth_token,
             )
-        if self._state.canceled:
-            raise _Canceled()
+        if self._cancel.is_set():
+            raise _Canceled
 
         asset = backend.asset_for(rel.get("assets", []))
         if asset is None:
@@ -455,15 +422,15 @@ class _GithubReleaseInstallSession(InstallSession):
                 asset_url,
                 cache_file,
                 progress=_progress,
-                cancel=lambda: self._state.canceled,
+                cancel=self._cancel.is_set,
             )
         except (urllib.error.URLError, OSError) as exc:
-            if self._state.canceled:
-                raise _Canceled() from exc
+            if self._cancel.is_set():
+                raise _Canceled from exc
             raise RuntimeError(f"download failed: {exc}") from exc
 
-        if self._state.canceled:
-            raise _Canceled()
+        if self._cancel.is_set():
+            raise _Canceled
 
         # --- verifying -------------------------------------------------------
         self._publish(

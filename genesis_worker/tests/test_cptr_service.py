@@ -86,8 +86,11 @@ def test_installs_returns_cptr_installable(tmp_path: Path) -> None:
 # --- endpoints -------------------------------------------------------------
 
 
-def test_web_ui_endpoint_none_when_stopped(tmp_path: Path) -> None:
+def test_web_ui_endpoint_none_when_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     svc = CptrService(service_ctx(tmp_path, name="cptr"))
+    monkeypatch.setattr(svc, "is_running", lambda: False)
     assert svc.web_ui_endpoint() is None
 
 

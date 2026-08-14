@@ -12,21 +12,19 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import threading
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ...contracts import (
-    AcquireChoice,
     AcquireStep,
     InstallSession,
     InstallState,
     InstallVersion,
     ServiceInstall,
 )
+from ...utils.install import BackgroundInstallSession, _Canceled
 
 _PYPI_URL = "https://pypi.org/pypi/cptr/json"
 _PACKAGE_NAME = "cptr"
@@ -76,62 +74,29 @@ def _uv_tool_installed_version(package: str, *, timeout: float) -> str | None:
 # --- session ---------------------------------------------------------------
 
 
-@dataclass
-class _SessionState:
-    step: AcquireStep
-    canceled: bool = False
-    done: bool = False
-
-
-class _UvToolInstallSession(InstallSession):
+class _UvToolInstallSession(BackgroundInstallSession):
     """Streaming install session backed by ``uv tool install``."""
 
     def __init__(self, *, package_name: str, version: str | None) -> None:
         self._package_name = package_name
         self._version = version
-        spec = f"{package_name}=={version}" if version else f"{package_name}@latest"
-        self._state = _SessionState(
-            step=AcquireStep(kind="fetching", title=f"installing {spec}")
-        )
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        super().__init__()
 
-    def current_step(self) -> AcquireStep:
-        return self._state.step
-
-    def submit(self, choice: AcquireChoice) -> AcquireStep:
-        return self._state.step
-
-    def cancel(self) -> None:
-        self._state.canceled = True
-
-    def wait(self) -> AcquireStep:
-        self._thread.join()
-        return self._state.step
-
-    def _publish(self, step: AcquireStep) -> None:
-        self._state.step = step
-
-    def _run(self) -> None:
-        try:
-            self._run_inner()
-        except Exception as exc:  # noqa: BLE001 — background supervisor: any failure becomes a 'failed' step
-            self._publish(
-                AcquireStep(
-                    kind="failed",
-                    title=f"install failed: {exc}",
-                    error=str(exc),
-                )
-            )
-        finally:
-            self._state.done = True
+    @property
+    def _name(self) -> str:
+        return self._package_name
 
     def _run_inner(self) -> None:
-        spec = f"{self._package_name}=={self._version}" if self._version else f"{self._package_name}@latest"
-        self._publish(AcquireStep(kind="fetching", title=f"running uv tool install {spec}"))
-        if self._state.canceled:
-            self._publish(AcquireStep(kind="cancelled", title="cancelled"))
-            return
+        spec = (
+            f"{self._package_name}=={self._version}"
+            if self._version
+            else f"{self._package_name}@latest"
+        )
+        self._publish(
+            AcquireStep(kind="fetching", title=f"running uv tool install {spec}")
+        )
+        if self._cancel.is_set():
+            raise _Canceled
 
         try:
             result = subprocess.run(
@@ -144,11 +109,13 @@ class _UvToolInstallSession(InstallSession):
         except (FileNotFoundError, OSError) as exc:
             raise RuntimeError(f"uv not found on PATH: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"uv tool install timed out after {_UV_TIMEOUT_S:.0f}s") from exc
+            raise RuntimeError(
+                f"uv tool install timed out after {_UV_TIMEOUT_S:.0f}s"
+            ) from exc
 
-        if self._state.canceled:
-            self._publish(AcquireStep(kind="cancelled", title="cancelled"))
-            return
+        if self._cancel.is_set():
+            raise _Canceled
+
         if result.returncode != 0:
             raise RuntimeError(
                 f"uv tool install failed (rc={result.returncode}): "
@@ -161,12 +128,7 @@ class _UvToolInstallSession(InstallSession):
                 "is ~/.local/bin on PATH?"
             )
 
-        self._publish(
-            AcquireStep(
-                kind="complete",
-                title=f"installed {spec}",
-            )
-        )
+        self._publish(AcquireStep(kind="complete", title=f"installed {spec}"))
 
 
 # --- installable -----------------------------------------------------------

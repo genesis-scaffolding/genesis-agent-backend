@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-from ...contracts import ServiceState, ServiceStatus, StartResult, StopResult
+from ...contracts import ServiceStatus, StartResult, StopResult
+from ...utils.net import HealthProbe
+from ...utils.process import TmuxProcess
 
 _DEFAULT_HEALTH_POLL_S = 1.0
 _DEFAULT_HEALTH_TIMEOUT_S = 60.0
@@ -34,33 +33,17 @@ def start_cptr(
     if not binary.is_file():
         return StartResult(ok=False, message=f"binary not found: {binary}")
 
-    if _has_session(session_name):
-        subprocess.run(
-            ["tmux", "kill-session", "-t", session_name],
-            check=False,
-            capture_output=True,
-        )
+    tmux = TmuxProcess(session_name)
 
-    log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = (
         f"{shlex.quote(str(binary))} run "
-        f"--host {shlex.quote(host)} --port {port} "
-        f"2>&1 | tee -a {shlex.quote(str(log_file))}"
+        f"--host {shlex.quote(host)} --port {port}"
     )
-    result = subprocess.run(
-        ["tmux", "new-session", "-d", "-s", session_name, cmd],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return StartResult(
-            ok=False,
-            message=f"tmux new-session failed: {result.stderr.strip() or 'unknown error'}",
-        )
+    result = tmux.start(cmd, log_file)
+    if not result.ok:
+        return result
 
-    probe_host = _probe_host(host)
-    if wait_ready(probe_host, port, health_timeout_s):
+    if wait_ready(host, port, health_timeout_s):
         return StartResult(ok=True, message=f"started {session_name}")
     return StartResult(
         ok=False,
@@ -76,40 +59,43 @@ def stop_cptr(session_name: str) -> StopResult:
     around. cptr has no children to drain, so this is faster than the
     llama-swap equivalent.
     """
-    if not _has_session(session_name):
+    tmux = TmuxProcess(session_name)
+    if not tmux.exists():
         return StopResult(ok=True, message="no session")
 
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, "C-c"],
-        check=False,
-        capture_output=True,
-    )
-
+    tmux.send_interrupt()
     deadline = time.monotonic() + _GRACEFUL_STOP_TIMEOUT_S
     while time.monotonic() < deadline:
-        if not _has_session(session_name):
+        if not tmux.exists():
             return StopResult(ok=True, message=f"killed {session_name}")
         time.sleep(0.5)
 
-    if _has_session(session_name):
-        subprocess.run(
-            ["tmux", "kill-session", "-t", session_name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+    if tmux.exists():
+        tmux.kill()
     return StopResult(ok=True, message=f"killed {session_name} (forced)")
+
+
+def _probe_host(host: str) -> str:
+    """Translate a bind address into a connectable address. Exposed for tests."""
+    return HealthProbe.resolve_connect_host(host)
+
+
+def _probe_root(host: str, port: int) -> bool:
+    """Single HTTP root probe. Exposed for tests."""
+    return HealthProbe(host, port, probe_path="/").probe()
 
 
 def is_running(session_name: str) -> bool:
     """True iff the named tmux session exists."""
-    return _has_session(session_name)
+    return TmuxProcess(session_name).exists()
 
 
 def status(session_name: str, host: str, port: int) -> ServiceStatus:
     """Coarse status: session presence + an HTTP root probe."""
+    from ...contracts import ServiceState
+
     endpoint = f"http://{_probe_host(host)}:{port}/"
-    if not _has_session(session_name):
+    if not TmuxProcess(session_name).exists():
         return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
     if _probe_root(host, port):
         return ServiceStatus(state=ServiceState.RUNNING, endpoint=endpoint)
@@ -126,40 +112,9 @@ def wait_ready(host: str, port: int, timeout_s: float) -> bool:
     return False
 
 
-def _has_session(name: str) -> bool:
-    return (
-        subprocess.run(
-            ["tmux", "has-session", "-t", name],
-            check=False,
-            capture_output=True,
-        ).returncode
-        == 0
-    )
-
-
-def _probe_host(host: str) -> str:
-    """Translate a bind address into one we can connect to.
-
-    ``0.0.0.0`` and ``::`` are bind-only addresses; clients must reach
-    the service via a real loopback address instead.
-    """
-    if host in ("0.0.0.0", "::"):
-        return "127.0.0.1"
-    return host
-
-
-def _probe_root(host: str, port: int) -> bool:
-    """Single HTTP root probe. Returns True iff 200."""
-    try:
-        with urllib.request.urlopen(
-            f"http://{_probe_host(host)}:{port}/", timeout=1
-        ) as response:
-            return response.status == 200
-    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
-        return False
-
-
 __all__ = [
+    "_probe_host",
+    "_probe_root",
     "is_running",
     "start_cptr",
     "status",

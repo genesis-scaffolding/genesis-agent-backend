@@ -115,13 +115,21 @@ def test_utils_is_a_leaf_package() -> None:
     helpers, not a node in the framework's dependency graph. If a util
     ever needs contracts, settings, or a plugin, that need is the
     framework's, not the util's, and the import belongs at the call site.
+
+    ``genesis_worker.contracts`` is explicitly allowed: utilities that serve
+    as framework-provided helpers for plugins (e.g. Streamlit UI components)
+    need the contract types to type their arguments. This is the reverse of
+    the plugin boundary — utils is framework code that the plugin boundary
+    test does not walk.
     """
     utils_root = PACKAGE_ROOT / "utils"
     if not utils_root.is_dir():
         pytest.skip("utils/ not present")
+    # Allowed prefixes: utils itself, and contracts (for type annotations).
+    ALLOWED = (UTILS, "genesis_worker.contracts")
     offenders: list[str] = []
     for path in utils_root.rglob("*.py"):
         for name in _imported_modules(ast.parse(path.read_text()), path):
-            if not name.startswith(UTILS):
+            if not any(name.startswith(p) for p in ALLOWED):
                 offenders.append(f"{path.relative_to(PACKAGE_ROOT)}: {name}")
     assert not offenders, f"utils reaches outside its own package: {offenders}"

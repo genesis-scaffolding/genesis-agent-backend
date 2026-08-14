@@ -9,24 +9,16 @@ The shape mirrors the in-flight block in
 ``genesis_worker/services/llama_swap/ui/binaries.py`` but does not import
 from it — duplication is intentional so the dashboard's plumbing stays
 free of plugin-specific UI.
-
-This module is intentionally typed against ``Any`` rather than the
-contract types: ``genesis_worker.utils`` is a leaf package (boundary
-test), so it cannot import from ``genesis_worker.contracts``. The
-plugin/dashboard passes a duck-typed installable and session; the
-attributes the helper reads (``install``, ``current_step``, ``cancel``,
-``step.kind``, ``step.title``, ``step.progress``, ...) are part of the
-public contract surface and exercise against it in the dashboard tests.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import streamlit as st
 
+from ...contracts import AcquireStep, InstallSession, ServiceInstall
 
-def render_inline_install(installable: Any, *, key_prefix: str) -> None:
+
+def render_inline_install(installable: ServiceInstall, *, key_prefix: str) -> None:
     """Render an Install button; on click, run the install and stream progress.
 
     ``key_prefix`` namespaces the Streamlit widget keys. Two prefixes on
@@ -45,7 +37,7 @@ def render_inline_install(installable: Any, *, key_prefix: str) -> None:
 
 
 def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
-    session = st.session_state[sess_key]
+    session: InstallSession = st.session_state[sess_key]
     step = session.current_step()
 
     if step.kind in ("complete", "failed", "cancelled"):
@@ -67,12 +59,11 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
 
     @st.fragment(run_every="2s")
     def _progress(
-        session: Any = session,
-        render_target: Any = render_target,
-        drop_key: str = drop_key,
-        sess_key: str = sess_key,
-        key_prefix: str = key_prefix,
+        drop_key: str,
+        sess_key: str,
+        key_prefix: str,
     ) -> None:
+        session: InstallSession = st.session_state[sess_key]
         current = session.current_step()
         with render_target.container():
             _render_step(current)
@@ -82,14 +73,14 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
             st.session_state[drop_key] = True
             st.rerun(scope="app")
 
-    _progress()
+    _progress(drop_key=drop_key, sess_key=sess_key, key_prefix=key_prefix)
 
     if st.button("Cancel", key=f"{key_prefix}-cancel"):
         session.cancel()
         st.rerun()
 
 
-def _render_step(step: Any) -> None:
+def _render_step(step: AcquireStep) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
     elif step.kind == "failed":

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.utils.ui._install_flow import render_inline_install
 from genesis_worker.utils.ui._nav import to_relative as _to_relative
+from genesis_worker.utils.ui._service_controls import render_service_controls
 
 worker = st.session_state["worker"]
 
@@ -100,37 +100,15 @@ with st.container(border=True):
 
                 with st.container(border=True):
                     st.subheader(info.display_name)
-
-                    if status.state.value == "running":
-                        st.badge("Running", color="green")
-                    else:
-                        st.badge("Stopped", color="gray")
-
-                    if status.state.value == "running":
-                        if st.button(
-                            "Stop",
-                            key=f"stop-{info.name}",
-                            use_container_width=True,
-                        ):
-                            worker.stop_service(info.name)
-                            st.rerun()
-                    elif not svc.is_available() and caps.can_install:
-                        installable = svc.primary_installable()
-                        if installable is not None:
-                            render_inline_install(
-                                installable,
-                                key_prefix=f"dash-{info.name}",
-                            )
-                        else:
-                            st.caption("Not installed")
-                    else:
-                        if st.button(
-                            "Start",
-                            key=f"start-{info.name}",
-                            use_container_width=True,
-                        ):
-                            worker.start_service(info.name)
-                            st.rerun()
+                    # render_service_controls shows badge + Start/Stop + inline install.
+                    # Web UI link is handled separately below so it can live in the
+                    # nav_cols layout alongside the Admin button.
+                    render_service_controls(
+                        svc,
+                        status,
+                        show_web_ui_link=False,
+                        key_prefix=f"dash-{info.name}",
+                    )
 
                     st.divider()
 
