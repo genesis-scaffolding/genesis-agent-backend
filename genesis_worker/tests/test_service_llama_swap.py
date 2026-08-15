@@ -491,8 +491,8 @@ def test_evaluate_model_config_uses_framework_binary_for_qwen_recipe(
                 directory=str(tmp_path / "org" / "qwen3.6-gguf"),
                 pieces=[
                     ModelPiece(
-                        path=tmp_path / "model.gguf",
-                        filename="model.gguf",
+                        path=tmp_path / "qwen3-6-gguf.gguf",
+                        filename="qwen3-6-gguf.gguf",
                         bytes=1_000_000_000,
                         role="main",
                     )
@@ -503,6 +503,7 @@ def test_evaluate_model_config_uses_framework_binary_for_qwen_recipe(
         ],
     )
     configs = svc.evaluate_model_config(catalog)
+    # Entry ID from piece filename: "qwen3-6-gguf.gguf" → "qwen3-6-gguf"
     # qwen3.6 has multiple recipes (thinking + instruct), so the entry ID gets a suffix.
     assert "qwen3-6-gguf-thinking" in configs
     assert configs["qwen3-6-gguf-thinking"].binary == str(binary)
@@ -537,8 +538,8 @@ def test_evaluate_model_config_falls_back_to_legacy_when_no_variant(
                 directory=str(tmp_path / "org" / "qwen3.6-gguf"),
                 pieces=[
                     ModelPiece(
-                        path=tmp_path / "model.gguf",
-                        filename="model.gguf",
+                        path=tmp_path / "qwen3-6-gguf.gguf",
+                        filename="qwen3-6-gguf.gguf",
                         bytes=1_000_000_000,
                         role="main",
                     )
@@ -549,6 +550,7 @@ def test_evaluate_model_config_falls_back_to_legacy_when_no_variant(
         ],
     )
     configs = svc.evaluate_model_config(catalog)
+    # Entry ID from piece filename; fallback to legacy binary
     assert "qwen3-6-gguf-thinking" in configs
     assert configs["qwen3-6-gguf-thinking"].binary == str(legacy)
 

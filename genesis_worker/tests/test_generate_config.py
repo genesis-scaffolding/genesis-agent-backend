@@ -15,9 +15,10 @@ import pytest
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
 from genesis_worker.services.llama_swap.generate_config import (
     BuildOptions,
+    DetectedFileSet,
     EvaluatedConfig,
     FieldSource,
-    detect_files,
+    detect_file_sets,
     evaluate_all,
     evaluate_recipe,
 )
@@ -64,9 +65,11 @@ def _recipe(
 
 
 def _evaluate(recipe: Recipe, options: BuildOptions, **kw) -> EvaluatedConfig:
+    file_sets = detect_file_sets(_entry())
+    files = file_sets[0]
     return evaluate_recipe(
         recipe,
-        detect_files(_entry()),
+        files,
         entry_id="test",
         name="Test",
         options=options,
@@ -131,32 +134,34 @@ def test_evaluate_recipe_override_blocks_default_fallback(options: BuildOptions)
 def test_kv_cache_falls_back_to_q8_0_for_large_file(options: BuildOptions) -> None:
     """Size-based fallback fires when no override/recipe/default sets kv_cache."""
     recipe = _recipe()  # kv_cache not set
-    files = detect_files(_entry())
-    files = type(files)(
+    files = detect_file_sets(_entry())[0]
+    large_files = DetectedFileSet(
         main=files.main,
+        filename=files.filename,
         mmproj=files.mmproj,
         draft=files.draft,
         is_mtp=files.is_mtp,
         weight_bytes=30_000_000_000,  # > 25 GB
     )
     evaluated = evaluate_recipe(
-        recipe, files, entry_id="test", name="Test", options=options
+        recipe, large_files, entry_id="test", name="Test", options=options
     )
     assert evaluated.kv_cache == "q8_0"
 
 
 def test_mmproj_offload_falls_back_to_true_for_large_file(options: BuildOptions) -> None:
     recipe = _recipe()
-    files = detect_files(_entry_with_mmproj())
-    files = type(files)(
+    files = detect_file_sets(_entry_with_mmproj())[0]
+    large_files = DetectedFileSet(
         main=files.main,
+        filename=files.filename,
         mmproj=files.mmproj,
         draft=files.draft,
         is_mtp=files.is_mtp,
         weight_bytes=30_000_000_000,
     )
     evaluated = evaluate_recipe(
-        recipe, files, entry_id="test", name="Test", options=options
+        recipe, large_files, entry_id="test", name="Test", options=options
     )
     assert evaluated.mmproj_offload is True
 
@@ -309,6 +314,7 @@ def test_evaluate_all_filters_out_image_models(tmp_path: Path) -> None:
     out = evaluate_all(
         catalog, recipes, overrides={}, options=BuildOptions(repo_root=tmp_path)
     )
+    # Entry ID from piece filename: "llm-gguf.gguf" → strip .gguf → "llm-gguf"
     assert set(out) == {"llm-gguf"}
 
 
@@ -334,6 +340,7 @@ def test_evaluate_all_includes_overrides(tmp_path: Path) -> None:
         entries=[_gguf_entry("foo/llm")],
     )
     recipes = Recipes(default=_recipe(parallel=1), matchable=[])
+    # Key is from piece filename: "llm.gguf" → "llm" after .gguf strip
     out = evaluate_all(
         catalog, recipes, overrides={"llm": {"parallel": 99}},
         options=BuildOptions(repo_root=tmp_path),
@@ -351,8 +358,15 @@ def _entry() -> ModelEntry:
     return ModelEntry(
         name="test/foo",
         source="huggingface",
-        pieces=[],
-        total_bytes=0,
+        pieces=[
+            ModelPiece(
+                role="main",
+                filename="m.gguf",
+                path=Path("/tmp/vault/test/foo/m.gguf"),
+                bytes=1_000_000_000,
+            ),
+        ],
+        total_bytes=1_000_000_000,
         directory="/tmp/vault/test/foo",
         notes=[],
         extra={},
@@ -365,15 +379,19 @@ def _entry_with_mmproj() -> ModelEntry:
         source="huggingface",
         pieces=[
             ModelPiece(
-                role="main", filename="m.gguf",
-                path=Path("/tmp/vault/test/foo-mmproj/m.gguf"), bytes=1,
+                role="main",
+                filename="m.gguf",
+                path=Path("/tmp/vault/test/foo-mmproj/m.gguf"),
+                bytes=1_000_000_000,
             ),
             ModelPiece(
-                role="mmproj", filename="mmproj.gguf",
-                path=Path("/tmp/vault/test/foo-mmproj/mmproj.gguf"), bytes=1,
+                role="mmproj",
+                filename="mmproj.gguf",
+                path=Path("/tmp/vault/test/foo-mmproj/mmproj.gguf"),
+                bytes=1,
             ),
         ],
-        total_bytes=2,
+        total_bytes=1_000_000_001,
         directory="/tmp/vault/test/foo-mmproj",
         notes=[],
         extra={},

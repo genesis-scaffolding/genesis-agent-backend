@@ -18,7 +18,7 @@ from genesis_worker.registries import SourceRegistry
 from genesis_worker.services.llama_swap.generate_config import (
     BuildOptions,
     build_config,
-    detect_files,
+    detect_file_sets,
     make_display_name,
     make_entry_id,
     short_source_label,
@@ -45,12 +45,14 @@ def real_recipes() -> Recipes:
     return Recipes.load(REPO_ROOT / "recipes.yaml")
 
 
-def test_detect_files_picks_largest_main(real_catalog) -> None:
-    """For an entry with multiple main pieces, the largest is chosen."""
+def test_detect_file_sets_returns_one_per_main(real_catalog) -> None:
+    """For an entry with N main pieces, detect_file_sets returns N file sets."""
     entry = real_catalog.by_source()["huggingface"][0]
-    files = detect_files(entry)
-    if any(p.role == "main" for p in entry.pieces):
-        assert files.main is not None
+    mains = [p for p in entry.pieces if p.role == "main"]
+    if mains:
+        sets = detect_file_sets(entry)
+        assert len(sets) == len(mains)
+        assert all(fs.main is not None for fs in sets)
 
 
 def test_make_entry_id_collision_suffixing(real_recipes: Recipes) -> None:
@@ -94,13 +96,14 @@ def test_short_source_label_empty_returns_sentinel() -> None:
     assert short_source_label("___") == "x"
 
 
-def test_make_display_name_appends_variant() -> None:
+def test_make_display_name_strips_gguf_and_appends_variant() -> None:
+    """Piece filename with .gguf extension: extension stripped, variant appended."""
     name = make_display_name(
-        "acme/qwen36",
+        "acme/qwen36-gguf.gguf",  # piece filename
         Recipe(name="qwen3.6-thinking", match="qwen3.6"),
         multi_match=True,
     )
-    assert "(thinking)" in name
+    assert name == "qwen36-gguf (thinking)"
 
 
 def test_build_config_emits_one_entry_per_recipe(real_catalog, real_recipes: Recipes) -> None:

@@ -72,10 +72,20 @@ class BuildOptions:
 
 
 @dataclass(frozen=True)
-class DetectedFiles:
-    """Auto-detected file paths for one model entry."""
+class DetectedFileSet:
+    """Auto-detected file paths for one GGUF piece.
+
+    ``main`` and ``piece_bytes`` are per-piece; ``mmproj``, ``draft``,
+    and ``is_mtp`` are shared across all pieces in the same entry.
+
+    ``filename`` is the symlink name from the catalog (e.g.
+    ``LFM2.5-VL-3B-UD-Q8_K_XL.gguf``), distinct from ``main``
+    which is the resolved blob path. Use ``filename`` for entry
+    naming; use ``main`` for the llama-server cmd.
+    """
 
     main: Path | None
+    filename: str
     mmproj: Path | None
     draft: Path | None
     is_mtp: bool
@@ -99,7 +109,7 @@ class EvaluatedConfig:
     entry_id: str
     matched_recipe: str | None
     binary: str
-    files: DetectedFiles
+    files: DetectedFileSet
 
     kv_cache: str | None
     mmproj_offload: bool | None
@@ -126,14 +136,14 @@ class EvaluatedConfig:
 
 @dataclass(frozen=True)
 class ModelMatch:
-    """One catalog entry * one matched recipe - what the walker yields."""
+    """One catalog entry * one matched recipe * one GGUF piece - what the walker yields."""
 
     entry_id: str
     entry: ModelEntry
     source: str
     recipe: Recipe
     multi_match: bool
-    files: DetectedFiles
+    files: DetectedFileSet
     entry_overrides: dict[str, Any] | None
 
 
@@ -169,28 +179,40 @@ def short_source_label(source: str) -> str:
     return (cleaned[:3] or "x")
 
 
-def detect_files(entry: ModelEntry) -> DetectedFiles:
-    """Pick main / mmproj / draft paths from a catalog entry's pieces.
+def detect_file_sets(entry: ModelEntry) -> list[DetectedFileSet]:
+    """Return one DetectedFileSet per main (GGUF) piece in the entry.
 
-    For ``main`` we choose the largest piece (handles Q4+Q6 siblings in
-    the same repo by preferring the bigger quant).
+    Each set shares the same mmproj/draft/is_mtp and has its own
+    main path and piece-bytes. An entry with N GGUF files yields N
+    file sets.
     """
     mains = [p for p in entry.pieces if p.role == "main"]
     mmprojs = [p for p in entry.pieces if p.role == "mmproj"]
     drafts = [p for p in entry.pieces if p.role == "mtp"]
-    main = max(mains, key=lambda p: p.bytes).path if mains else None
     has_mtp = (
         bool(drafts)
         or "mtp" in entry.name.lower()
         or any("mtp" in p.filename.lower() for p in mains)
     )
-    return DetectedFiles(
-        main=main,
+    base = DetectedFileSet(
+        main=None,
+        filename="",
         mmproj=mmprojs[0].path if mmprojs else None,
         draft=drafts[0].path if drafts else None,
         is_mtp=has_mtp,
-        weight_bytes=entry.total_bytes,
+        weight_bytes=0,
     )
+    return [
+        DetectedFileSet(
+            main=p.path,
+            filename=p.filename,
+            mmproj=base.mmproj,
+            draft=base.draft,
+            is_mtp=base.is_mtp,
+            weight_bytes=p.bytes,
+        )
+        for p in mains
+    ]
 
 
 def _resolve_binary(binary: str, repo_root: Path) -> str:
@@ -244,7 +266,14 @@ def make_entry_id(
 
 
 def make_display_name(name: str, recipe: Recipe, multi_match: bool) -> str:
+    """Derive the display name shown in llama-swap UI from a piece filename.
+
+    The input is always a piece filename (not a model name). The
+    ``.gguf`` extension is stripped if present.
+    """
     base = name.split("/", 1)[-1]
+    if base.lower().endswith(".gguf"):
+        base = base[:-5]
     if multi_match:
         suffix = recipe.name.split(".")[-1].split("-")[-1]
         return f"{base} ({suffix})"
@@ -276,25 +305,29 @@ def walk_models(
             if not resolved.matched:
                 continue
             multi = len(resolved.matched) > 1
-            files = detect_files(entry)
 
-            for recipe in resolved.matched:
-                entry_id = make_entry_id(
-                    entry.name,
-                    recipe,
-                    multi_match=multi,
-                    all_ids=all_ids,
-                    source=source_key,
-                )
-                yield ModelMatch(
-                    entry_id=entry_id,
-                    entry=entry,
-                    source=source_key,
-                    recipe=recipe,
-                    multi_match=multi,
-                    files=files,
-                    entry_overrides=ovr.get(entry_id),
-                )
+            for file_set in detect_file_sets(entry):
+                for recipe in resolved.matched:
+                    piece_name = file_set.filename
+                    # Strip .gguf so it doesn't become "-gguf" in the YAML key.
+                    if piece_name.lower().endswith(".gguf"):
+                        piece_name = piece_name[:-5]
+                    entry_id = make_entry_id(
+                        piece_name,
+                        recipe,
+                        multi_match=multi,
+                        all_ids=all_ids,
+                        source=source_key,
+                    )
+                    yield ModelMatch(
+                        entry_id=entry_id,
+                        entry=entry,
+                        source=source_key,
+                        recipe=recipe,
+                        multi_match=multi,
+                        files=file_set,
+                        entry_overrides=ovr.get(entry_id),
+                    )
 
 
 # ===========================================================================
@@ -332,7 +365,7 @@ def _source_recipe_only(ovr: dict[str, Any], recipe: Recipe, key: str) -> FieldS
 
 def evaluate_recipe(
     recipe: Recipe,
-    files: DetectedFiles,
+    files: DetectedFileSet,
     *,
     entry_id: str,
     name: str,
@@ -488,7 +521,7 @@ def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
 def cmd_from_evaluated_dict(
     *,
     binary: str,
-    files: DetectedFiles,
+    files: DetectedFileSet,
     kv_cache: str | None,
     mmproj_offload: bool | None,
     spec: dict[str, Any] | None,
@@ -594,11 +627,12 @@ def evaluate_all(
         binary_override=binary_override,
         options=options,
     ):
+        piece_name = match.files.filename
         evaluated = evaluate_recipe(
             match.recipe,
             match.files,
             entry_id=match.entry_id,
-            name=make_display_name(match.entry.name, match.recipe, match.multi_match),
+            name=make_display_name(piece_name, match.recipe, match.multi_match),
             default_recipe=recipes.default,
             binary_override=binary_override,
             options=options,
@@ -616,6 +650,7 @@ def evaluate_all(
 def build_entry(
     entry: ModelEntry,
     recipe: Recipe,
+    file_set: DetectedFileSet,
     *,
     entry_id: str,
     multi_match: bool,
@@ -629,11 +664,11 @@ def build_entry(
     Returns ``(entry_id, data)`` where ``data`` is the dict that
     :func:`emit_payload` serializes.
     """
-    files = detect_files(entry)
-    display = make_display_name(entry.name, recipe, multi_match)
+    piece_name = file_set.filename
+    display = make_display_name(piece_name, recipe, multi_match)
     evaluated = evaluate_recipe(
         recipe,
-        files,
+        file_set,
         entry_id=entry_id,
         name=display,
         default_recipe=default_recipe,
@@ -674,6 +709,7 @@ def build_config(
         _, data = build_entry(
             match.entry,
             match.recipe,
+            match.files,
             entry_id=match.entry_id,
             multi_match=match.multi_match,
             default_recipe=recipes.default,
@@ -815,7 +851,7 @@ __all__ = [
     "DEFAULT_KV_QUANT_OVER",
     "DEFAULT_MMPROJ_OFFLOAD_OVER",
     "BuildOptions",
-    "DetectedFiles",
+    "DetectedFileSet",
     "EvaluatedConfig",
     "FieldSource",
     "ModelMatch",
@@ -823,7 +859,7 @@ __all__ = [
     "build_entry",
     "cmd_from_evaluated",
     "cmd_from_evaluated_dict",
-    "detect_files",
+    "detect_file_sets",
     "evaluate_all",
     "evaluate_recipe",
     "is_config_stale",
