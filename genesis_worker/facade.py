@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .catalog_build import CatalogService
@@ -111,6 +113,29 @@ class GenesisWorker:
             else:
                 self._catalog_cache = self._catalog_service.rescan()
         return self._catalog_cache
+
+    def delete_model(self, source: str, name: str) -> None:
+        """Delete ``name`` from ``source``: removes entry from catalog and wipes the directory.
+
+        Raises:
+            ValueError: no entry matching (source, name) exists.
+        """
+        from .catalog_io import save_catalog
+
+        catalog = self.catalog()
+        entry = next(
+            (e for e in catalog.entries if e.source == source and e.name == name),
+            None,
+        )
+        if entry is None:
+            raise ValueError(f"No entry found for {source}/{name}")
+
+        directory = Path(entry.directory)
+        if directory.exists():
+            shutil.rmtree(directory)
+
+        catalog.entries.remove(entry)
+        save_catalog(self._settings.paths.state_dir / "catalog.json", catalog)
 
     # --- Source / service inspection (for UI / CLI listings) ---------------
 

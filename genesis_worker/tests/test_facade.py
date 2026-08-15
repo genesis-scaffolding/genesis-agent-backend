@@ -88,3 +88,126 @@ def test_facade_catalog_persists_across_instances(tmp_path: Path, monkeypatch) -
     loaded = w2.catalog()
     assert loaded.generated_at == first.generated_at
     assert loaded.content_hash == first.content_hash
+
+
+def test_delete_model_removes_entry_and_directory(tmp_path: Path) -> None:
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.catalog_build import compute_content_hash
+    from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
+    from genesis_worker.settings import PathsSettings, Settings
+
+    vault = tmp_path / "vault"
+    model_dir = vault / "org" / "repo"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.gguf").write_text("weights")
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    settings = Settings(
+        paths=PathsSettings(state_dir=state_dir, vault_path=vault),
+    )
+
+    entry = ModelEntry(
+        name="org/repo",
+        source="huggingface",
+        pieces=[ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=7)],
+        total_bytes=7,
+        directory=str(model_dir),
+    )
+    catalog = Catalog(
+        root=str(vault),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash=compute_content_hash([entry]),
+        entries=[entry],
+    )
+    import json
+    (state_dir / "catalog.json").write_text(catalog.model_dump_json())
+
+    w = _GW(settings=settings)
+    # prime the cache
+    _ = w.catalog()
+
+    w.delete_model("huggingface", "org/repo")
+
+    assert not model_dir.exists()
+    assert not any(e.name == "org/repo" for e in w.catalog().entries)
+    loaded = json.loads((state_dir / "catalog.json").read_text())
+    assert len(loaded["entries"]) == 0
+
+
+def test_delete_model_removes_entry_when_directory_already_gone(tmp_path: Path) -> None:
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.catalog_build import compute_content_hash
+    from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
+    from genesis_worker.settings import PathsSettings, Settings
+
+    vault = tmp_path / "vault"
+    model_dir = vault / "org" / "repo"
+    model_dir.mkdir(parents=True)
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    settings = Settings(
+        paths=PathsSettings(state_dir=state_dir, vault_path=vault),
+    )
+
+    entry = ModelEntry(
+        name="org/repo",
+        source="huggingface",
+        pieces=[ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=0)],
+        total_bytes=0,
+        directory=str(model_dir),
+    )
+    catalog = Catalog(
+        root=str(vault),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash=compute_content_hash([entry]),
+        entries=[entry],
+    )
+    (state_dir / "catalog.json").write_text(catalog.model_dump_json())
+
+    w = _GW(settings=settings)
+    _ = w.catalog()
+
+    w.delete_model("huggingface", "org/repo")
+
+    assert not any(e.name == "org/repo" for e in w.catalog().entries)
+
+
+def test_delete_model_raises_for_unknown_entry(tmp_path: Path) -> None:
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.catalog_build import compute_content_hash
+    from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
+    from genesis_worker.settings import PathsSettings, Settings
+
+    vault = tmp_path / "vault"
+    model_dir = vault / "other" / "repo"
+    model_dir.mkdir(parents=True)
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    settings = Settings(
+        paths=PathsSettings(state_dir=state_dir, vault_path=vault),
+    )
+
+    entry = ModelEntry(
+        name="other/repo",
+        source="huggingface",
+        pieces=[ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=0)],
+        total_bytes=0,
+        directory=str(model_dir),
+    )
+    catalog = Catalog(
+        root=str(vault),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash=compute_content_hash([entry]),
+        entries=[entry],
+    )
+    (state_dir / "catalog.json").write_text(catalog.model_dump_json())
+
+    w = _GW(settings=settings)
+    _ = w.catalog()
+
+    import pytest
+    with pytest.raises(ValueError, match="No entry found"):
+        w.delete_model("huggingface", "nonexistent/repo")
