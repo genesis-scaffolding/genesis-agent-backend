@@ -18,6 +18,8 @@ from genesis_worker.services.llama_swap.generate_config import (
     DetectedFileSet,
     EvaluatedConfig,
     FieldSource,
+    _resolve_chat_template_file,
+    cmd_from_evaluated,
     detect_file_sets,
     evaluate_all,
     evaluate_recipe,
@@ -347,6 +349,41 @@ def test_evaluate_all_includes_overrides(tmp_path: Path) -> None:
     )
     assert out["llm"].parallel == 99
     assert out["llm"].provenance["parallel"] == FieldSource.OVERRIDE
+
+
+# ---------------------------------------------------------------------------
+# Chat template file resolution
+# ---------------------------------------------------------------------------
+
+
+def test_chat_template_file_absolute_passes_through(options: BuildOptions) -> None:
+    recipe = _recipe(chat_template_file="/tmp/my-template.jinja")
+    evaluated = _evaluate(recipe, options)
+    assert "--chat-template-file /tmp/my-template.jinja" in evaluated.cmd
+
+
+def test_chat_template_file_relative_resolves_from_package_dir(
+    options: BuildOptions,
+) -> None:
+    """Relative paths resolve from the bundled recipes package directory."""
+    recipe = _recipe(chat_template_file="gemma-4-chat-template.jinja")
+    evaluated = _evaluate(recipe, options)
+    assert "--chat-template-file" in evaluated.cmd
+    # The resolved path must point inside the package, not the repo root.
+    assert "/genesis_worker/services/llama_swap/data/gemma-4-chat-template.jinja" in evaluated.cmd
+
+
+def test_chat_template_file_not_emitted_when_unset(options: BuildOptions) -> None:
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, options)
+    assert "--chat-template-file" not in evaluated.cmd
+
+
+def test_chat_template_file_non_existent_does_not_raise(options: BuildOptions) -> None:
+    """Non-existent resolved paths are emitted without error (llama-server fails at runtime)."""
+    recipe = _recipe(chat_template_file="does-not-exist.jinja")
+    evaluated = _evaluate(recipe, options)
+    assert "--chat-template-file" in evaluated.cmd
 
 
 # ---------------------------------------------------------------------------

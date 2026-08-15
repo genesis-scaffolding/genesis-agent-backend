@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from ...contracts import Catalog, ModelEntry
-from .recipes import Recipe, Recipes
+from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
 # one of these, the corresponding VRAM-saver flag is added. These are
@@ -221,6 +221,17 @@ def _resolve_binary(binary: str, repo_root: Path) -> str:
     if not p.is_absolute():
         p = repo_root / p
     return str(p.resolve())
+
+
+def _resolve_chat_template_file(path: str) -> str:
+    """Relative chat_template_file paths resolve from the bundled recipes directory.
+
+    Absolute paths (user overrides) pass through unchanged.
+    """
+    p = Path(path)
+    if p.is_absolute():
+        return str(p)
+    return str((BUNDLED_RECIPES_PATH.parent / p).resolve())
 
 
 def make_entry_id(
@@ -586,7 +597,8 @@ def cmd_from_evaluated_dict(
     sections.append("  --port ${PORT} --host 127.0.0.1 \\")
 
     if chat_template_file:
-        sections.append(f"  --chat-template-file {chat_template_file} \\")
+        resolved = _resolve_chat_template_file(chat_template_file)
+        sections.append(f"  --chat-template-file {resolved} \\")
 
     if sampling:
         sampling_parts: list[str] = []

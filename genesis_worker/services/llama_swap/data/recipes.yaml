@@ -285,7 +285,7 @@ recipes:
       temp: 1.0
       top_p: 0.95
       top_k: 64
-    chat_template_file: "/home/gentran1991/Documents/GitHub/my-agent-backend/templates/gemma-4-chat-template.jinja"
+    chat_template_file: gemma-4-chat-template.jinja
     spec:
       type: draft-mtp
       n_max: 2
@@ -345,3 +345,15 @@ recipes:
     ctx_min: 131072
     reasoning_budget: 4096
     reasoning_budget_message: "Final answer:"
+
+  # ---------------------------------------------------------------------
+  # Muse Glimmer — Meta's model. Recommended params: temp 1.0, top_p 0.95,
+  # top_k 64. Tight ctx for a large model (~27B class).
+  # ---------------------------------------------------------------------
+  muse-glimmer:
+    match: "muse-glimmer"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 64
+    ctx_min: 40960
