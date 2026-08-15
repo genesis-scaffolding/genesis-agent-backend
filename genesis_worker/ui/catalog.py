@@ -26,6 +26,26 @@ if newly_complete - last_seen_complete:
     st.toast(f"Auto-refreshed after download — {total} models now")
 last_seen_complete |= newly_complete
 
+if "delete_done" in st.session_state:
+    st.toast(f"Deleted: {st.session_state.pop('delete_done')}")
+
+# --- Delete confirmation dialog -----------------------------------------------
+if "delete_confirm" in st.session_state:
+    target = st.session_state.pop("delete_confirm")
+
+    @st.dialog("Delete model?")
+    def confirm_delete():
+        st.warning(f"**{target['name']}** and all its files will be permanently deleted. This cannot be undone.")
+        col1, col2 = st.columns(2)
+        if col1.button("Delete", key="confirm-delete-btn", type="primary"):
+            worker.delete_model(target['source'], target['name'])
+            st.session_state['delete_done'] = target['name']
+            st.rerun()
+        if col2.button("Cancel", key="cancel-delete-btn"):
+            st.rerun()
+
+    confirm_delete()
+
 st.title("Model Catalog")
 
 # --- Section 1: vault summary + refresh -------------------------------------
@@ -123,3 +143,12 @@ with st.container(border=True):
                     label = f"{entry.name}  ({format_bytes(entry.total_bytes)})"
                     with st.expander(label):
                         render_entry(entry)
+                        if st.button(
+                            "Delete",
+                            key=f"delete-{entry.source}-{entry.name.replace('/', '-')}",
+                        ):
+                            st.session_state["delete_confirm"] = {
+                                "source": entry.source,
+                                "name": entry.name,
+                            }
+                            st.rerun()
