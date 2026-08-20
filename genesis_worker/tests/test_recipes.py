@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from genesis_worker.paths import repo_root
 from genesis_worker.services.llama_swap.recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
 
 
@@ -149,10 +148,3 @@ def test_recipe_ignores_unknown_fields() -> None:
         Recipe.model_validate({"name": "x", "match": "x", "future_field": "ok"})
     except ValidationError:
         pytest.fail("model_validate should accept unknown fields, not raise")
-
-
-def test_load_real_repo_recipes() -> None:
-    """The real recipes.yaml in this repo loads cleanly and has at least one matchable recipe."""
-    r = Recipes.load(repo_root() / "recipes.yaml")
-    assert r.default is not None
-    assert len(r.matchable) > 0

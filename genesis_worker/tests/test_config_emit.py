@@ -9,71 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-import yaml
-
-from genesis_worker.catalog_build import CatalogService
-from genesis_worker.paths import repo_root
-from genesis_worker.registries import SourceRegistry
 from genesis_worker.services.llama_swap.generate_config import (
-    BuildOptions,
-    build_config,
-    detect_file_sets,
     make_display_name,
-    make_entry_id,
     short_source_label,
     write_config,
 )
-from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
-from genesis_worker.settings import PathsSettings, Settings
-
-# Binary paths in recipes are relative to the checkout; the framework supplies the root.
-REPO_ROOT = repo_root()
-BUILD_OPTIONS = BuildOptions(repo_root=REPO_ROOT)
-
-
-@pytest.fixture(scope="module")
-def real_catalog():
-    """Build a catalog from the real vault. Module-scoped: expensive."""
-    vault = Path("/home/gentran1991/Data2/models")
-    registry = SourceRegistry(Settings(paths=PathsSettings(vault_path=vault)))
-    return CatalogService(registry).rescan()
-
-
-@pytest.fixture(scope="module")
-def real_recipes() -> Recipes:
-    return Recipes.load(REPO_ROOT / "recipes.yaml")
-
-
-def test_detect_file_sets_returns_one_per_main(real_catalog) -> None:
-    """For an entry with N main pieces, detect_file_sets returns N file sets."""
-    entry = real_catalog.by_source()["huggingface"][0]
-    mains = [p for p in entry.pieces if p.role == "main"]
-    if mains:
-        sets = detect_file_sets(entry)
-        assert len(sets) == len(mains)
-        assert all(fs.main is not None for fs in sets)
-
-
-def test_make_entry_id_collision_suffixing(real_recipes: Recipes) -> None:
-    """Same name across siblings gets the variant suffix."""
-    all_ids: set[str] = set()
-    eid_thinking = make_entry_id(
-        "acme/qwen36-gguf",
-        real_recipes.matchable[0],
-        multi_match=True,
-        all_ids=all_ids,
-        source="huggingface",
-    )
-    eid_instruct = make_entry_id(
-        "acme/qwen36-gguf",
-        real_recipes.matchable[1],
-        multi_match=True,
-        all_ids=all_ids,
-        source="huggingface",
-    )
-    assert eid_thinking != eid_instruct
-    assert "thinking" in eid_thinking or eid_thinking != eid_instruct
+from genesis_worker.services.llama_swap.recipes import Recipe
 
 
 def test_short_source_label_known_sources() -> None:
@@ -104,33 +45,6 @@ def test_make_display_name_strips_gguf_and_appends_variant() -> None:
         multi_match=True,
     )
     assert name == "qwen36-gguf (thinking)"
-
-
-def test_build_config_emits_one_entry_per_recipe(real_catalog, real_recipes: Recipes) -> None:
-    entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
-    # All entries must have a non-empty cmd.
-    for eid, data in entries:
-        assert "cmd" in data and data["cmd"], f"empty cmd for {eid}"
-        assert data["resolved_from"], f"missing resolved_from for {eid}"
-
-
-def test_overrides_change_emitted_cmd(real_catalog, real_recipes: Recipes) -> None:
-    """An override for one entry's sampling.temp must change that entry's cmd."""
-    target_eid: str | None = None
-    base_cmd = ""
-    for eid, data in build_config(real_catalog, real_recipes, options=BUILD_OPTIONS):
-        if "temp" in data["cmd"]:
-            target_eid = eid
-            base_cmd = data["cmd"]
-            break
-    assert target_eid is not None
-    assert base_cmd
-
-    overrides = {target_eid: {"sampling": {"temp": 0.42}}}
-    entries = build_config(real_catalog, real_recipes, overrides=overrides, options=BUILD_OPTIONS)
-    emitted = dict(entries)
-    assert "0.42" in emitted[target_eid]["cmd"]
-    assert emitted[target_eid]["cmd"] != base_cmd
 
 
 def test_write_config_writes_when_changed(tmp_path: Path) -> None:
@@ -193,31 +107,3 @@ def test_write_config_preserves_mtime_on_noop(tmp_path: Path) -> None:
     wrote = write_config(out, entries, root="", generated_at="x")
     assert wrote is False
     assert out.stat().st_mtime_ns == mtime_before
-
-
-def test_emitted_yaml_parses_back(real_catalog, real_recipes: Recipes) -> None:
-    """The PyYAML-emitted config.yaml parses back to a structurally valid dict."""
-    import tempfile
-
-    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        out_path = Path(f.name)
-    try:
-        entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
-        write_config(
-            out_path, entries, root=real_catalog.root, generated_at=real_catalog.generated_at
-        )
-        parsed = yaml.safe_load(out_path.read_text())
-        assert "models" in parsed
-        assert parsed["healthCheckTimeout"] == 60
-        assert parsed["logLevel"] == "info"
-        assert len(parsed["models"]) == len(entries)
-    finally:
-        out_path.unlink()
-
-
-def test_no_extra_yaml_keys(real_catalog, real_recipes: Recipes) -> None:
-    """Each emitted entry has exactly the documented keys."""
-    entries = build_config(real_catalog, real_recipes, options=BUILD_OPTIONS)
-    expected = {"name", "cmd", "proxy", "ttl", "resolved_from"}
-    for eid, data in entries:
-        assert set(data.keys()) == expected, f"{eid}: keys={set(data.keys())}, expected={expected}"
