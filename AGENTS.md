@@ -2,8 +2,6 @@
 
 `my-agent-backend` — the Genesis Worker. Runs on each machine in the fleet and manages local AI infrastructure (llama-swap today; ComfyUI / AIToolkit / vLLM later) behind a Streamlit UI reachable over Tailscale.
 
-Being restructured from `bin/` scripts into the `genesis_worker` package. See `docs/plan.md` for the roadmap.
-
 ## Authority
 
 When the user's instruction in conversation conflicts with a committed doc, spec, or ADR, **follow the user**. They wrote those documents; the latest stated opinion wins. Then update the doc in the same session so it stops lying.
@@ -26,12 +24,10 @@ If implementation diverges from spec during coding, update the spec first, then 
 
 ## Do not break the running service
 
-This machine runs a live `llama-swap` against the repo-root `config.yaml`. It is in use while you work.
+This machine runs a live `llama-swap` against `~/.local/share/genesis-worker/llama-swap/config.yaml`. The package owns that file and regenerates it on demand; the service is started by the package (or `genesis_worker.cli.up`) and runs with `-watch-config`, so any write to that config triggers a reload.
 
-- `bin/`, `Makefile`, `recipes.yaml`, `config.yaml`, `MODEL_CATALOG.{yaml,md}`, `pi-models.json` are **not modified**. ADR-008.
-- **Never run `make all`, `make config`, or `make catalog` for verification.** They regenerate production artifacts, and llama-swap runs with `-watch-config` — it will reload. `make` is the user's tool, not yours.
 - New code writes to XDG paths only. It never reads or writes repo-root state.
-- `recipes.yaml` exists twice on purpose: repo root feeds `bin/`, `genesis_worker/services/llama_swap/data/recipes.yaml` ships with the plugin. `test_recipes_bundled.py` fails if they drift.
+- Treat the running llama-swap as production. Writing to its config, killing the tmux session, or otherwise disrupting the live service requires user approval, not autonomy.
 
 ## Codebase rules
 
@@ -42,7 +38,7 @@ This machine runs a live `llama-swap` against the repo-root `config.yaml`. It is
   uv run pyright
   uv run ruff check genesis_worker
   ```
-  There is no `make` target for this; the Makefile is frozen (ADR-008).
+  `make test` is a thin wrapper around them; the three invocations are the gate.
 - Tests must pass from any working directory, not just the repo root. Anchor fixture paths with `repo_root()`, never `Path("config.yaml")`. A gate that `pytest.skip`s when it can't find a file is a gate that silently stops gating.
 - Do not commit until user has verified and approved.
 - Commit message: one line. No body.

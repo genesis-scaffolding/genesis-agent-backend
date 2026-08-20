@@ -1,66 +1,53 @@
-# Makefile for my-agent-backend
+# Makefile for the Genesis Worker (`genesis_worker` package).
 #
-# Configuration:
-#   MODELS_ROOT is read from .env (gitignored). Copy .env.example to .env
-#   and set it to your models directory. Override per-call:
-#     make ROOT=/path/to/models
-#
-# Targets:
-#   make catalog [ROOT=/path]   regenerate MODEL_CATALOG.{yaml,md}
-#   make config                 regenerate config.yaml
-#   make all [ROOT=/path]       catalog + config
-#   make up                     start llama-swap (delegates to bin/up)
-#   make install-model REPO=x   interactively select/download an HF model
-#                                (DRY_RUN=1 previews; YES=1 skips confirmation)
-#   make pi-print                print pi-agent models.json to stdout
-#   make pi-models.json [BASE=u] write pi-models.json only
-#   make pi-install [BASE=url]   write pi-models.json and copy to ~/.pi
+# Spec: docs/arch/specs/spec-017-makefile-rewrite.md
 
--include .env
+.DEFAULT_GOAL := help
 
-# Resolution order: CLI flag > .env > unset (then catalog/all will error)
-ROOT ?= $(MODELS_ROOT)
-
-.PHONY: all catalog config help up install-model pi-print pi-install pi-models.json
+.PHONY: help install test test-fast lint typecheck ui env-init build clean
 
 help:
 	@echo "Targets:"
-	@echo "  make catalog [ROOT=/path]   regenerate MODEL_CATALOG.{yaml,md}"
-	@echo "  make config                 regenerate config.yaml"
-	@echo "  make all [ROOT=/path]       catalog + config"
-	@echo "  make up                     start llama-swap (delegates to bin/up)"
-	@echo "  make install-model REPO=x  interactively select/download an HF model"
-	@echo "                              (DRY_RUN=1 previews; YES=1 skips confirm)"
-	@echo "  make pi-print              print pi-agent models.json to stdout"
-	@echo "  make pi-models.json [BASE] write pi-models.json (no install)"
-	@echo "  make pi-install [BASE=url] write pi-models.json and copy to ~/.pi"
+	@echo "  make install      uv sync"
+	@echo "  make test         pytest + pyright + ruff (the gate)"
+	@echo "  make test-fast    pytest only"
+	@echo "  make lint         ruff check genesis_worker"
+	@echo "  make typecheck    pyright"
+	@echo "  make ui           launch the Streamlit UI (genesis-worker-ui)"
+	@echo "  make env-init     create .env from .env.example if absent"
+	@echo "  make build        uv build (wheel + sdist under dist/)"
+	@echo "  make clean        remove build and cache artifacts"
 
-catalog:
-	@test -n "$(ROOT)" || { echo "error: MODELS_ROOT not set. Copy .env.example to .env and edit, or pass ROOT=/path" >&2; exit 1; }
-	python3 bin/catalog.py "$(ROOT)"
+install:
+	uv sync
 
-config: config.yaml
+test:
+	uv run pytest -q
+	uv run pyright
+	uv run ruff check genesis_worker
 
-config.yaml: recipes.yaml MODEL_CATALOG.yaml bin/build-config.py
-	python3 bin/build-config.py
+test-fast:
+	uv run pytest -q
 
-all: catalog config
+lint:
+	uv run ruff check genesis_worker
 
-up:
-	./bin/up
+typecheck:
+	uv run pyright
 
-install-model:
-	@test -n "$(ROOT)" || { echo "error: MODELS_ROOT not set. Copy .env.example to .env and edit, or pass ROOT=/path" >&2; exit 1; }
-	@test -n "$(REPO)" || { echo "usage: make install-model REPO=org/model [ROOT=/path]" >&2; exit 1; }
-	./bin/hf-model.py $(if $(DRY_RUN),--dry-run,) $(if $(YES),--yes,) --root "$(ROOT)" "$(REPO)"
-	if [ -z "$(DRY_RUN)" ]; then $(MAKE) all ROOT="$(ROOT)"; fi
+ui:
+	uv run genesis-worker-ui
 
-pi-models.json: config.yaml bin/pi-models.py
-	./bin/pi-models.py --output pi-models.json $(if $(BASE),--base-url $(BASE),)
+env-init:
+	@if [ -f .env ]; then \
+		echo ".env already exists; leaving it alone."; \
+	else \
+		cp .env.example .env && echo "Created .env from .env.example — edit it before running the worker."; \
+	fi
 
-pi-print: config.yaml bin/pi-models.py
-	@./bin/pi-models.py --stdout $(if $(BASE),--base-url $(BASE),)
+build:
+	uv build
 
-pi-install: pi-models.json
-	install -m 0644 pi-models.json "$(HOME)/.pi/agent/models.json"
-	@echo "installed to ~/.pi/agent/models.json — reload pi (or /model) to pick up changes"
+clean:
+	rm -rf dist/ .pytest_cache/ .ruff_cache/
+	find . -path './.venv' -prune -o -path './.git' -prune -o -type d -name __pycache__ -print0 | xargs -0 -r rm -rf
