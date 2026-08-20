@@ -18,8 +18,6 @@ from genesis_worker.services.llama_swap.generate_config import (
     DetectedFileSet,
     EvaluatedConfig,
     FieldSource,
-    _resolve_chat_template_file,
-    cmd_from_evaluated,
     detect_file_sets,
     evaluate_all,
     evaluate_recipe,
