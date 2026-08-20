@@ -58,11 +58,21 @@ Migration is deferred because:
 - ~~The new code's `Catalog` model carries named `huggingface` / `lmstudio` fields for byte-equivalence with `bin/catalog.py`'s YAML output.~~ **Retired by [ADR-011](adr-011-persistent-catalog-and-source-agnostic-shape.md):** the validation gate is closed, the framework/plugin boundary is the right organizing principle, and `Catalog` is now source-agnostic with a stable content hash.
 
 ## Status
-Accepted; the state-file rationale is revised by [ADR-009](adr-009-framework-plugin-boundary.md).
+Accepted — migration complete.
 
-`recipes.yaml` now exists twice on purpose: the repo-root copy feeds `bin/`, and
-`genesis_worker/services/llama_swap/data/recipes.yaml` ships with the plugin. They are held
-in sync by `test_recipes_bundled.py` until `bin/build-config.py` retires.
+The legacy artifacts listed below have been retired and the Makefile itself is replaced under [ADR-017](adr-017-replace-makefile.md).
+
+## Migration outcome
+
+| Artifact | Outcome |
+|---|---|
+| `bin/` scripts | Removed (commit `f4e039d`). |
+| `recipes.yaml` (repo root) | Removed (commit `f4e039d`). |
+| `config.yaml` (repo root) | Removed (commit `f4e039d`). |
+| `MODEL_CATALOG.{yaml,md}` (repo root) | Removed (commit `f4e039d`). |
+| `pi-models.json` (repo root) | Was always gitignored local-only output of `bin/pi-models.py`; no longer produced. |
+| `Makefile` | Retired and replaced under [ADR-017](adr-017-replace-makefile.md) / [spec-017](specs/spec-017-makefile-rewrite.md) / [plan-017](plans/plan-017-makefile-rewrite.md). |
+| `bin/bonsai-server` | The promise to move this debug tool under `scripts/dev/` was never carried out. The tool is unused; the promise is dropped. |
 
 ## Consequences
 
