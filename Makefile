@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install test test-fast lint typecheck ui env-init build clean
+.PHONY: help install test test-fast lint typecheck ui env-init build clean setup-models-vault
 
 help:
 	@echo "Targets:"
@@ -17,6 +17,7 @@ help:
 	@echo "  make env-init     create .env from .env.example if absent"
 	@echo "  make build        uv build (wheel + sdist under dist/)"
 	@echo "  make clean        remove build and cache artifacts"
+	@echo "  make setup-models-vault  create vault symlinks for huggingface + lmstudio"
 
 install:
 	uv sync
@@ -51,3 +52,21 @@ build:
 clean:
 	rm -rf dist/ .pytest_cache/ .ruff_cache/
 	find . -path './.venv' -prune -o -path './.git' -prune -o -type d -name __pycache__ -print0 | xargs -0 -r rm -rf
+
+# VAULT_DIR defaults to ~/models. Pass VAULT_DIR=/custom/path to override.
+# Symlinks <vault>/huggingface -> ~/.cache/huggingface
+#          <vault>/lmstudio -> ~/.lmstudio/models
+setup-models-vault:
+	@vault="$(or $(VAULT_DIR),$(HOME)/models)"; \
+	targets="$$HOME/.cache/huggingface $$HOME/.lmstudio/models"; \
+	mkdir -p "$$vault" && \
+	for target in $$targets; do \
+		link="$$vault/$$(basename "$$target")"; \
+		if [ -L "$$link" ] && [ "$$(readlink -f "$$link")" = "$$target" ]; then \
+			: "$$link already correct"; \
+		elif [ -e "$$link" ]; then \
+			echo "SKIP $$link: exists and is not the expected symlink"; \
+		else \
+			ln -s "$$target" "$$link" && echo "Linked $$link -> $$target"; \
+		fi; \
+	done
