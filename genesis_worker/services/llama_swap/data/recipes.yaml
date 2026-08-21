@@ -275,6 +275,80 @@ recipes:
     reasoning_budget: 0
 
   # ---------------------------------------------------------------------
+  # Qwen3.8 27B — three thinking effort variants (low / medium / xhigh)
+  # plus an instruct variant. All share match "qwen-3.8-27b". Forces q8_0
+  # KV and mmproj offload (same VRAM situation as qwen3.6-27b).
+  # ---------------------------------------------------------------------
+  qwen-3.8-27b-thinking-low:
+    match: "qwen-3.8-27b"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    chat_template_kwargs:
+      preserve_thinking: true
+      reasoning_effort: low
+    kv_cache: q8_0
+    mmproj_offload: true
+    ctx_min: 65536
+    reasoning_budget: 16384
+    reasoning_budget_message: "Final answer:"
+
+  qwen-3.8-27b-thinking-medium:
+    match: "qwen-3.8-27b"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    chat_template_kwargs:
+      preserve_thinking: true
+      reasoning_effort: medium
+    kv_cache: q8_0
+    mmproj_offload: true
+    ctx_min: 65536
+    reasoning_budget: 16384
+    reasoning_budget_message: "Final answer:"
+
+  qwen-3.8-27b-thinking-xhigh:
+    match: "qwen-3.8-27b"
+    sampling:
+      temp: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    chat_template_kwargs:
+      preserve_thinking: true
+      reasoning_effort: xhigh
+    kv_cache: q8_0
+    mmproj_offload: true
+    ctx_min: 65536
+    reasoning_budget: 16384
+    reasoning_budget_message: "Final answer:"
+
+  qwen-3.8-27b-instruct:
+    match: "qwen-3.8-27b"
+    sampling:
+      temp: 0.7
+      top_p: 0.8
+      top_k: 20
+      presence_penalty: 1.5
+      min_p: 0.0
+    chat_template_kwargs:
+      enable_thinking: false
+    kv_cache: q8_0
+    mmproj_offload: true
+    ctx_min: 65536
+    reasoning_budget: 0
+
+  # ---------------------------------------------------------------------
   # Gemma 4 — all gemma-4-* quants share this. (Add gemma4-12b /
   # gemma4-26b overrides later if 12B and 26B need different sampling.)
   # Inherits ctx_min / parallel from default.

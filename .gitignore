@@ -15,3 +15,4 @@ llama-swap.log
 
 # generated pi-agent models (rebuild with make pi-models.json)
 pi-models.json
+.cptr
