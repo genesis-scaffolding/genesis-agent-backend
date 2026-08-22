@@ -555,6 +555,9 @@ def cmd_from_evaluated_dict(
     sections.append(f"{binary} \\")
     sections.append(f"  --model {files.main} \\")
 
+    if files.mmproj:
+        sections.append(f"  --mmproj {files.mmproj} \\")
+
     if files.mmproj and mmproj_offload is True:
         sections.append("  --no-mmproj-offload \\")
 
