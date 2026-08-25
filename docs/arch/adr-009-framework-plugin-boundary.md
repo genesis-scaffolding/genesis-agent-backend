@@ -98,7 +98,7 @@ class PluginContext:
 ### Config and recipes locations
 
 - Generated config: `<data_dir>/llama-swap/config.yaml`. Overrides sit beside it.
-- Recipes ship inside the plugin (`services/llama_swap/data/recipes.yaml`), resolved from `__file__`. They are shipped content, not user configuration.
+- Recipes ship inside the plugin (`services/llama_swap/data/recipes.yaml`), resolved from `__file__`. They are shipped content, not user configuration. *Amended by ADR-019: bundled recipes remain shipped content, but a user recipe override file now lives beside `overrides.yaml`.*
 
 This supersedes ADR-004's repo-root fallback for llama-swap's `config.yaml` and `recipes.yaml`. The repo-root copies remain in place, untouched, because `bin/` and the live llama-swap still consume them (ADR-008).
 

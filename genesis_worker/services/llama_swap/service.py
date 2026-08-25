@@ -46,11 +46,16 @@ class LlamaSwapService(InferenceService):
         self._options = opts
 
         self._config_path = opts.config_path or ctx.data_dir / "config.yaml"
-        self._recipes_path = opts.recipes_path or BUNDLED_RECIPES_PATH
+        self._bundled_recipes_path = BUNDLED_RECIPES_PATH
+        self._override_recipes_path = (
+            opts.recipes_path or self._config_path.parent / "recipes.yaml"
+        )
         self._overrides_path = self._config_path.parent / "overrides.yaml"
         self._log_file = opts.log_file or ctx.log_dir / "llama-swap.log"
 
-        self._recipes = RecipesStore(self._recipes_path)
+        self._recipes = RecipesStore(
+            [self._bundled_recipes_path, self._override_recipes_path]
+        )
         self._overrides = OverridesStore(self._overrides_path)
 
         self._llama_swap_install = LlamaSwapBinary(
@@ -328,11 +333,18 @@ class LlamaSwapService(InferenceService):
         return self._overrides_path
 
     @property
-    def recipes_path(self) -> Path:
-        return self._recipes_path
+    def recipe_sources(self) -> list[tuple[str, Path]]:
+        return [
+            ("bundled", self._bundled_recipes_path),
+            ("override", self._override_recipes_path),
+        ]
 
     def list_recipes(self) -> Recipes:
         return self._recipes.load()
+
+    def reload_recipes(self) -> Recipes:
+        """Re-read bundled + override recipes, refresh the in-memory store."""
+        return self._recipes.reload()
 
     def regenerate_config(self, catalog: Catalog) -> bool:
         entries = build_config(

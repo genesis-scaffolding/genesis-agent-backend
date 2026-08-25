@@ -41,20 +41,73 @@ def test_overrides_live_next_to_config(tmp_path: Path) -> None:
     assert svc.overrides_path == cfg.parent / "overrides.yaml"
 
 
-def test_recipes_default_to_the_bundled_copy(tmp_path: Path) -> None:
-    """Recipes ship with the plugin; they are not user configuration (ADR-009)."""
+def test_recipe_sources_default_to_bundled_then_override(tmp_path: Path) -> None:
+    """Bundled recipes always load first; the override defaults next to config (ADR-019)."""
     svc = LlamaSwapService(service_ctx(tmp_path))
-    assert svc.recipes_path == BUNDLED_RECIPES_PATH
-    assert svc.recipes_path.is_file()
+    assert svc.recipe_sources == [
+        ("bundled", BUNDLED_RECIPES_PATH),
+        ("override", tmp_path / "data" / "recipes.yaml"),
+    ]
+    assert BUNDLED_RECIPES_PATH.is_file()
     assert svc.list_recipes().matchable
 
 
 def test_recipes_path_option_wins(tmp_path: Path) -> None:
-    custom = tmp_path / "recipes.yaml"
+    custom = tmp_path / "override-recipes.yaml"
     custom.write_text("recipes:\n  default:\n    ctx_min: 1024\n")
     svc = LlamaSwapService(service_ctx(tmp_path, options={"recipes_path": custom}))
-    assert svc.recipes_path == custom
+    assert svc.recipe_sources[1] == ("override", custom)
+    assert svc.recipe_sources[0] == ("bundled", BUNDLED_RECIPES_PATH)
     assert svc.list_recipes().default is not None
+
+
+def test_override_recipes_merge_over_bundled(tmp_path: Path) -> None:
+    """A user override file adds recipes and wins name collisions (ADR-019)."""
+    override = tmp_path / "data" / "recipes.yaml"
+    override.parent.mkdir(parents=True)
+    override.write_text(
+        "recipes:\n"
+        "  new-llm:\n"
+        "    match: newllm\n"
+        "    ctx_min: 4096\n"
+        "  default:\n"
+        "    ctx_min: 1024\n"
+    )
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    recipes = svc.list_recipes()
+    by_name = {r.name: r for r in recipes.matchable}
+    assert "new-llm" in by_name
+    assert by_name["new-llm"].source == "override"
+    assert by_name["new-llm"].ctx_min == 4096
+    assert recipes.default is not None
+    assert recipes.default.name == "default"
+    assert recipes.default.source == "override"
+    assert recipes.default.ctx_min == 1024
+
+
+def test_missing_override_file_is_skipped(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    recipes = svc.list_recipes()
+    assert all(r.source == "bundled" for r in recipes.matchable)
+
+
+def test_reload_recipes_picks_up_edited_override(tmp_path: Path) -> None:
+    override = tmp_path / "data" / "recipes.yaml"
+    override.parent.mkdir(parents=True)
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    assert not any(r.name == "late-llm" for r in svc.list_recipes().matchable)
+    override.write_text("recipes:\n  late-llm:\n    match: latellm\n")
+    reloaded = svc.reload_recipes()
+    assert any(r.name == "late-llm" for r in reloaded.matchable)
+
+
+def test_malformed_override_recipes_raises_naming_file(tmp_path: Path) -> None:
+    override = tmp_path / "data" / "recipes.yaml"
+    override.parent.mkdir(parents=True)
+    override.write_text("recipes: not a mapping\n  bad: [\n")
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    with pytest.raises(RuntimeError, match=str(override)):
+        svc.list_recipes()
 
 
 # ---------------------------------------------------------------------------

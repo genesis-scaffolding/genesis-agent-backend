@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from genesis_worker.services.llama_swap.recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
+from genesis_worker.services.llama_swap.recipes import (
+    BUNDLED_RECIPES_PATH,
+    Recipe,
+    Recipes,
+    merge_recipes,
+)
 
 
 def test_bundled_default_recipe_has_no_binary() -> None:
@@ -131,6 +136,90 @@ def test_resolve_uses_default_when_no_recipes_match(tmp_path: Path) -> None:
     r = Recipes.load(path)
     res = r.resolve("anything")
     assert res.winner_keyword == "default"
+
+
+def test_load_stamps_source(tmp_path: Path, recipes_yaml: Path) -> None:
+    base = Recipes.load(recipes_yaml)
+    assert base.default is not None
+    assert base.default.source == "bundled"
+    assert all(r.source == "bundled" for r in base.matchable)
+    overlay = Recipes.load(recipes_yaml, source="override")
+    assert overlay.default is not None
+    assert overlay.default.source == "override"
+    assert all(r.source == "override" for r in overlay.matchable)
+
+
+def test_merge_recipes_overrides_by_name_and_appends_new(tmp_path: Path) -> None:
+    base = Recipes.load(
+        _recipes_yaml(
+            tmp_path / "base.yaml",
+            {
+                "default": {"ctx_min": 8192},
+                "alpha": {"match": "alpha", "ctx_min": 1},
+                "beta": {"match": "beta", "ctx_min": 2},
+            },
+        )
+    )
+    overlay = Recipes.load(
+        _recipes_yaml(
+            tmp_path / "overlay.yaml",
+            {
+                "alpha": {"match": "alpha", "ctx_min": 99},
+                "gamma": {"match": "gamma", "ctx_min": 3},
+            },
+        ),
+        source="override",
+    )
+    merged = merge_recipes(base, overlay)
+    by_name = {r.name: r for r in merged.matchable}
+    assert [r.name for r in merged.matchable] == ["alpha", "beta", "gamma"]
+    assert by_name["alpha"].ctx_min == 99
+    assert by_name["alpha"].source == "override"
+    assert by_name["beta"].ctx_min == 2
+    assert by_name["beta"].source == "bundled"
+    assert by_name["gamma"].source == "override"
+
+
+def test_merge_recipes_overlay_default_replaces(tmp_path: Path) -> None:
+    base = Recipes.load(_recipes_yaml(tmp_path / "base.yaml", {"default": {"ctx_min": 1}}))
+    overlay = Recipes.load(
+        _recipes_yaml(tmp_path / "overlay.yaml", {"default": {"ctx_min": 2}}),
+        source="override",
+    )
+    merged = merge_recipes(base, overlay)
+    assert merged.default is not None
+    assert merged.default.ctx_min == 2
+    assert merged.default.source == "override"
+
+
+def test_merge_recipes_keeps_base_default_when_overlay_has_none(tmp_path: Path) -> None:
+    base = Recipes.load(_recipes_yaml(tmp_path / "base.yaml", {"default": {"ctx_min": 1}}))
+    overlay = Recipes.load(
+        _recipes_yaml(tmp_path / "overlay.yaml", {"solo": {"match": "solo"}}),
+        source="override",
+    )
+    merged = merge_recipes(base, overlay)
+    assert merged.default is not None
+    assert merged.default.ctx_min == 1
+    assert merged.default.source == "bundled"
+
+
+def test_resolve_preserves_source(tmp_path: Path) -> None:
+    base = Recipes.load(_recipes_yaml(tmp_path / "base.yaml", {"default": {"ctx_min": 1}}))
+    overlay = Recipes.load(
+        _recipes_yaml(tmp_path / "overlay.yaml", {"solo": {"match": "solo"}}),
+        source="override",
+    )
+    merged = merge_recipes(base, overlay)
+    winner = merged.resolve("Solo-7B").winner_recipe
+    assert winner is not None and winner.source == "override"
+    winner = merged.resolve("unmatched").winner_recipe
+    assert winner is not None and winner.source == "bundled"
+
+
+def _recipes_yaml(path: Path, recipes: dict) -> Path:
+    path.write_text(yaml.safe_dump({"recipes": recipes}))
+    return path
 
 
 def test_recipe_ignores_unknown_fields() -> None:
