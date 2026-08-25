@@ -31,7 +31,7 @@ from .generate_config import (
 from .installs import LlamaServerCPU, LlamaServerCUDA, LlamaServerVulkan, LlamaSwapBinary
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
-from .recipes import BUNDLED_RECIPES_PATH, Recipes, RecipesStore
+from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes, RecipesOverlayStore, RecipesStore
 
 
 class LlamaSwapService(InferenceService):
@@ -56,6 +56,7 @@ class LlamaSwapService(InferenceService):
         self._recipes = RecipesStore(
             [self._bundled_recipes_path, self._override_recipes_path]
         )
+        self._recipes_overlay = RecipesOverlayStore(self._override_recipes_path)
         self._overrides = OverridesStore(self._overrides_path)
 
         self._llama_swap_install = LlamaSwapBinary(
@@ -345,6 +346,35 @@ class LlamaSwapService(InferenceService):
     def reload_recipes(self) -> Recipes:
         """Re-read bundled + override recipes, refresh the in-memory store."""
         return self._recipes.reload()
+
+    @property
+    def recipe_overlay_path(self) -> Path:
+        return self._override_recipes_path
+
+    def list_recipe_overrides(self) -> dict[str, Recipe]:
+        raw = self._recipes_overlay.load()
+        return {name: Recipe(name=name, source="override", **body) for name, body in raw.items()}
+
+    def save_recipe_override(self, name: str, fields: dict) -> None:
+        merged = self.list_recipes()
+        base = None
+        if merged.default and merged.default.name == name:
+            base = merged.default
+        else:
+            base = next((r for r in merged.matchable if r.name == name), None)
+        full_body = {}
+        if base is not None:
+            # Build dict from base recipe excluding source/name
+            full_body = base.model_dump(exclude={"source", "name"})
+        full_body.update(fields)
+        # Validate
+        Recipe(name=name, **full_body)
+        self._recipes_overlay.update_recipe(name, full_body)
+        self.reload_recipes()
+
+    def delete_recipe_override(self, name: str) -> None:
+        self._recipes_overlay.delete_recipe(name)
+        self.reload_recipes()
 
     def regenerate_config(self, catalog: Catalog) -> bool:
         entries = build_config(

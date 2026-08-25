@@ -54,6 +54,42 @@ class RecipesStore:
         return self.load()
 
 
+class RecipesOverlayStore:
+    """Read/write helper for the user recipe overlay file.
+
+    The store manages a single YAML file that holds an overlay ``recipes``
+    mapping. It is write-only for the UI; loading/merging remains in
+    :class:`RecipesStore`.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def load(self) -> dict[str, dict]:
+        if not self.path.is_file():
+            return {}
+        raw = yaml.safe_load(self.path.read_text()) or {}
+        return raw.get("recipes", {}) or {}
+
+    def save(self, data: dict[str, dict]) -> None:
+        payload = {"recipes": data}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(yaml.safe_dump(payload, sort_keys=False))
+        tmp.replace(self.path)
+
+    def update_recipe(self, name: str, body: dict) -> None:
+        data = self.load()
+        Recipe(name=name, **body)
+        data[name] = body
+        self.save(data)
+
+    def delete_recipe(self, name: str) -> None:
+        data = self.load()
+        data.pop(name, None)
+        self.save(data)
+
+
 class Recipe(BaseModel):
     """One recipe entry, plus the recipe's name as a field."""
 
@@ -185,11 +221,43 @@ def _normalize(s: str) -> str:
     return s.lower().replace("-", "").replace("_", "").replace(".", "")
 
 
+def load_overlay_recipes(path: Path) -> dict[str, dict]:
+    if not path.is_file():
+        return {}
+    raw = yaml.safe_load(path.read_text()) or {}
+    return raw.get("recipes", {}) or {}
+
+
+def save_recipe_to_overlay(path: Path, name: str, body: dict) -> None:
+    data = load_overlay_recipes(path)
+    Recipe(name=name, **body)
+    data[name] = body
+    payload = {"recipes": data}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(payload, sort_keys=False))
+    tmp.replace(path)
+
+
+def delete_recipe_from_overlay(path: Path, name: str) -> None:
+    data = load_overlay_recipes(path)
+    data.pop(name, None)
+    payload = {"recipes": data}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(payload, sort_keys=False))
+    tmp.replace(path)
+
+
 __all__ = [
     "BUNDLED_RECIPES_PATH",
     "Recipe",
     "Recipes",
+    "RecipesOverlayStore",
     "RecipesStore",
     "ResolvedRecipes",
+    "delete_recipe_from_overlay",
+    "load_overlay_recipes",
     "merge_recipes",
+    "save_recipe_to_overlay",
 ]
