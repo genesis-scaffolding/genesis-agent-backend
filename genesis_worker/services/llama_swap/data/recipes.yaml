@@ -275,11 +275,32 @@ recipes:
     reasoning_budget: 0
 
   # ---------------------------------------------------------------------
-  # Qwen3.8 27B — three thinking effort variants (low / medium / xhigh)
-  # plus an instruct variant. All share match "qwen-3.8-27b". Forces q8_0
-  # KV and mmproj offload (same VRAM situation as qwen3.6-27b).
+  # Qwen3.8 27B — four use-case variants. All share match
+  # "qwen-3.8-27b". Forces q8_0 KV cache.
+  #
+  #   assistant  — instruct only, mmproj on GPU, no MTP (pure vision assist)
+  #   agent-fast — medium reasoning, MTP on, mmproj offload to CPU, 32k ctx
+  #   agent-long — medium reasoning, no MTP, mmproj offload to CPU, 96k ctx
+  #   agent-xhigh — xhigh reasoning, no MTP, mmproj offload to CPU, 96k ctx
+  #
+  # MTP and mmproj cannot co-exist on GPU — the MTP alone is VRAM-hungry.
   # ---------------------------------------------------------------------
-  qwen-3.8-27b-thinking-low:
+  qwen-3.8-27b-assistant:
+    match: "qwen-3.8-27b"
+    sampling:
+      temp: 0.7
+      top_p: 0.8
+      top_k: 20
+      presence_penalty: 1.5
+      min_p: 0.0
+    chat_template_kwargs:
+      enable_thinking: false
+    kv_cache: q8_0
+    mmproj_offload: false
+    ctx_min: 65536
+    reasoning_budget: 0
+
+  qwen-3.8-27b-agent-fast:
     match: "qwen-3.8-27b"
     sampling:
       temp: 1.0
@@ -290,14 +311,17 @@ recipes:
       repeat_penalty: 1.0
     chat_template_kwargs:
       preserve_thinking: true
-      reasoning_effort: low
+      reasoning_effort: medium
+    spec:
+      type: draft-mtp
+      n_max: 2
     kv_cache: q8_0
     mmproj_offload: true
-    ctx_min: 65536
+    ctx_min: 32768
     reasoning_budget: 16384
     reasoning_budget_message: "Final answer:"
 
-  qwen-3.8-27b-thinking-medium:
+  qwen-3.8-27b-agent-long:
     match: "qwen-3.8-27b"
     sampling:
       temp: 1.0
@@ -311,11 +335,11 @@ recipes:
       reasoning_effort: medium
     kv_cache: q8_0
     mmproj_offload: true
-    ctx_min: 65536
+    ctx_min: 98304
     reasoning_budget: 16384
     reasoning_budget_message: "Final answer:"
 
-  qwen-3.8-27b-thinking-xhigh:
+  qwen-3.8-27b-agent-xhigh:
     match: "qwen-3.8-27b"
     sampling:
       temp: 1.0
@@ -329,24 +353,9 @@ recipes:
       reasoning_effort: xhigh
     kv_cache: q8_0
     mmproj_offload: true
-    ctx_min: 65536
+    ctx_min: 98304
     reasoning_budget: 16384
     reasoning_budget_message: "Final answer:"
-
-  qwen-3.8-27b-instruct:
-    match: "qwen-3.8-27b"
-    sampling:
-      temp: 0.7
-      top_p: 0.8
-      top_k: 20
-      presence_penalty: 1.5
-      min_p: 0.0
-    chat_template_kwargs:
-      enable_thinking: false
-    kv_cache: q8_0
-    mmproj_offload: true
-    ctx_min: 65536
-    reasoning_budget: 0
 
   # ---------------------------------------------------------------------
   # Gemma 4 — all gemma-4-* quants share this. (Add gemma4-12b /
