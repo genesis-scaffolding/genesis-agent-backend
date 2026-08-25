@@ -1,4 +1,9 @@
-"""Recipes: pydantic schema, loader, longest-match resolver."""
+"""Recipes: pydantic schema, loader, longest-match resolver.
+
+Loaded from two sources, in order: the bundled ``data/recipes.yaml`` and an
+optional user overlay beside the generated config. Each recipe carries its
+``source`` (which file it came from) so provenance rides the resolver.
+"""
 
 from __future__ import annotations
 
@@ -7,22 +12,42 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 BUNDLED_RECIPES_PATH = Path(__file__).parent / "data" / "recipes.yaml"
 
 
 class RecipesStore:
-    """Lazily loads and caches :class:`Recipes` from disk."""
+    """Lazily loads and caches merged :class:`Recipes` from ordered paths.
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    ``paths[0]`` is the base (bundled) doc; each subsequent path is an
+    overlay applied in order. Missing overlays are skipped; a missing base
+    file or a present file that fails YAML/schema parsing is a hard error.
+    """
+
+    def __init__(self, paths: list[Path]) -> None:
+        self.paths = tuple(paths)
         self._cached: Recipes | None = None
 
     def load(self) -> Recipes:
         if self._cached is None:
-            self._cached = Recipes.load(self.path)
+            self._cached = self._load_all()
         return self._cached
+
+    def _load_all(self) -> Recipes:
+        merged = self._load_doc(self.paths[0], "bundled")
+        for path in self.paths[1:]:
+            if not path.exists():
+                continue
+            merged = merge_recipes(merged, self._load_doc(path, "override"))
+        return merged
+
+    @staticmethod
+    def _load_doc(path: Path, source: str) -> Recipes:
+        try:
+            return Recipes.load(path, source=source)
+        except (yaml.YAMLError, ValidationError, OSError) as exc:
+            raise RuntimeError(f"recipes file {path}: {exc}") from exc
 
     def reload(self) -> Recipes:
         self._cached = None
@@ -33,6 +58,7 @@ class Recipe(BaseModel):
     """One recipe entry, plus the recipe's name as a field."""
 
     name: str
+    source: str = "bundled"  # "bundled" | "override" — set at load/merge time
     match: str | None = None
     binary: str | None = None
     sampling: dict[str, Any] = Field(default_factory=dict)
@@ -60,14 +86,16 @@ class Recipes(BaseModel):
         return data
 
     @classmethod
-    def load(cls, path: Path) -> Recipes:
+    def load(cls, path: Path, source: str = "bundled") -> Recipes:
         """Load recipes.yaml and split into default + matchable."""
         raw = yaml.safe_load(path.read_text())
         rec_dict = (raw or {}).get("recipes", {})
         default = None
         matchable: list[Recipe] = []
         for name, body in rec_dict.items():
-            r = Recipe(name=name, **(body or {}))
+            body = dict(body or {})
+            body.pop("source", None)  # source is stamped, never user-set
+            r = Recipe(name=name, source=source, **body)
             if r.match is None or not str(r.match).strip():
                 default = r
             else:
@@ -115,6 +143,23 @@ class Recipes(BaseModel):
         )
 
 
+def merge_recipes(base: Recipes, overlay: Recipes) -> Recipes:
+    """Merge two recipe sets, recipe-level: overlay wins on name collision.
+
+    Base order is preserved; overlay recipes with new names are appended in
+    document order. The overlay's default replaces the base's.
+    """
+    by_name: dict[str, Recipe] = {r.name: r for r in base.matchable}
+    for recipe in overlay.matchable:
+        by_name[recipe.name] = recipe
+    base_names = {r.name for r in base.matchable}
+    matchable = [by_name[r.name] for r in base.matchable] + [
+        r for name, r in by_name.items() if name not in base_names
+    ]
+    default = overlay.default if overlay.default is not None else base.default
+    return Recipes(default=default, matchable=matchable)
+
+
 @dataclass(frozen=True)
 class ResolvedRecipes:
     """Resolver output: which recipes matched, and which keyword won.
@@ -140,4 +185,11 @@ def _normalize(s: str) -> str:
     return s.lower().replace("-", "").replace("_", "").replace(".", "")
 
 
-__all__ = ["BUNDLED_RECIPES_PATH", "Recipe", "Recipes", "RecipesStore", "ResolvedRecipes"]
+__all__ = [
+    "BUNDLED_RECIPES_PATH",
+    "Recipe",
+    "Recipes",
+    "RecipesStore",
+    "ResolvedRecipes",
+    "merge_recipes",
+]
