@@ -287,6 +287,12 @@ def test_llama_cpp_cuda_matcher_matches_actual_upstream() -> None:
     assert _ai_dock_llama_cpp_cuda_asset(asset) is True
 
 
+def test_llama_cpp_cuda_matcher_matches_semver_naming() -> None:
+    """ai-dock switched to semver tags; the matcher must accept ``v<MAJOR>.<MINOR>.<PATCH>``."""
+    asset = {"name": "llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz"}
+    assert _ai_dock_llama_cpp_cuda_asset(asset) is True
+
+
 def test_llama_cpp_cuda_matcher_rejects_other_platforms() -> None:
     for name in (
         "llama.cpp-b10375-cuda-12.8-arm64.tar.gz",

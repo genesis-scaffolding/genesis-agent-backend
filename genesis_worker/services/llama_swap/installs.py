@@ -504,12 +504,13 @@ def _asset_name_matches_linux_amd64_tarball(asset: dict[str, Any]) -> bool:
 
 
 _LLAMA_CPP_CUDA_AMD64_TARBALL_RE = re.compile(
-    r"^llama\.cpp-b\d+-cuda-\d+\.\d+-amd64\.tar\.gz$", re.IGNORECASE
+    r"^llama\.cpp-(?:b\d+|v\d+\.\d+\.\d+)-cuda-\d+\.\d+-amd64\.tar\.gz$",
+    re.IGNORECASE,
 )
 
 
 def _ai_dock_llama_cpp_cuda_asset(asset: dict[str, Any]) -> bool:
-    """Match ``llama.cpp-b<build>-cuda-<ver>-amd64.tar.gz`` (ai-dock naming)."""
+    """Match ``llama.cpp-(b<build>|v<semver>)-cuda-<ver>-amd64.tar.gz`` (ai-dock naming)."""
     return bool(_LLAMA_CPP_CUDA_AMD64_TARBALL_RE.match(asset.get("name", "")))
 
 
