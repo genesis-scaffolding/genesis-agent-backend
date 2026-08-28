@@ -229,10 +229,14 @@ class SymlinkApplier:
             # levels up from ``vault/comfyui/<role>/`` to reach the vault root,
             # then down into the source subdir.  This resolves correctly in the
             # ComfyUI container where the vault root is mounted at ``/vault``.
+            # ``os.path.relpath`` (not ``Path.relative_to``) handles siblings of
+            # the symlink's parent directory, which is the common case when the
+            # blob lives under ``vault/<other-source>/`` rather than under
+            # ``vault/comfyui/``.
             try:
-                relative_target = row.target_path.relative_to(symlink_path.parent)
+                relative_target = Path(os.path.relpath(row.target_path, symlink_path.parent))
             except ValueError:
-                # Target is outside the vault; fall back to absolute host path.
+                # Different drives on Windows — fall back to absolute.
                 relative_target = row.target_path
 
             if symlink_path.is_symlink() or symlink_path.exists():

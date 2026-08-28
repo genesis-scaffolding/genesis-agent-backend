@@ -186,6 +186,9 @@ def test_apply_creates_symlinks_from_yaml(tmp_path: Path) -> None:
     sym = tmp_path / "vault" / "comfyui" / "checkpoints" / "qwen.safetensors"
     assert sym.is_symlink()
     assert sym.resolve() == blobs["qwen.safetensors"]
+    # Target must be relative so the symlink resolves inside the container
+    # (vault root is mounted at /vault there, so absolute host paths break).
+    assert not sym.readlink().is_absolute()
 
 
 def test_apply_handles_missing_catalog_entry(tmp_path: Path) -> None:
