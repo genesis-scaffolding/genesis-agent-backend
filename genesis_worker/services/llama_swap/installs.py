@@ -147,8 +147,8 @@ def _resolve_binary(
     Order:
       1. The legacy ``legacy_rel`` path (matches llama-swap, where the
          binary sits at the archive root).
-      2. A recursive search by filename (matches ai-dock's llama.cpp-cuda
-         release, where the binary lives at ``cuda-12.8/llama-server``).
+      2. A recursive search by filename (matches genesis-scaffolding's
+         llama.cpp-cuda release, where the binary lives at ``cuda-12.8/llama-server``).
 
     Returns the first matching file under ``install_root``, or ``None``
     if no candidate exists.
@@ -574,6 +574,9 @@ class LlamaSwapBinary(ServiceInstall):
             secrets=secrets,
         )
 
+    def source_url(self) -> str | None:
+        return "https://github.com/mostlygeek/llama-swap"
+
     def state(self) -> InstallState:
         return InstallState.INSTALLED if self.binary_path() else InstallState.NOT_INSTALLED
 
@@ -617,9 +620,9 @@ class LlamaSwapBinary(ServiceInstall):
 
 
 class LlamaServerCUDA(ServiceInstall):
-    """Installable for the ai-dock/llama.cpp-cuda release (CUDA-enabled llama-server).
+    """Installable for the genesis-scaffolding/llama.cpp-cuda release (CUDA-enabled llama-server).
 
-    The CUDA build is fetched from ai-dock's third-party repo because it bundles
+    The CUDA build is fetched from genesis-scaffolding's fork because it bundles
     CUDA libs (no separate toolkit needed). The upstream llama.cpp CUDA build
     requires a CUDA toolkit install, so this is a more pragmatic choice.
 
@@ -631,6 +634,8 @@ class LlamaServerCUDA(ServiceInstall):
 
     name = "llama-server-cuda"
     binary_name = "llama-server"
+    repo_owner = "genesis-scaffolding"
+    repo_name = "llama.cpp-cuda"
 
     def __init__(
         self,
@@ -643,8 +648,8 @@ class LlamaServerCUDA(ServiceInstall):
         self._layout = InstallLayout(data_dir, state_dir, self.name)
         self._backend = GithubReleaseTarball(
             name=self.name,
-            repo_owner="ai-dock",
-            repo_name="llama.cpp-cuda",
+            repo_owner=self.repo_owner,
+            repo_name=self.repo_name,
             layout=self._layout,
             cache_root=cache_dir,
             asset_for=lambda assets: next(
@@ -654,6 +659,9 @@ class LlamaServerCUDA(ServiceInstall):
             binary_rel=self.binary_name,
             secrets=secrets,
         )
+
+    def source_url(self) -> str | None:
+        return f"https://github.com/{self.repo_owner}/{self.repo_name}"
 
     def state(self) -> InstallState:
         return InstallState.INSTALLED if self.binary_path() else InstallState.NOT_INSTALLED
@@ -736,6 +744,9 @@ class _UpstreamLlamaServerBinary(ServiceInstall):
             binary_rel=self.binary_name,
             secrets=secrets,
         )
+
+    def source_url(self) -> str | None:
+        return f"https://github.com/{self.repo_owner}/{self.repo_name}"
 
     def state(self) -> InstallState:
         return InstallState.INSTALLED if self.binary_path() else InstallState.NOT_INSTALLED

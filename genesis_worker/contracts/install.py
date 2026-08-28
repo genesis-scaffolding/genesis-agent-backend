@@ -45,6 +45,10 @@ class ServiceInstall(ABC):
     @abstractmethod
     def uninstall(self, *, version: str | None = None) -> None: ...
 
+    def source_url(self) -> str | None:
+        """Return the upstream source/tracking URL for this binary, or None if unknown."""
+        return None
+
 
 class InstallSession(ABC):
     """Streaming install state machine. Mirrors :class:`AcquireSession`.

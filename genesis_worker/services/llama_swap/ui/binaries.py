@@ -63,6 +63,8 @@ for installable in svc.installs():
 
         state_label = "installed" if binary else "not installed"
         st.write(f"State: **{state_label}** — resolved: **{current or '—'}**")
+        if source_url := installable.source_url():
+            st.caption(f"Source: [{source_url}]({source_url})")
         if service_running:
             st.caption("Service is currently running — stop it from the Status page before uninstalling.")
 
