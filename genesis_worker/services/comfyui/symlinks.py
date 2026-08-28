@@ -55,6 +55,11 @@ class SymlinkApplier:
     ) -> None:
         self._symlinks_file = symlinks_file
         self._vault_models_dir = vault_models_dir
+        # Vault root = parent of ``vault/comfyui``. Used to compute relative
+        # symlink targets so they resolve correctly inside the ComfyUI container
+        # (which mounts ``vault/comfyui`` at ``/opt/comfyui/app/models`` and may
+        # also mount the vault root elsewhere — relative paths are portable).
+        self._vault_root = vault_models_dir.parent
 
     # --- yaml io -----------------------------------------------------------
 
@@ -219,9 +224,18 @@ class SymlinkApplier:
                 # Already correct; no-op.
                 continue
 
+            # Use a relative path from the vault root so the symlink resolves
+            # correctly inside the ComfyUI container (vault root may be mounted
+            # at a different absolute path there).
+            try:
+                relative_target = row.target_path.relative_to(self._vault_root)
+            except ValueError:
+                # Target is outside the vault root; fall back to absolute path.
+                relative_target = row.target_path
+
             if symlink_path.is_symlink() or symlink_path.exists():
                 symlink_path.unlink()
-            symlink_path.symlink_to(row.target_path)
+            symlink_path.symlink_to(relative_target)
 
             if existing_target is None:
                 result.created.append(row)

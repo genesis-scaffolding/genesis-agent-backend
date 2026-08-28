@@ -196,6 +196,9 @@ class ComfyUiService(InferenceService):
                 "/opt/comfyui/app/output": str(self._data_output_dir),
                 "/opt/comfyui/app/user": str(self._data_profiles_dir),
                 "/opt/comfyui/app/models": str(self._vault_models_dir),
+                # Mount the vault root at /vault so relative symlink targets
+                # (e.g. ``huggingface/hub/...``) resolve correctly.
+                "/vault": str(self._vault_models_dir.parent),
             },
             env={"PUID": str(self._puid), "PGID": str(self._pgid)},
             runtime=runtime,
