@@ -10,7 +10,6 @@ filename intact do not break symlinks.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,11 +52,9 @@ class SymlinkApplier:
         *,
         symlinks_file: Path,
         vault_models_dir: Path,
-        catalog: Callable[[], Catalog],
     ) -> None:
         self._symlinks_file = symlinks_file
         self._vault_models_dir = vault_models_dir
-        self._catalog = catalog
 
     # --- yaml io -----------------------------------------------------------
 
@@ -107,13 +104,12 @@ class SymlinkApplier:
     def _resolve_symlink_path(self, row: dict[str, str], piece_filename: str) -> Path:
         return self._vault_models_dir / row["target_subdir"] / Path(piece_filename).name
 
-    def _resolve_row(self, row: dict[str, str]) -> SymlinkRow:
-        """Resolve a yaml row against the catalog. ``target_path`` is the resolved blob path.
+    def _resolve_row(self, row: dict[str, str], catalog: Catalog) -> SymlinkRow:
+        """Resolve a yaml row against ``catalog``. ``target_path`` is the resolved blob path.
 
         Returns a ``SymlinkRow`` even when the catalog piece is missing
         (target_path=None signals that). Callers may filter on this.
         """
-        catalog = self._catalog()
         by_source = catalog.by_source()
         entries = by_source.get(row["source"], [])
         entry = next((e for e in entries if e.name == row["entry"]), None)
@@ -136,14 +132,14 @@ class SymlinkApplier:
 
     # --- public API --------------------------------------------------------
 
-    def list_current(self) -> list[SymlinkRow]:
+    def list_current(self, catalog: Catalog) -> list[SymlinkRow]:
         """Resolve every yaml row to its current on-disk state.
 
         Includes dangling rows (``target_path=None``) so the UI can
         show them. User-owned symlinks (not in the yaml) are not
         returned.
         """
-        return [self._resolve_row(r) for r in self._read_yaml_rows()]
+        return [self._resolve_row(r, catalog) for r in self._read_yaml_rows()]
 
     def add(self, rows: list[dict[str, str]]) -> list[str]:
         """Append rows to the yaml; rejects duplicates and invalid entries.
@@ -186,7 +182,7 @@ class SymlinkApplier:
         if len(kept) != len(existing):
             self._write_yaml_rows(kept)
 
-    def apply(self) -> ApplyResult:
+    def apply(self, catalog: Catalog) -> ApplyResult:
         """Reconcile the yaml with the filesystem.
 
         For every yaml row: ensure the target subdir exists, then ensure
@@ -195,7 +191,7 @@ class SymlinkApplier:
         """
         result = ApplyResult()
         for raw in self._read_yaml_rows():
-            row = self._resolve_row(raw)
+            row = self._resolve_row(raw, catalog)
             if row.target_path is None:
                 result.errors.append((row, "catalog entry or piece not found"))
                 continue

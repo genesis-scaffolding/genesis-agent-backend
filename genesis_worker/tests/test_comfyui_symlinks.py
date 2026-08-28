@@ -66,15 +66,10 @@ def _make_blobs(tmp_path: Path, names: list[str]) -> dict[str, Path]:
     return out
 
 
-def _make_applier(
-    tmp_path: Path,
-    *,
-    catalog_pieces: list[tuple[str, str, str, Path]],
-) -> SymlinkApplier:
+def _make_applier(tmp_path: Path) -> SymlinkApplier:
     return SymlinkApplier(
         symlinks_file=tmp_path / "config" / "comfyui" / "model_symlink.yaml",
         vault_models_dir=tmp_path / "vault" / "comfyui",
-        catalog=lambda: _make_catalog(catalog_pieces),
     )
 
 
@@ -82,8 +77,8 @@ def _make_applier(
 
 
 def test_yaml_missing_returns_empty(tmp_path: Path) -> None:
-    applier = _make_applier(tmp_path, catalog_pieces=[])
-    assert applier.list_current() == []
+    applier = _make_applier(tmp_path)
+    assert applier.list_current(_make_catalog([])) == []
 
 
 def test_yaml_malformed_returns_empty(tmp_path: Path) -> None:
@@ -93,9 +88,8 @@ def test_yaml_malformed_returns_empty(tmp_path: Path) -> None:
     applier = SymlinkApplier(
         symlinks_file=symlinks_file,
         vault_models_dir=tmp_path / "vault" / "comfyui",
-        catalog=lambda: _make_catalog([]),
     )
-    assert applier.list_current() == []
+    assert applier.list_current(_make_catalog([])) == []
 
 
 def test_yaml_wrong_version_returns_empty(tmp_path: Path) -> None:
@@ -105,16 +99,16 @@ def test_yaml_wrong_version_returns_empty(tmp_path: Path) -> None:
     applier = SymlinkApplier(
         symlinks_file=symlinks_file,
         vault_models_dir=tmp_path / "vault" / "comfyui",
-        catalog=lambda: _make_catalog([]),
     )
-    assert applier.list_current() == []
+    assert applier.list_current(_make_catalog([])) == []
 
 
 # --- add / remove / list_current ------------------------------------------
 
 
 def test_add_appends_rows(tmp_path: Path) -> None:
-    applier = _make_applier(tmp_path, catalog_pieces=[])
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([])
     errors = applier.add(
         [
             {"source": "huggingface", "entry": "Org/Repo1", "piece": "x.safetensors", "target_subdir": "checkpoints"},
@@ -122,12 +116,13 @@ def test_add_appends_rows(tmp_path: Path) -> None:
         ]
     )
     assert errors == []
-    rows = applier.list_current()
+    rows = applier.list_current(catalog)
     assert len(rows) == 2
 
 
 def test_add_rejects_duplicate(tmp_path: Path) -> None:
-    applier = _make_applier(tmp_path, catalog_pieces=[])
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([])
     applier.add(
         [{"source": "huggingface", "entry": "Org/Repo1", "piece": "x.safetensors", "target_subdir": "checkpoints"}]
     )
@@ -136,31 +131,30 @@ def test_add_rejects_duplicate(tmp_path: Path) -> None:
     )
     assert len(errors) == 1
     assert "duplicate" in errors[0]
-    assert len(applier.list_current()) == 1
+    assert len(applier.list_current(catalog)) == 1
 
 
 def test_add_rejects_invalid_rows(tmp_path: Path) -> None:
-    applier = _make_applier(tmp_path, catalog_pieces=[])
-    # Mixed list: one dict missing keys, one valid, one non-dict.
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([])
     mixed_input: list[object] = [
-        {"source": "huggingface"},  # missing keys
-        "not a dict",  # wrong type
+        {"source": "huggingface"},
+        "not a dict",
         {"source": "huggingface", "entry": "a/b", "piece": "x.safetensors", "target_subdir": "checkpoints"},
     ]
     errors = applier.add(mixed_input)  # type: ignore[arg-type]
-    # Two invalid entries (one dict missing keys, one non-dict).
     assert len(errors) == 2
-    assert len(applier.list_current()) == 1
+    assert len(applier.list_current(catalog)) == 1
 
 
 def test_remove_drops_rows(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["x.safetensors", "y.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog(
+        [
             ("huggingface", "Org/Repo1", "x.safetensors", blobs["x.safetensors"]),
             ("huggingface", "Org/Repo2", "y.safetensors", blobs["y.safetensors"]),
-        ],
+        ]
     )
     applier.add(
         [
@@ -168,10 +162,10 @@ def test_remove_drops_rows(tmp_path: Path) -> None:
             {"source": "huggingface", "entry": "Org/Repo2", "piece": "y.safetensors", "target_subdir": "loras"},
         ]
     )
-    rows = applier.list_current()
+    rows = applier.list_current(catalog)
     assert len(rows) == 2
     applier.remove([rows[0]])
-    assert len(applier.list_current()) == 1
+    assert len(applier.list_current(catalog)) == 1
 
 
 # --- apply ----------------------------------------------------------------
@@ -179,16 +173,14 @@ def test_remove_drops_rows(tmp_path: Path) -> None:
 
 def test_apply_creates_symlinks_from_yaml(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["qwen.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[
-            ("huggingface", "Qwen/Qwen-Image", "qwen.safetensors", blobs["qwen.safetensors"]),
-        ],
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog(
+        [("huggingface", "Qwen/Qwen-Image", "qwen.safetensors", blobs["qwen.safetensors"])]
     )
     applier.add(
         [{"source": "huggingface", "entry": "Qwen/Qwen-Image", "piece": "qwen.safetensors", "target_subdir": "checkpoints"}]
     )
-    result = applier.apply()
+    result = applier.apply(catalog)
     assert len(result.created) == 1
     assert len(result.errors) == 0
     sym = tmp_path / "vault" / "comfyui" / "checkpoints" / "qwen.safetensors"
@@ -198,14 +190,12 @@ def test_apply_creates_symlinks_from_yaml(tmp_path: Path) -> None:
 
 def test_apply_handles_missing_catalog_entry(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])],
-    )
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
     applier.add(
         [{"source": "huggingface", "entry": "Org/NOT-THERE", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
     )
-    result = applier.apply()
+    result = applier.apply(catalog)
     assert len(result.errors) == 1
     assert "not found" in result.errors[0][1]
     assert not (tmp_path / "vault" / "comfyui" / "checkpoints" / "foo.safetensors").exists()
@@ -213,53 +203,44 @@ def test_apply_handles_missing_catalog_entry(tmp_path: Path) -> None:
 
 def test_apply_refuses_to_clobber_regular_file(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])],
-    )
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
     applier.add(
         [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
     )
-    # Pre-create a regular file at the target path.
     target = tmp_path / "vault" / "comfyui" / "checkpoints" / "foo.safetensors"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(b"user data")
-    result = applier.apply()
+    result = applier.apply(catalog)
     assert any("not a symlink" in err for _, err in result.errors)
-    # The user data is intact.
     assert target.read_bytes() == b"user data"
 
 
 def test_apply_replaces_wrong_target_symlink(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors", "bar.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])],
-    )
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
     applier.add(
         [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
     )
-    # Pre-create a symlink pointing elsewhere.
     target = tmp_path / "vault" / "comfyui" / "checkpoints" / "foo.safetensors"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.symlink_to(blobs["bar.safetensors"])
 
-    result = applier.apply()
+    result = applier.apply(catalog)
     assert len(result.updated) == 1
     assert target.resolve() == blobs["foo.safetensors"]
 
 
 def test_apply_is_idempotent(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])],
-    )
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
     applier.add(
         [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
     )
-    first = applier.apply()
-    second = applier.apply()
+    first = applier.apply(catalog)
+    second = applier.apply(catalog)
     assert len(first.created) == 1
     assert len(second.created) == 0
     assert len(second.updated) == 0
@@ -270,34 +251,26 @@ def test_apply_is_idempotent(tmp_path: Path) -> None:
 
 def test_prune_removes_dangling_symlinks(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])],
-    )
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
     applier.add(
         [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
     )
-    applier.apply()
+    applier.apply(catalog)
 
-    # Now delete the source blob to make the symlink dangle.
     blobs["foo.safetensors"].unlink()
 
     result = applier.prune_dangling()
     assert len(result.removed) == 1
     target = tmp_path / "vault" / "comfyui" / "checkpoints" / "foo.safetensors"
     assert not target.exists()
-    # The yaml row was dropped too.
-    assert applier.list_current() == []
+    assert applier.list_current(catalog) == []
 
 
 def test_prune_preserves_user_owned_symlinks(tmp_path: Path) -> None:
     """Symlinks not tracked by the yaml are not pruned (they may be user-managed)."""
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[],
-    )
-    # User creates a symlink manually, pointing at a valid blob.
+    applier = _make_applier(tmp_path)
     target_dir = tmp_path / "vault" / "comfyui" / "user_owned"
     target_dir.mkdir(parents=True, exist_ok=True)
     user_sym = target_dir / "user_link.safetensors"
@@ -308,7 +281,7 @@ def test_prune_preserves_user_owned_symlinks(tmp_path: Path) -> None:
 
 
 def test_prune_handles_no_symlinks(tmp_path: Path) -> None:
-    applier = _make_applier(tmp_path, catalog_pieces=[])
+    applier = _make_applier(tmp_path)
     result = applier.prune_dangling()
     assert result.removed == []
 
@@ -320,38 +293,34 @@ def test_list_current_reports_dangling_via_symlink(tmp_path: Path) -> None:
     """``target_path`` reflects the catalog, not filesystem existence.
 
     A symlink is "dangling" when its target no longer exists on disk.
-    The catalog callable doesn't track filesystem state, so
+    The catalog itself doesn't track filesystem state, so
     ``target_path`` is whatever the catalog has stored. The
     ``prune_dangling`` step is the canonical place to detect and
     remove such symlinks.
     """
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
-    applier = _make_applier(
-        tmp_path,
-        catalog_pieces=[("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])],
-    )
+    applier = _make_applier(tmp_path)
+    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
     applier.add(
         [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
     )
-    applier.apply()
+    applier.apply(catalog)
     blobs["foo.safetensors"].unlink()
 
-    rows = applier.list_current()
+    rows = applier.list_current(catalog)
     assert len(rows) == 1
     # Catalog still has the piece's path stored; whether the file exists
     # is a filesystem question, not a catalog question.
     assert rows[0].target_path == blobs["foo.safetensors"]
 
-    # ``prune_dangling`` is the one that detects and removes dangling links.
     result = applier.prune_dangling()
     assert len(result.removed) == 1
 
 
-# --- new ApplyResult() --------------------------------------------------
+# --- dataclass default factories ------------------------------------------
 
 
 def test_apply_result_default_factory() -> None:
-    """ApplyResult is constructible with no args (for the success path)."""
     r = ApplyResult()
     assert r.created == []
     assert r.updated == []
