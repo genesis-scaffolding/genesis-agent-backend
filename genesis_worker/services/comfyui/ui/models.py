@@ -193,7 +193,7 @@ rows = st.session_state.get("models/rows_cache") or _current_rows()
 st.session_state["models/rows_cache"] = rows
 
 if not rows:
-    st.caption("No symlinks yet. Use **Add symlinks** below to create one.")
+    st.caption("No symlinks yet.")
 else:
     table_data = [
         {
@@ -207,25 +207,6 @@ else:
         for r in rows
     ]
     st.dataframe(table_data, use_container_width=True, hide_index=True)
-
-    # Resync yaml rows to disk — creates missing symlinks; no-ops on correct ones.
-    sync_cols = st.columns([1, 1, 4])
-    with sync_cols[0]:
-        if st.button("Add symlinks", key="models/add_btn"):
-            _add_dialog()
-    with sync_cols[1]:
-        if st.button("Resync to disk", key="models/sync_all_btn"):
-            result = applier.apply(catalog)
-            if result.errors:
-                for row, msg in result.errors:
-                    st.error(f"{row.symlink_path}: {msg}")
-            n_created = len(result.created)
-            n_updated = len(result.updated)
-            if n_created or n_updated:
-                st.success(f"Synced: {n_created} created, {n_updated} updated")
-            else:
-                st.info("All symlinks already on disk.")
-            _refresh()
 
     # Per-row delete.
     st.divider()
@@ -242,6 +223,26 @@ else:
     )
     if st.button("Remove selected row", key="models/delete_btn"):
         applier.remove([rows[delete_idx]])
+        _refresh()
+
+# Action buttons — always visible.
+st.divider()
+sync_cols = st.columns([1, 1, 4])
+with sync_cols[0]:
+    if st.button("Add symlinks", key="models/add_btn"):
+        _add_dialog()
+with sync_cols[1]:
+    if st.button("Resync to disk", key="models/sync_all_btn"):
+        result = applier.apply(catalog)
+        if result.errors:
+            for row, msg in result.errors:
+                st.error(f"{row.symlink_path}: {msg}")
+        n_created = len(result.created)
+        n_updated = len(result.updated)
+        if n_created or n_updated:
+            st.success(f"Synced: {n_created} created, {n_updated} updated")
+        else:
+            st.info("All symlinks already on disk.")
         _refresh()
 
 
