@@ -186,6 +186,36 @@ def test_apply_creates_symlinks_from_yaml(tmp_path: Path) -> None:
     sym = tmp_path / "vault" / "comfyui" / "checkpoints" / "qwen.safetensors"
     assert sym.is_symlink()
     assert sym.resolve() == blobs["qwen.safetensors"]
+    # Target must be relative so the symlink resolves inside the container
+    # (vault root is mounted at /vault there, so absolute host paths break).
+    assert not sym.readlink().is_absolute()
+
+
+def test_apply_rewrites_existing_absolute_symlink_as_relative(tmp_path: Path) -> None:
+    """An old absolute symlink that resolves to the right blob on the host
+    is still wrong for the container.  apply() must rewrite it as a relative
+    path so it works under /vault inside the container.
+    """
+    blobs = _make_blobs(tmp_path, ["qwen.safetensors"])
+    applier = _make_applier(tmp_path)
+    sym = tmp_path / "vault" / "comfyui" / "checkpoints" / "qwen.safetensors"
+    sym.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-existing absolute symlink, like old code produced.
+    sym.symlink_to(blobs["qwen.safetensors"])
+    assert sym.readlink().is_absolute()
+
+    applier.add(
+        [{"source": "huggingface", "entry": "Qwen/Qwen-Image", "piece": "qwen.safetensors", "target_subdir": "checkpoints"}]
+    )
+    catalog = _make_catalog(
+        [("huggingface", "Qwen/Qwen-Image", "qwen.safetensors", blobs["qwen.safetensors"])]
+    )
+    result = applier.apply(catalog)
+    assert len(result.errors) == 0
+    # Rewritten, not left as-is.
+    assert len(result.updated) == 1
+    assert not sym.readlink().is_absolute()
+    assert sym.resolve() == blobs["qwen.safetensors"]
 
 
 def test_apply_handles_missing_catalog_entry(tmp_path: Path) -> None:

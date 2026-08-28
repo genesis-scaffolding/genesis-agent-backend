@@ -25,25 +25,24 @@ st.title("Models")
 
 st.caption(
     "Symlink model weights from the catalog into specific subdirectories "
-    "(e.g. ``checkpoints``, ``loras``, ``text_encoder``) within the ComfyUI "
+    "(e.g. ``checkpoints``, ``loras``, ``text_encoders``) within the ComfyUI "
     "model vault. Files are **not copied** — the vault entry remains the single "
     "source of truth and ComfyUI accesses it via a symlink. "
     "Changes are persisted in ``model_symlink.yaml`` and synced to disk immediately."
 )
 
-# Standard ComfyUI model subdirectories (static baseline).
-# Supplement this with _discover_roles() which merges in whatever
-# directories the running container actually exposes (custom nodes
-# can add arbitrary subdirs).
+# Standard ComfyUI model subdirectories. Kept in sync with the roles that
+# ComfyUI's folder_paths.py auto-registers when ``--models-directory`` is set,
+# plus a few extras common to custom nodes (discovered at runtime in addition).
 _COMFYUI_ROLES_STATIC = [
     # Core
     "checkpoints",
     "diffusion_models",
     "unet",
     "vae",
-    # Text / vision encoders
+    # Text / vision encoders (plural — matches ComfyUI's folder_names_and_paths)
     "clip",
-    "text_encoder",
+    "text_encoders",
     "clip_vision",
     # Adapters
     "controlnet",
@@ -68,6 +67,7 @@ _COMFYUI_ROLES_STATIC = [
     # Legacy
     "lora_legacy",
 ]
+
 
 # Session-state keys for the add form.
 _FORM_STATE_KEY = "models/add_form_state"
