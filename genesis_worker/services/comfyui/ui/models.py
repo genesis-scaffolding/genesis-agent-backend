@@ -11,12 +11,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from genesis_worker.services.comfyui.service import (
-    _COMFYUI_ROLES as _COMFYUI_ROLES_STATIC,
-)
 from genesis_worker.services.comfyui.symlinks import SymlinkApplier, SymlinkRow
-
-_COMFYUI_ROLES_STATIC = list(_COMFYUI_ROLES_STATIC)  # convert tuple to list for concatenation
 from genesis_worker.utils.process import DockerContainer
 
 SERVICE_NAME = "comfyui"
@@ -30,13 +25,48 @@ st.title("Models")
 
 st.caption(
     "Symlink model weights from the catalog into specific subdirectories "
-    "(e.g. ``checkpoints``, ``loras``, ``text_encoder``) within the ComfyUI "
+    "(e.g. ``checkpoints``, ``loras``, ``text_encoders``) within the ComfyUI "
     "model vault. Files are **not copied** — the vault entry remains the single "
     "source of truth and ComfyUI accesses it via a symlink. "
     "Changes are persisted in ``model_symlink.yaml`` and synced to disk immediately."
 )
 
-# Standard ComfyUI model subdirectories (static baseline).
+# Standard ComfyUI model subdirectories. Kept in sync with the roles that
+# ComfyUI's folder_paths.py auto-registers when ``--models-directory`` is set,
+# plus a few extras common to custom nodes (discovered at runtime in addition).
+_COMFYUI_ROLES_STATIC = [
+    # Core
+    "checkpoints",
+    "diffusion_models",
+    "unet",
+    "vae",
+    # Text / vision encoders (plural — matches ComfyUI's folder_names_and_paths)
+    "clip",
+    "text_encoders",
+    "clip_vision",
+    # Adapters
+    "controlnet",
+    "t2i_adapter",
+    "gligen",
+    # LoRA family
+    "loras",
+    "hypernetworks",
+    # Conditioning
+    "embeddings",
+    "style_models",
+    # Generation / post
+    "upscale_models",
+    "sag",
+    "inpaint",
+    # Format variants
+    "diffusers",
+    "vae_approx",
+    # Extension-specific (high-traffic custom nodes)
+    "photomaker",
+    "unytt",
+    # Legacy
+    "lora_legacy",
+]
 
 
 # Session-state keys for the add form.
