@@ -224,13 +224,15 @@ class SymlinkApplier:
                 # Already correct; no-op.
                 continue
 
-            # Use a relative path from the vault root so the symlink resolves
-            # correctly inside the ComfyUI container (vault root may be mounted
-            # at a different absolute path there).
+            # Relative path from the symlink's directory to the blob inside the
+            # vault.  E.g. ``../../huggingface/hub/models--.../blobs/...`` — two
+            # levels up from ``vault/comfyui/<role>/`` to reach the vault root,
+            # then down into the source subdir.  This resolves correctly in the
+            # ComfyUI container where the vault root is mounted at ``/vault``.
             try:
-                relative_target = row.target_path.relative_to(self._vault_root)
+                relative_target = row.target_path.relative_to(symlink_path.parent)
             except ValueError:
-                # Target is outside the vault root; fall back to absolute path.
+                # Target is outside the vault; fall back to absolute host path.
                 relative_target = row.target_path
 
             if symlink_path.is_symlink() or symlink_path.exists():
@@ -251,6 +253,11 @@ class SymlinkApplier:
         symlinks — so user-deleted target files don't leave orphans.
         Symlinks not in the yaml are also removed (they're orphan
         write attempts).
+
+        Vault-relative symlinks (``../../huggingface/...``) are skipped
+        because the vault root is only accessible inside the ComfyUI container
+        (mounted at ``/vault``); they appear dangling on the host but are
+        valid in the container.
         """
         result = PruneResult()
 
@@ -261,10 +268,15 @@ class SymlinkApplier:
         for entry in self._vault_models_dir.rglob("*"):
             if not entry.is_symlink():
                 continue
+            # Skip vault-relative symlinks — the vault root is only mounted
+            # inside the container at /vault; these paths don't exist on the host.
             try:
-                if not entry.resolve(strict=True).exists():
-                    dangling_paths.add(entry)
+                target = entry.resolve(strict=True)
             except (OSError, RuntimeError):
+                # Broken or vault-relative; treat as dangling on host.
+                dangling_paths.add(entry)
+                continue
+            if not target.exists():
                 dangling_paths.add(entry)
 
         if not dangling_paths:
@@ -283,9 +295,6 @@ class SymlinkApplier:
         for r in rows:
             sym_path = self._resolve_symlink_path(r, r["piece"])
             if sym_path in dangling_paths:
-                # We need a SymlinkRow for the result, but ``piece`` is the
-                # yaml-stored filename (not necessarily the resolved name).
-                # Resolve to a representative row.
                 result.removed.append(
                     SymlinkRow(
                         source=r["source"],

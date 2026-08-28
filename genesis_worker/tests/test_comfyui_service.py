@@ -262,7 +262,8 @@ def test_start_dispatches_to_lifecycle(
     assert kwargs["image"] == svc.image_ref
     assert kwargs["listen_port"] == 8188
     assert kwargs["container_name"] == "comfyui"
-    assert kwargs["volumes"]["/opt/comfyui/app/models"] == str(svc._vault_models_dir)
+    assert kwargs["volumes"]["/vault"] == str(svc._vault_models_dir.parent)
+    assert kwargs["extra_args"][:2] == ["--extra-model-paths", "/vault/comfyui"]
 
 
 def test_start_skips_gpu_args_when_runtime_missing(

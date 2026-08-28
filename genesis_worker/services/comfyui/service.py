@@ -195,15 +195,15 @@ class ComfyUiService(InferenceService):
                 "/opt/comfyui/app/input": str(self._data_input_dir),
                 "/opt/comfyui/app/output": str(self._data_output_dir),
                 "/opt/comfyui/app/user": str(self._data_profiles_dir),
-                "/opt/comfyui/app/models": str(self._vault_models_dir),
                 # Mount the vault root at /vault so relative symlink targets
-                # (e.g. ``huggingface/hub/...``) resolve correctly.
+                # (e.g. ``../../huggingface/hub/...``) resolve correctly.
                 "/vault": str(self._vault_models_dir.parent),
             },
+            extra_args=["--extra-model-paths", "/vault/comfyui",
+                         *self._options.extra_args],
             env={"PUID": str(self._puid), "PGID": str(self._pgid)},
             runtime=runtime,
             gpu_flags=gpu_flags,
-            extra_args=self._options.extra_args,
             restart_policy=self._options.restart_policy,
             hostname=self._options.container_name,
         )
