@@ -170,7 +170,7 @@ def test_available_versions_returns_install_version_shape(tmp_path: Path, monkey
 def test_install_session_runs_docker_pull(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[list[str]] = []
 
-    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0):  # type: ignore[no-untyped-def]
+    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
         captured.append([image])
         if progress is not None:
             progress("Pulling fs layer")
@@ -186,8 +186,69 @@ def test_install_session_runs_docker_pull(tmp_path: Path, monkeypatch: pytest.Mo
     assert captured == [["ghcr.io/genesis-scaffolding/comfyui-cuda:v0.99.0-cuda-13.0-amd64"]]
 
 
+def test_install_session_publishes_progress_from_json_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``docker pull`` JSON lines should populate ``step.progress`` so the UI bar fills."""
+    progress_lines = [
+        '{"status":"Pulling fs layer","id":"abc"}',
+        '{"status":"Downloading","progressDetail":{"current":1000,"total":5000},"id":"abc"}',
+        '{"status":"Downloading","progressDetail":{"current":4000,"total":5000},"id":"abc"}',
+        '{"status":"Extracting","progressDetail":{"current":4000,"total":5000},"id":"abc"}',
+        '{"status":"Pull complete","id":"abc"}',
+    ]
+
+    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
+        for line in progress_lines:
+            if progress is not None:
+                progress(line)
+
+    monkeypatch.setattr(DockerContainer, "pull", staticmethod(_fake_pull))
+
+    inst = _make_installable(tmp_path)
+    session = inst.install(version="v1")
+    # Drain the worker; final step is "complete", but we want to assert
+    # the in-flight step had progress populated.
+    # Use a deadline-based poll on current_step to read an intermediate state.
+    import time
+    deadline = time.monotonic() + 2.0
+    seen_with_progress = None
+    while time.monotonic() < deadline:
+        step = session.current_step()
+        if step.kind == "fetching" and step.progress is not None and step.progress.bytes_total > 0:
+            seen_with_progress = step
+            break
+        if step.kind in ("complete", "failed", "cancelled"):
+            break
+        time.sleep(0.01)
+    # Cancel to let the worker exit cleanly.
+    session.cancel()
+    session.wait()
+
+    assert seen_with_progress is not None, "expected at least one fetching step with progress populated"
+    assert seen_with_progress.progress is not None
+    assert seen_with_progress.progress.bytes_total == 5000
+    assert 0 < seen_with_progress.progress.bytes_done <= 5000
+
+
+def test_install_session_uses_json_progress_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify the install session requests ``--progress=json`` from docker."""
+    seen_format: list[str] = []
+
+    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
+        seen_format.append(progress_format)
+
+    monkeypatch.setattr(DockerContainer, "pull", staticmethod(_fake_pull))
+    inst = _make_installable(tmp_path)
+    session = inst.install(version="v1")
+    _wait_for_terminal(session)
+    assert seen_format == ["json"]
+
+
 def test_install_session_records_selection_on_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0):  # type: ignore[no-untyped-def]
+    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
         pass
 
     monkeypatch.setattr(DockerContainer, "pull", staticmethod(_fake_pull))
@@ -199,7 +260,7 @@ def test_install_session_records_selection_on_success(tmp_path: Path, monkeypatc
 
 
 def test_install_session_failure_surfaces_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0):  # type: ignore[no-untyped-def]
+    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
         raise RuntimeError("manifest unknown")
 
     monkeypatch.setattr(DockerContainer, "pull", staticmethod(_fake_pull))
@@ -218,7 +279,7 @@ def test_install_session_cancellation(tmp_path: Path, monkeypatch: pytest.Monkey
     latency; the test cancels mid-flight.
     """
 
-    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0):  # type: ignore[no-untyped-def]
+    def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
         if progress is None or cancel is None:
             return
         for i in range(100):

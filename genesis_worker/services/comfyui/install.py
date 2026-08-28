@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import re
 import secrets
 import subprocess
 import time
 from pathlib import Path
 
 from ...contracts import (
+    AcquireProgress,
     AcquireStep,
     InstallSession,
     InstallState,
@@ -24,8 +27,59 @@ from ...contracts import (
 )
 from ...utils.install import BackgroundInstallSession, _Canceled
 from ...utils.process import DockerContainer
+from ...utils.process.docker_pull_progress import DockerPullProgress
 
 _RELEASE_CACHE_TTL_S = 15 * 60  # 15 min — same as GithubReleaseTarball.
+
+# Tag suffixes for the architectures we care about. The cosy convention
+# here is that any tag containing one of these segments is arch-pinned;
+# tags without an arch segment (``latest``, ``v0.34.0``, ...) are
+# arch-agnostic and pass through any filter.
+_ARCH_SUFFIXES = ("amd64", "arm64")
+_TAG_ARCH_RE = re.compile(
+    r"-(?P<arch>amd64|arm64)(?=$|[-+])", re.IGNORECASE
+)
+
+
+def _normalise_host_arch(raw: str | None) -> str | None:
+    """Map ``platform.machine()`` output to a tag suffix, or pass through.
+
+    Returns one of ``"amd64"``, ``"arm64"``, ``""`` (no filter), or
+    ``None`` (auto-detect on first ``available_versions`` call).
+    """
+    if raw is None:
+        return None
+    if raw == "":
+        return ""
+    machine = raw.lower()
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    # Unknown arch — don't filter; show all tags.
+    return ""
+
+
+def detect_host_arch() -> str:
+    """Best-effort host-arch detection via ``platform.machine()``."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    return ""
+
+
+def _matches_host_arch(tag: str, host_arch: str) -> bool:
+    """True if ``tag`` should be shown to a user on ``host_arch``.
+
+    Tags with no arch segment (e.g. ``v0.34.0``) match any host. Tags
+    with an arch segment only match if it equals the host arch.
+    """
+    m = _TAG_ARCH_RE.search(tag.lower())
+    if m is None:
+        return True
+    return m.group("arch").lower() == host_arch.lower()
 
 
 def _cache_path(cache_root: Path, repo: str) -> Path:
@@ -82,10 +136,12 @@ class ComfyUiImage(ServiceInstall):
         state_dir: Path,
         image_repo: str,
         image_tag: str,
+        host_arch: str | None = None,
         secrets=None,  # accepted but unused for v1 (public GHCR)
     ) -> None:
         self._image_repo = image_repo
         self._image_tag = image_tag
+        self._host_arch = _normalise_host_arch(host_arch)
         self._cache_dir = cache_dir
         self._state_dir = state_dir
         self._selection_path = state_dir / "current"
@@ -104,17 +160,25 @@ class ComfyUiImage(ServiceInstall):
         return self._selection_path.read_text().strip() if self._selection_path.is_file() else None
 
     def available_versions(self) -> list[InstallVersion]:
-        """All tags reachable from the registry, newest-first is the registry's order.
+        """All tags reachable from the registry, filtered by host arch.
 
-        15-min on-disk cache mirrors ``GithubReleaseTarball.available_versions``.
+        Newest-first is the registry's order. 15-min on-disk cache
+        mirrors ``GithubReleaseTarball.available_versions``. Tags with
+        an explicit arch suffix (``-amd64`` / ``-arm64``) that doesn't
+        match the host are filtered out; arch-agnostic tags (e.g.
+        ``v0.34.0``) pass through.
         """
         cache = _cache_path(self._cache_dir, self._image_repo)
         cached = _read_cache(cache, _RELEASE_CACHE_TTL_S)
         if cached is not None:
-            return self._project_to_versions(cached)
+            tags = cached
+        else:
+            tags = DockerContainer.list_remote_tags(self._image_repo)
+            _write_cache(cache, tags)
 
-        tags = DockerContainer.list_remote_tags(self._image_repo)
-        _write_cache(cache, tags)
+        host_arch = self._host_arch if self._host_arch is not None else detect_host_arch()
+        if host_arch:
+            tags = [t for t in tags if _matches_host_arch(t, host_arch)]
         return self._project_to_versions(tags)
 
     def invalidate_versions_cache(self) -> None:
@@ -174,11 +238,14 @@ class ComfyUiImage(ServiceInstall):
 
 
 class _DockerPullInstallSession(BackgroundInstallSession):
-    """Streaming install session backed by ``docker pull``.
+    """Streaming install session backed by ``docker pull --progress=json``.
 
-    Each stderr line from docker is forwarded as an ``AcquireStep``.
-    Cancellation is checked between lines; the in-flight pull cannot
-    be interrupted mid-line, but the next line aborts.
+    Each stderr line is parsed by :class:`DockerPullProgress`; the
+    aggregate (bytes_done, bytes_total, phase) is published as an
+    :class:`AcquireStep` with the progress field populated. The
+    Status page's ``_render_step`` already renders
+    ``st.progress(...)`` when ``step.progress is not None``, so the
+    UI shows a live bar without further changes.
     """
 
     def __init__(self, *, image: str, on_complete=None) -> None:
@@ -191,6 +258,7 @@ class _DockerPullInstallSession(BackgroundInstallSession):
         return self._image
 
     def _run_inner(self) -> None:
+        self._parser = DockerPullProgress()
         self._publish(
             AcquireStep(kind="fetching", title=f"pulling {self._image}")
         )
@@ -199,6 +267,7 @@ class _DockerPullInstallSession(BackgroundInstallSession):
                 self._image,
                 progress=self._on_progress,
                 cancel=self._cancel.is_set,
+                progress_format="json",
             )
         except _Canceled:
             raise
@@ -213,7 +282,21 @@ class _DockerPullInstallSession(BackgroundInstallSession):
     def _on_progress(self, line: str) -> None:
         if self._cancel.is_set():
             raise _Canceled
-        self._publish(AcquireStep(kind="fetching", title=line))
+        self._parser.update(line)
+        snap = self._parser.snapshot()
+        self._publish(
+            AcquireStep(
+                kind="fetching",
+                title=f"{snap.phase} {self._image}",
+                total_bytes=snap.bytes_total or None,
+                progress=AcquireProgress(
+                    bytes_done=snap.bytes_done,
+                    bytes_total=snap.bytes_total,
+                    speed_bps=0,
+                    eta_s=0,
+                ),
+            )
+        )
 
 
 __all__ = ["ComfyUiImage"]

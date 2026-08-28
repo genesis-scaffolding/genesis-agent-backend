@@ -261,8 +261,14 @@ class DockerContainer:
         progress: Callable[[str], None] | None = None,
         cancel: Callable[[], bool] | None = None,
         timeout_s: float = _DEFAULT_PULL_TIMEOUT_S,
+        progress_format: str = "json",
     ) -> None:
         """Pull ``image``, streaming stderr lines to ``progress``.
+
+        ``progress_format`` is forwarded to ``docker pull`` as
+        ``--progress=<format>``; defaults to ``"json"`` so callers can
+        parse per-layer byte counts. Use ``"plain"`` for human-readable
+        text if parsing is not needed.
 
         Each non-empty line is forwarded as a single ``progress(line)`` call.
         ``cancel()`` is checked between lines; when it returns True the
@@ -272,8 +278,9 @@ class DockerContainer:
         Raises :class:`RuntimeError` on non-zero exit; :class:`_Canceled`
         when cancel fires.
         """
+        argv = ["docker", "pull", f"--progress={progress_format}", image]
         result = subprocess.run(
-            ["docker", "pull", image],
+            argv,
             check=False,
             capture_output=True,
             text=True,

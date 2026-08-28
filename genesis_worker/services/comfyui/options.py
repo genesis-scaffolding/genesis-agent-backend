@@ -16,6 +16,10 @@ class ComfyUiOptions(BaseModel):
     # --- image ---
     image_repo: str = "ghcr.io/genesis-scaffolding/comfyui-cuda"
     image_tag: str = "v0.34.0-cuda-13.0-amd64"
+    # Host architecture suffix used to filter image tags. ``None`` means
+    # "auto-detect from ``platform.machine()``". Set explicitly to skip
+    # auto-detection, e.g. ``host_arch=""`` to disable filtering.
+    host_arch: str | None = None
 
     # --- container identity ---
     container_name: str = "comfyui"

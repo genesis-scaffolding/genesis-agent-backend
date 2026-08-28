@@ -85,6 +85,7 @@ class ComfyUiService(InferenceService):
             state_dir=ctx.state_dir,
             image_repo=opts.image_repo,
             image_tag=opts.image_tag,
+            host_arch=opts.host_arch,
             secrets=ctx.secrets,
         )
 
