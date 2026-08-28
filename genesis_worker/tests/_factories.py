@@ -28,16 +28,19 @@ def source_ctx(
     *,
     name: str = "test-source",
     local_path: Path | None = None,
+    vault_path: Path | None = None,
     options: dict[str, Any] | None = None,
     secrets: SecretsAccessor | None = None,
 ) -> SourceContext:
     root = root if root is not None else (local_path or Path("."))
+    resolved_local = local_path if local_path is not None else root / "vault"
+    resolved_vault = vault_path if vault_path is not None else root / "vault"
     return SourceContext(
         name=name,
         repo_root=root,
         options=options or {},
-        local_path=local_path if local_path is not None else root / "vault",
-        vault_path=root / "vault",
+        local_path=resolved_local,
+        vault_path=resolved_vault,
         secrets=secrets if secrets is not None else NoSecretsAccessor(),
         **_dirs(root),
     )
@@ -47,12 +50,14 @@ def service_ctx(
     root: Path,
     *,
     name: str = "test-service",
+    vault_path: Path | None = None,
     options: dict[str, Any] | None = None,
     secrets: SecretsAccessor | None = None,
 ) -> ServiceContext:
     return ServiceContext(
         name=name,
         repo_root=root,
+        vault_path=vault_path if vault_path is not None else root / "vault",
         options=options or {},
         secrets=secrets if secrets is not None else NoSecretsAccessor(),
         **_dirs(root),
