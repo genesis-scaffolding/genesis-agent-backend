@@ -63,6 +63,21 @@ class _Registry:
             "log_dir": p.log_dir / cls.dir_name,
         }
 
+    def _common_kwargs(self, cls: type[Plugin]) -> dict:
+        """Fields every PluginContext receives.
+
+        Both SourceRegistry and ServiceRegistry use this so the
+        source-side ``_resolve_local_path`` and the service-side
+        options lookup remain the only per-axis differences (ADR-023).
+        """
+        return {
+            "name": cls.name,
+            "repo_root": self._settings.paths.resolved_repo_root,
+            "secrets": self._settings.secrets.accessor(),
+            "vault_path": self._settings.paths.resolved_vault_path,
+            **self._dirs(cls),
+        }
+
     def get(self, name: str):
         return self._instances[name]
 
@@ -82,13 +97,9 @@ class SourceRegistry(_Registry):
     def _context(self, cls: type[ModelSource]) -> SourceContext:
         options = self._settings.options_for("sources", cls.name)
         return SourceContext(
-            name=cls.name,
-            repo_root=self._settings.paths.resolved_repo_root,
-            options=options,
             local_path=self._resolve_local_path(cls, options),
-            vault_path=self.vault_path,
-            secrets=self._settings.secrets.accessor(),
-            **self._dirs(cls),
+            options=options,
+            **self._common_kwargs(cls),
         )
 
     def _resolve_local_path(self, cls: type[ModelSource], options: dict) -> Path:
@@ -123,11 +134,8 @@ class ServiceRegistry(_Registry):
 
     def _context(self, cls: type[InferenceService]) -> ServiceContext:
         return ServiceContext(
-            name=cls.name,
-            repo_root=self._settings.paths.resolved_repo_root,
             options=self._settings.options_for("services", cls.name),
-            secrets=self._settings.secrets.accessor(),
-            **self._dirs(cls),
+            **self._common_kwargs(cls),
         )
 
     def get(self, name: str) -> InferenceService:

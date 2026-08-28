@@ -25,6 +25,9 @@ class PluginContext:
 
     ``repo_root`` is transitional: it exists so recipes can name binaries relative
     to the checkout. It drops out when state moves to XDG dirs (ADR-008 phase 11).
+
+    ``vault_path`` is the model vault root; lifted from SourceContext so service
+    plugins can also see it (ADR-023).
     """
 
     name: str
@@ -34,6 +37,7 @@ class PluginContext:
     state_dir: Path
     log_dir: Path
     repo_root: Path
+    vault_path: Path
     secrets: SecretsAccessor = field(default_factory=NoSecretsAccessor)
     options: Mapping[str, Any] = field(default_factory=dict)
 
@@ -41,7 +45,7 @@ class PluginContext:
 @dataclass(frozen=True)
 class SourceContext(PluginContext):
     local_path: Path = field(default_factory=Path)
-    vault_path: Path = field(default_factory=Path)
+    # vault_path inherited from PluginContext (ADR-023).
 
 
 @dataclass(frozen=True)
