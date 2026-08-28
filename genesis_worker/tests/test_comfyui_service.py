@@ -61,17 +61,20 @@ def test_construction_defaults_vault_models_dir(tmp_path: Path) -> None:
 
 
 def test_construction_data_dirs_default_under_data_dir(tmp_path: Path) -> None:
+    # ctx.data_dir is already scoped to the service by the framework;
+    # the service appends its subdirectories directly.
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
-    assert svc._data_python_dir == tmp_path / "data" / "comfyui" / "data" / "python"
-    assert svc._data_custom_nodes_dir == tmp_path / "data" / "comfyui" / "data" / "custom_nodes"
-    assert svc._data_input_dir == tmp_path / "data" / "comfyui" / "data" / "input"
-    assert svc._data_output_dir == tmp_path / "data" / "comfyui" / "data" / "output"
-    assert svc._data_profiles_dir == tmp_path / "data" / "comfyui" / "data" / "profiles"
+    assert svc._data_python_dir == tmp_path / "data" / "data" / "python"
+    assert svc._data_custom_nodes_dir == tmp_path / "data" / "data" / "custom_nodes"
+    assert svc._data_input_dir == tmp_path / "data" / "data" / "input"
+    assert svc._data_output_dir == tmp_path / "data" / "data" / "output"
+    assert svc._data_profiles_dir == tmp_path / "data" / "data" / "profiles"
 
 
 def test_construction_symlinks_file_default(tmp_path: Path) -> None:
+    # ctx.config_dir is already scoped to the service by the framework.
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
-    assert svc._symlinks_file == tmp_path / "config" / "comfyui" / "model_symlink.yaml"
+    assert svc._symlinks_file == tmp_path / "config" / "model_symlink.yaml"
 
 
 def test_construction_puid_pgid_auto_default(tmp_path: Path) -> None:
