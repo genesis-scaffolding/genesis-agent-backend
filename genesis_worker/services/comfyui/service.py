@@ -61,17 +61,17 @@ class ComfyUiService(InferenceService):
         self._has_nvidia_gpu = _has_nvidia_gpu()
 
         # Path defaults derived from ctx (ADR-025).
+        # ctx.*_dir are already scoped to this service by the framework;
+        # do not re-append the service name here (fixes double-"comfyui" bug).
         self._vault_models_dir = opts.vault_models_dir or ctx.vault_path / "comfyui"
-        self._data_python_dir = opts.data_python_dir or ctx.data_dir / "comfyui" / "data" / "python"
+        self._data_python_dir = opts.data_python_dir or ctx.data_dir / "data" / "python"
         self._data_custom_nodes_dir = (
-            opts.data_custom_nodes_dir or ctx.data_dir / "comfyui" / "data" / "custom_nodes"
+            opts.data_custom_nodes_dir or ctx.data_dir / "data" / "custom_nodes"
         )
-        self._data_input_dir = opts.data_input_dir or ctx.data_dir / "comfyui" / "data" / "input"
-        self._data_output_dir = opts.data_output_dir or ctx.data_dir / "comfyui" / "data" / "output"
-        self._data_profiles_dir = (
-            opts.data_profiles_dir or ctx.data_dir / "comfyui" / "data" / "profiles"
-        )
-        self._symlinks_file = opts.symlinks_file or ctx.config_dir / "comfyui" / "model_symlink.yaml"
+        self._data_input_dir = opts.data_input_dir or ctx.data_dir / "data" / "input"
+        self._data_output_dir = opts.data_output_dir or ctx.data_dir / "data" / "output"
+        self._data_profiles_dir = opts.data_profiles_dir or ctx.data_dir / "data" / "profiles"
+        self._symlinks_file = opts.symlinks_file or ctx.config_dir / "model_symlink.yaml"
         self._log_file = opts.log_file or ctx.log_dir / "comfyui.log"
 
         # PUID/PGID auto-default to the host user.
