@@ -12,39 +12,84 @@ from pathlib import Path
 import streamlit as st
 
 from genesis_worker.services.comfyui.symlinks import SymlinkApplier, SymlinkRow
+from genesis_worker.utils.process import DockerContainer
 
 SERVICE_NAME = "comfyui"
 
 worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
 applier: SymlinkApplier = svc.symlinks
+catalog = worker.catalog()
 
 st.title("Models")
 
 st.caption(
-    f"Manage symlinks under `{svc._vault_models_dir}/<role>/` that point at "
-    f"files in the vault. Persisted in `{svc._symlinks_file}`."
+    "Symlink model weights from the catalog into specific subdirectories "
+    "(e.g. ``checkpoints``, ``loras``, ``text_encoder``) within the ComfyUI "
+    "model vault. Files are **not copied** — the vault entry remains the single "
+    "source of truth and ComfyUI accesses it via a symlink. "
+    "Changes are persisted in ``model_symlink.yaml`` and synced to disk immediately."
 )
 
-# Standard ComfyUI role subdirs.
-COMFYUI_ROLES = [
+# Standard ComfyUI model subdirectories (static baseline).
+# Supplement this with _discover_roles() which merges in whatever
+# directories the running container actually exposes (custom nodes
+# can add arbitrary subdirs).
+_COMFYUI_ROLES_STATIC = [
+    # Core
     "checkpoints",
     "diffusion_models",
-    "loras",
+    "unet",
     "vae",
+    # Text / vision encoders
+    "clip",
+    "text_encoder",
+    "clip_vision",
+    # Adapters
     "controlnet",
     "t2i_adapter",
-    "clip",
-    "unet",
-    "style_models",
-    "upscale_models",
-    "embeddings",
+    "gligen",
+    # LoRA family
+    "loras",
     "hypernetworks",
+    # Conditioning
+    "embeddings",
+    "style_models",
+    # Generation / post
+    "upscale_models",
+    "sag",
+    "inpaint",
+    # Format variants
+    "diffusers",
+    "vae_approx",
+    # Extension-specific (high-traffic custom nodes)
+    "photomaker",
+    "unytt",
+    # Legacy
+    "lora_legacy",
 ]
 
 # Session-state keys for the add form.
 _FORM_STATE_KEY = "models/add_form_state"
 _DIALOG_OPEN_KEY = "models/add_dialog_open"
+
+
+def _discover_roles(container_name: str) -> list[str]:
+    """List model subdirectories the running ComfyUI container exposes.
+
+    Runs ``ls /opt/comfyui/app/models/`` inside the container. Returns
+    directories only. Falls back to the static list on any failure.
+    """
+    container = DockerContainer(container_name)
+    if not container.is_running():
+        return _COMFYUI_ROLES_STATIC
+    rc, stdout, _ = container.exec_run(["ls", "/opt/comfyui/app/models/"])
+    if rc != 0:
+        return _COMFYUI_ROLES_STATIC
+    discovered = sorted({line.strip() for line in stdout.splitlines() if line.strip()})
+    # Merge: static list as baseline, discovered dirs appended so new ones appear at the bottom.
+    known = set(_COMFYUI_ROLES_STATIC)
+    return _COMFYUI_ROLES_STATIC + [d for d in discovered if d not in known]
 
 
 def _refresh() -> None:
@@ -54,48 +99,7 @@ def _refresh() -> None:
 
 
 def _current_rows() -> list[SymlinkRow]:
-    catalog = worker.catalog()
     return applier.list_current(catalog)
-
-
-# --- current symlinks table -----------------------------------------------
-
-st.subheader("Current symlinks")
-rows = st.session_state.get("models/rows_cache") or _current_rows()
-st.session_state["models/rows_cache"] = rows
-
-if not rows:
-    st.caption("No symlinks yet. Use **Add symlinks** below to create one.")
-else:
-    table_data = [
-        {
-            "Source": r.source,
-            "Entry": r.entry,
-            "Piece": r.piece,
-            "Target subdir": r.target_subdir,
-            "Symlink path": str(r.symlink_path),
-            "Resolves to": str(r.target_path) if r.target_path else "— (missing)",
-        }
-        for r in rows
-    ]
-    st.dataframe(table_data, use_container_width=True, hide_index=True)
-
-    # Per-row delete.
-    st.divider()
-    st.subheader("Remove")
-    delete_labels = [
-        f"{r.source}/{r.entry} → {r.target_subdir}/{Path(r.piece).name}"
-        for r in rows
-    ]
-    delete_idx = st.selectbox(
-        "Select row to remove (yaml entry only; prune dangling to clean disk)",
-        range(len(rows)),
-        format_func=lambda i: delete_labels[i],
-        key="models/delete_idx",
-    )
-    if st.button("Remove selected row", key="models/delete_btn"):
-        applier.remove([rows[delete_idx]])
-        _refresh()
 
 
 # --- add dialog -----------------------------------------------------------
@@ -103,7 +107,7 @@ else:
 
 @st.dialog("Add symlinks")
 def _add_dialog() -> None:
-    catalog = worker.catalog()
+    roles = _discover_roles(svc._options.container_name)
     by_source = catalog.by_source()
 
     if not by_source:
@@ -145,7 +149,7 @@ def _add_dialog() -> None:
                 with cols[1]:
                     role = st.selectbox(
                         "Role",
-                        COMFYUI_ROLES,
+                        roles,
                         key=f"{_FORM_STATE_KEY}/{entry.name}/{piece.filename}/role",
                         label_visibility="collapsed",
                     )
@@ -167,11 +171,80 @@ def _add_dialog() -> None:
                 for err in errors:
                     st.error(err)
             else:
-                st.success(f"Added {len(selections)} row(s)")
+                result = applier.apply(catalog)
+                if result.errors:
+                    for row, msg in result.errors:
+                        st.error(f"{row.symlink_path}: {msg}")
+                if result.created or result.updated:
+                    n = len(result.created) + len(result.updated)
+                    st.success(f"Added {len(selections)} row(s); {n} symlink(s) synced to disk")
+                else:
+                    st.success(f"Added {len(selections)} row(s)")
                 _refresh()
     with cols[1]:
         if st.button("Cancel", key=f"{_FORM_STATE_KEY}/cancel"):
             st.rerun()
+
+
+# --- current symlinks table -----------------------------------------------
+
+st.subheader("Current symlinks")
+rows = st.session_state.get("models/rows_cache") or _current_rows()
+st.session_state["models/rows_cache"] = rows
+
+if not rows:
+    st.caption("No symlinks yet. Use **Add symlinks** below to create one.")
+else:
+    table_data = [
+        {
+            "Source": r.source,
+            "Entry": r.entry,
+            "Piece": r.piece,
+            "Target subdir": r.target_subdir,
+            "Symlink path": str(r.symlink_path),
+            "Resolves to": str(r.target_path) if r.target_path else "— (missing)",
+        }
+        for r in rows
+    ]
+    st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+    # Resync yaml rows to disk — creates missing symlinks; no-ops on correct ones.
+    sync_cols = st.columns([1, 1, 4])
+    with sync_cols[0]:
+        if st.button("Add symlinks", key="models/add_btn"):
+            _add_dialog()
+    with sync_cols[1]:
+        if st.button("Resync to disk", key="models/sync_all_btn"):
+            result = applier.apply(catalog)
+            if result.errors:
+                for row, msg in result.errors:
+                    st.error(f"{row.symlink_path}: {msg}")
+            n_created = len(result.created)
+            n_updated = len(result.updated)
+            if n_created or n_updated:
+                st.success(f"Synced: {n_created} created, {n_updated} updated")
+            else:
+                st.info("All symlinks already on disk.")
+            _refresh()
+
+    # Per-row delete.
+    st.divider()
+    st.subheader("Remove")
+    delete_labels = [
+        f"{r.source}/{r.entry} → {r.target_subdir}/{Path(r.piece).name}"
+        for r in rows
+    ]
+    delete_idx = st.selectbox(
+        "Select row to remove (yaml entry only; prune dangling to clean disk)",
+        range(len(rows)),
+        format_func=lambda i: delete_labels[i],
+        key="models/delete_idx",
+    )
+    if st.button("Remove selected row", key="models/delete_btn"):
+        applier.remove([rows[delete_idx]])
+        _refresh()
+
+
 
 
 # --- prune action ---------------------------------------------------------
@@ -199,8 +272,4 @@ if st.button(
         st.info("Nothing to prune.")
 
 
-# --- open dialog ----------------------------------------------------------
 
-st.divider()
-if st.button("Add symlinks", key="models/add_btn"):
-    _add_dialog()

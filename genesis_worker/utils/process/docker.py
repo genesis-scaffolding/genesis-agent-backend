@@ -351,6 +351,26 @@ class DockerContainer:
                 f"{err_blob or 'unknown error'}"
             )
 
+    # --- exec ---------------------------------------------------------------
+
+    def exec_run(
+        self,
+        cmd: list[str],
+        *,
+        timeout_s: float = 10.0,
+    ) -> tuple[int, str, str]:
+        """Run ``cmd`` inside the container via ``docker exec``.
+
+        Returns ``(returncode, stdout, stderr)``. Empty stdout/stderr on
+        any failure (container not running, exec error, etc.).
+        """
+        argv = ["docker", "exec", self._name, *cmd]
+        try:
+            result = _run(argv, timeout=timeout_s)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return -1, "", ""
+        return result.returncode, result.stdout or "", result.stderr or ""
+
     # --- environment probes ------------------------------------------------
 
     @staticmethod

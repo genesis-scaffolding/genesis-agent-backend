@@ -575,3 +575,62 @@ def test_nvidia_runtime_available_false(monkeypatch: pytest.MonkeyPatch) -> None
 def test_nvidia_runtime_available_false_on_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", lambda args, **kw: _completed(args, returncode=1))
     assert DockerContainer.nvidia_runtime_available() is False
+
+
+# --- exec_run --------------------------------------------------------------
+
+
+def test_exec_run_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def _runner(args, **kw):  # type: ignore[no-untyped-def]
+        calls.append(list(args))
+        return _completed(args, returncode=0, stdout="checkpoints\nloras\nvae\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _runner)
+    monkeypatch.setattr("genesis_worker.utils.process.docker._run", _runner)
+
+    rc, stdout, stderr = DockerContainer("c1").exec_run(["ls", "/models/"])
+    assert rc == 0
+    assert stdout == "checkpoints\nloras\nvae\n"
+    assert stderr == ""
+    assert calls[-1] == ["docker", "exec", "c1", "ls", "/models/"]
+
+
+def test_exec_run_returns_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda args, **kw: _completed(args, returncode=1, stderr="not found"),
+    )
+    rc, stdout, stderr = DockerContainer("c1").exec_run(["ls", "/nonexistent"])
+    assert rc == 1
+    assert stdout == ""
+    assert stderr == "not found"
+
+
+def test_exec_run_timeout_returns_minus_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda args, **kw: (_ (_("timeout") if False else None)),  # unreachable; raise instead
+    )
+
+    def _runner(args, **kw):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired("cmd", 10)
+
+    monkeypatch.setattr(subprocess, "run", _runner)
+    rc, stdout, stderr = DockerContainer("c1").exec_run(["sleep", "999"])
+    assert rc == -1
+
+
+def test_exec_run_uses_timeout_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[float] = []
+
+    def _runner(args, **kw):  # type: ignore[no-untyped-def]
+        seen.append(kw.get("timeout", 0))
+        return _completed(args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _runner)
+    DockerContainer("c1").exec_run(["echo", "hi"], timeout_s=7.5)
+    assert seen == [7.5]
