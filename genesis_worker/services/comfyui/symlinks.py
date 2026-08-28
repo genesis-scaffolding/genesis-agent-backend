@@ -208,10 +208,13 @@ class SymlinkApplier:
 
             symlink_path = row.symlink_path
             existing_target: Path | None = None
+            raw_link: str | None = None
             if symlink_path.is_symlink():
                 try:
+                    raw_link = os.readlink(symlink_path)
                     existing_target = symlink_path.resolve(strict=False)
                 except OSError:
+                    raw_link = None
                     existing_target = None
             elif symlink_path.exists():
                 # A regular file lives at the symlink path; refuse to clobber.
@@ -220,8 +223,16 @@ class SymlinkApplier:
                 )
                 continue
 
-            if existing_target is not None and existing_target == row.target_path:
-                # Already correct; no-op.
+            # Skip only when the existing symlink is correct AND uses a
+            # relative target — an absolute link target works on the host
+            # but breaks inside the ComfyUI container where the vault root
+            # is mounted at a different absolute path.
+            if (
+                existing_target is not None
+                and existing_target == row.target_path
+                and raw_link is not None
+                and not os.path.isabs(raw_link)
+            ):
                 continue
 
             # Relative path from the symlink's directory to the blob inside the
