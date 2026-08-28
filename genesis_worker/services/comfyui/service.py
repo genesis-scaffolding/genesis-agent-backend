@@ -7,6 +7,19 @@ import socket
 import subprocess
 from pathlib import Path
 
+import yaml
+
+# Standard ComfyUI model subdirectories. Mirrors the list in ui/models.py.
+_COMFYUI_ROLES = [
+    "audio_encoders", "checkpoints", "clip", "clip_vision", "configs",
+    "controlnet", "depthanything3", "diffusers", "diffusion_models",
+    "embeddings", "gligen", "hypernetworks", "inpaint", "insightface",
+    "ipadapter", "latent_upscale_models", "LLM", "loras", "model_patches",
+    "onnx", "photomaker", "sams", "SEEDVR2", "style_models",
+    "text_encoders", "text_encoder", "ultralytics", "unet", "upscale_models",
+    "vae", "vae_approx", "vibevoice",
+]
+
 from ...contracts import (
     InferenceService,
     InstallState,
@@ -183,6 +196,16 @@ class ComfyUiService(InferenceService):
                 f"count={self._options.gpu_count}",
             ]
 
+        # Write extra_model_paths.yaml to the vault so it is reachable at
+        # /vault/comfyui/extra_model_paths.yaml inside the container.
+        extra_paths_file = self._vault_models_dir / "extra_model_paths.yaml"
+        extra_paths_file.parent.mkdir(parents=True, exist_ok=True)
+        config = {"models": {"base_path": "/vault/comfyui", **{r: r for r in _COMFYUI_ROLES}}}
+        tmp = extra_paths_file.with_suffix(".tmp")
+        with tmp.open("w") as fh:
+            yaml.safe_dump(config, fh, sort_keys=False)
+        os.replace(tmp, extra_paths_file)
+
         return lifecycle.start_comfyui(
             image=self.image_ref,
             image_present=self.is_available(),
@@ -199,7 +222,7 @@ class ComfyUiService(InferenceService):
                 # (e.g. ``../../huggingface/hub/...``) resolve correctly.
                 "/vault": str(self._vault_models_dir.parent),
             },
-            extra_args=["--extra-model-paths", "/vault/comfyui",
+            extra_args=["--extra-model-paths", str(extra_paths_file),
                          *self._options.extra_args],
             env={"PUID": str(self._puid), "PGID": str(self._pgid)},
             runtime=runtime,

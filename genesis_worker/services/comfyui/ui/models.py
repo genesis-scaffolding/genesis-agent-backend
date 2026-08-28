@@ -11,7 +11,12 @@ from pathlib import Path
 
 import streamlit as st
 
+from genesis_worker.services.comfyui.service import (
+    _COMFYUI_ROLES as _COMFYUI_ROLES_STATIC,
+)
 from genesis_worker.services.comfyui.symlinks import SymlinkApplier, SymlinkRow
+
+_COMFYUI_ROLES_STATIC = list(_COMFYUI_ROLES_STATIC)  # convert tuple to list for concatenation
 from genesis_worker.utils.process import DockerContainer
 
 SERVICE_NAME = "comfyui"
@@ -32,42 +37,7 @@ st.caption(
 )
 
 # Standard ComfyUI model subdirectories (static baseline).
-# Supplement this with _discover_roles() which merges in whatever
-# directories the running container actually exposes (custom nodes
-# can add arbitrary subdirs).
-_COMFYUI_ROLES_STATIC = [
-    # Core
-    "checkpoints",
-    "diffusion_models",
-    "unet",
-    "vae",
-    # Text / vision encoders
-    "clip",
-    "text_encoder",
-    "clip_vision",
-    # Adapters
-    "controlnet",
-    "t2i_adapter",
-    "gligen",
-    # LoRA family
-    "loras",
-    "hypernetworks",
-    # Conditioning
-    "embeddings",
-    "style_models",
-    # Generation / post
-    "upscale_models",
-    "sag",
-    "inpaint",
-    # Format variants
-    "diffusers",
-    "vae_approx",
-    # Extension-specific (high-traffic custom nodes)
-    "photomaker",
-    "unytt",
-    # Legacy
-    "lora_legacy",
-]
+
 
 # Session-state keys for the add form.
 _FORM_STATE_KEY = "models/add_form_state"
