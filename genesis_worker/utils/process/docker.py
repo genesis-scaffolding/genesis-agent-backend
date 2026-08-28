@@ -26,6 +26,11 @@ _DEFAULT_RUN_TIMEOUT_S = 60.0
 _USER_AGENT = "genesis-worker"
 _GHCR_BASE = "https://ghcr.io"
 
+# Module-level cache for ``docker --progress=json`` support. Probed
+# once on first use; older Docker daemons (pre-23.0) don't accept
+# the flag and would otherwise fail every pull.
+_PROGRESS_SUPPORT_CACHE: dict[str, bool] = {}
+
 
 def _run(args: list[str], *, timeout: float) -> subprocess.CompletedProcess:
     """Single subprocess call. Never ``shell=True``."""
@@ -183,6 +188,38 @@ class DockerContainer:
     # --- install backend ---------------------------------------------------
 
     @staticmethod
+    def supports_json_progress() -> bool:
+        """True if this ``docker`` binary accepts ``--progress=json``.
+
+        Some distributions (notably our ``moby`` build) omit the
+        ``--progress`` flag even at high version numbers. We probe
+        ``docker pull --help`` and look for the flag in the option
+        list rather than relying on the version number. Probed once
+        and cached.
+        """
+        cached = _PROGRESS_SUPPORT_CACHE.get("json")
+        if cached is not None:
+            return cached
+        try:
+            result = _run(
+                ["docker", "pull", "--help"],
+                timeout=_DEFAULT_INSPECT_TIMEOUT_S,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            _PROGRESS_SUPPORT_CACHE["json"] = False
+            return False
+        if result.returncode != 0:
+            _PROGRESS_SUPPORT_CACHE["json"] = False
+            return False
+        # ``--progress`` is a real flag iff the help text mentions it.
+        # ``podman`` and other build-flavours may report a similar
+        # version but not include the flag, so we check the actual
+        # surface.
+        supported = "--progress" in (result.stdout or "")
+        _PROGRESS_SUPPORT_CACHE["json"] = supported
+        return supported
+
+    @staticmethod
     def image_present(image: str) -> bool:
         """True iff ``docker image inspect <image>`` exits 0."""
         result = _run(
@@ -265,10 +302,13 @@ class DockerContainer:
     ) -> None:
         """Pull ``image``, streaming stderr lines to ``progress``.
 
-        ``progress_format`` is forwarded to ``docker pull`` as
-        ``--progress=<format>``; defaults to ``"json"`` so callers can
-        parse per-layer byte counts. Use ``"plain"`` for human-readable
-        text if parsing is not needed.
+        ``progress_format="json"`` requests ``--progress=json`` from
+        docker (Docker 23.0+). When the daemon is older and rejects
+        the flag, we silently fall back to plain text — the parser
+        ignores non-JSON lines, so the pull still completes; the UI
+        just won't get byte-level progress.
+
+        ``progress_format="plain"`` never adds the flag.
 
         Each non-empty line is forwarded as a single ``progress(line)`` call.
         ``cancel()`` is checked between lines; when it returns True the
@@ -278,7 +318,10 @@ class DockerContainer:
         Raises :class:`RuntimeError` on non-zero exit; :class:`_Canceled`
         when cancel fires.
         """
-        argv = ["docker", "pull", f"--progress={progress_format}", image]
+        argv = ["docker", "pull"]
+        if progress_format == "json" and DockerContainer.supports_json_progress():
+            argv.append("--progress=json")
+        argv.append(image)
         result = subprocess.run(
             argv,
             check=False,
@@ -286,8 +329,12 @@ class DockerContainer:
             text=True,
             timeout=timeout_s,
         )
-        # ``docker pull`` writes progress to stderr; stdout is empty on success.
-        for line in (result.stderr or "").splitlines():
+        # ``docker pull`` writes progress to either stdout or stderr
+        # depending on the daemon build and progress format. Capture
+        # both, then forward any non-empty line to the caller's
+        # ``progress`` callback. Skip empty lines.
+        merged = ((result.stdout or "") + "\n" + (result.stderr or "")).splitlines()
+        for line in merged:
             if cancel is not None and cancel():
                 raise _Canceled()
             line = line.rstrip()
@@ -298,9 +345,10 @@ class DockerContainer:
             raise _Canceled()
 
         if result.returncode != 0:
+            err_blob = (result.stderr or result.stdout or "").strip()[-500:]
             raise RuntimeError(
                 f"docker pull {image} failed (rc={result.returncode}): "
-                f"{(result.stderr or '').strip()[-500:] or 'unknown error'}"
+                f"{err_blob or 'unknown error'}"
             )
 
     # --- environment probes ------------------------------------------------

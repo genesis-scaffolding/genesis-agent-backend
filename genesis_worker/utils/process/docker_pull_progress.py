@@ -80,11 +80,42 @@ class DockerPullProgress:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            # Non-JSON line (e.g. plain-text fallback). Ignore.
+            # Plain-text fallback (Docker <23.0 with no --progress flag).
+            # Update phase from the leading status word; byte counts are
+            # not available so we leave the totals at zero.
+            self._apply_plain_text(line)
             return
         if not isinstance(event, dict):
             return
         self._apply(event)
+
+    def _apply_plain_text(self, line: str) -> None:
+        # Pull-level status lines (no ``<image>:`` prefix) report the
+        # final outcome. Map them to COMPLETE.
+        if line.startswith("Status:"):
+            self._aggregate_phase = _Phase.COMPLETE
+            return
+        if line.startswith("Digest:"):
+            if self._aggregate_phase != _Phase.COMPLETE:
+                self._aggregate_phase = _Phase.VERIFYING
+            return
+        # Docker's plain progress format is roughly:
+        #   "<repo>:<tag>: <status>  [<details>]"
+        # e.g. "v0.34.0-cuda-13.0-amd64: Pulling fs layer"
+        #      "v0.34.0-cuda-13.0-amd64: Downloading  100MB / 200MB"
+        #      "v0.34.0-cuda-13.0-amd64: Pull complete"
+        # We only use the trailing status segment.
+        if ":" in line:
+            _, _, tail = line.rpartition(":")
+            status = tail.strip()
+        else:
+            status = line
+        new_phase = self._phase_for_status(status)
+        if self._aggregate_phase == _Phase.COMPLETE and new_phase == _Phase.UNKNOWN:
+            # Don't downgrade from COMPLETE on trailing echo lines
+            # like "docker.io/library/hello-world:latest".
+            return
+        self._aggregate_phase = new_phase
 
     def _apply(self, event: dict[str, Any]) -> None:
         status = str(event.get("status", ""))
@@ -99,13 +130,22 @@ class DockerPullProgress:
                 layer.current = current
             if total:
                 layer.total = total
-            layer.phase = self._phase_for_status(status)
-            self._aggregate_phase = layer.phase
+            new_phase = self._phase_for_status(status)
+            # Once a layer hits COMPLETE, don't downgrade it on subsequent
+            # ambiguous events (e.g. the post-pull image ref echo).
+            if layer.phase == _Phase.COMPLETE and new_phase == _Phase.UNKNOWN:
+                pass
+            else:
+                layer.phase = new_phase
+            # Aggregate: never go backwards from COMPLETE.
+            if self._aggregate_phase != _Phase.COMPLETE:
+                self._aggregate_phase = layer.phase
             return
 
         # No layer id: a pull-level event (Digest, Status, etc.).
         if "Digest" in status:
-            self._aggregate_phase = _Phase.VERIFYING
+            if self._aggregate_phase != _Phase.COMPLETE:
+                self._aggregate_phase = _Phase.VERIFYING
         elif "Status: Downloaded" in status or "Status: Image is up to date" in status:
             self._aggregate_phase = _Phase.COMPLETE
 

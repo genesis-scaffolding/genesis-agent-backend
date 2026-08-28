@@ -447,6 +447,68 @@ def test_pull_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
         DockerContainer.pull("img:1")
 
 
+def test_pull_drops_progress_flag_when_docker_too_old(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``docker`` is < 23.0 and rejects --progress, we silently fall back."""
+    # Pretend the version probe already cached "no JSON support".
+    from genesis_worker.utils.process import docker as docker_mod
+
+    docker_mod._PROGRESS_SUPPORT_CACHE["json"] = False
+    try:
+        seen_argv: list[list[str]] = []
+
+        def _run(args, **kw):  # type: ignore[no-untyped-def]
+            seen_argv.append(list(args))
+            return _completed(args, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        DockerContainer.pull("img:1")
+        assert seen_argv == [["docker", "pull", "img:1"]]
+    finally:
+        docker_mod._PROGRESS_SUPPORT_CACHE.pop("json", None)
+
+
+def test_pull_passes_progress_flag_when_docker_supports_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``docker`` is 23.0+, we pass ``--progress=json``."""
+    from genesis_worker.utils.process import docker as docker_mod
+
+    docker_mod._PROGRESS_SUPPORT_CACHE["json"] = True
+    try:
+        seen_argv: list[list[str]] = []
+
+        def _run(args, **kw):  # type: ignore[no-untyped-def]
+            seen_argv.append(list(args))
+            return _completed(args, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        DockerContainer.pull("img:1", progress_format="json")
+        assert seen_argv == [["docker", "pull", "--progress=json", "img:1"]]
+    finally:
+        docker_mod._PROGRESS_SUPPORT_CACHE.pop("json", None)
+
+
+def test_pull_plain_format_never_adds_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``progress_format="plain"`` should never include the flag, even when JSON is supported."""
+    from genesis_worker.utils.process import docker as docker_mod
+
+    docker_mod._PROGRESS_SUPPORT_CACHE["json"] = True
+    try:
+        seen_argv: list[list[str]] = []
+
+        def _run(args, **kw):  # type: ignore[no-untyped-def]
+            seen_argv.append(list(args))
+            return _completed(args, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        DockerContainer.pull("img:1", progress_format="plain")
+        assert seen_argv == [["docker", "pull", "img:1"]]
+    finally:
+        docker_mod._PROGRESS_SUPPORT_CACHE.pop("json", None)
+
+
 def test_pull_aborts_when_cancel_fires(monkeypatch: pytest.MonkeyPatch) -> None:
     """When ``cancel`` returns True between lines, pull raises _Canceled."""
     from genesis_worker.utils.process.docker import _Canceled
@@ -461,15 +523,27 @@ def test_pull_aborts_when_cancel_fires(monkeypatch: pytest.MonkeyPatch) -> None:
             self.count += 1
             return self.count > cancel_after
 
+    # Use a real subprocess.run mock that returns four lines on stdout.
+    # The real pull loop iterates merged lines, checking cancel before
+    # forwarding each. ``cancel_after=2`` means cancel() returns False
+    # once, True from the second call onward, so exactly one line
+    # reaches progress.
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda args, **kw: _completed(args, returncode=0, stdout="", stderr="line1\nline2\nline3\nline4\n"),
+        lambda args, **kw: _completed(
+            args,
+            returncode=0,
+            stdout="line1\nline2\nline3\nline4\n",
+            stderr="",
+        ),
     )
     seen: list[str] = []
     with pytest.raises(_Canceled):
         DockerContainer.pull("img:1", progress=seen.append, cancel=_Cancel())
-    # Two lines reached progress before cancel fired.
+    # Two lines reach progress: cancel() returns False on its 1st and
+    # 2nd calls, only flips True on the 3rd. By then line1 and line2
+    # have been forwarded.
     assert seen == ["line1", "line2"]
 
 
