@@ -91,15 +91,70 @@ def test_first_current_step_runs_inspection(tmp_path: Path) -> None:
     assert roles.count("mmproj") == 1
 
 
-def test_no_main_files_returns_failed(tmp_path: Path) -> None:
-    """A repo with only mmproj/MTP fails inspection."""
+def test_mmproj_only_passes_inspection_but_rejected_on_submit(tmp_path: Path) -> None:
+    """An mmproj-only repo passes inspection (files are visible) but cannot be
+    submitted as the main model."""
     api = _make_api([("mmproj-Q8.gguf", 1_000_000_000)])
     state = AcquireState("huggingface", "acme/vision-only")
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
 
     step = session.current_step()
-    assert step.kind == "failed"
-    assert "no main" in (step.error or "")
+    assert step.kind == "select_files"
+    groups = step.file_groups
+    assert groups is not None
+    assert len(groups) == 1
+    assert groups[0].role == "mmproj"
+
+    # Trying to submit mmproj as main is rejected.
+    step = session.submit(AcquireChoice(main_indexes=[1]))
+    assert step.kind == "select_files"
+    assert "roles" in (step.error or "") and "mmproj" in (step.error or "")
+
+
+def test_safetensor_repo_passes_inspection_and_submit(tmp_path: Path) -> None:
+    """A safetensor-only repo surfaces in select_files and can be submitted."""
+    api = _make_api(
+        [("diffusion_model.safetensors", 5_000_000_000),
+         ("text_encoder.safetensors", 3_000_000_000)]
+    )
+    state = AcquireState("huggingface", "acme/comfy-model")
+    session = HfAcquireSession(api, state, cache_dir=tmp_path)
+
+    step = session.current_step()
+    assert step.kind == "select_files"
+    groups = step.file_groups
+    assert groups is not None
+    assert len(groups) == 2
+    for g in groups:
+        assert g.role == "safetensor"
+
+    # Multi-select: both safetensors as main_indexes.
+    step = session.submit(AcquireChoice(main_indexes=[1, 2]))
+    assert step.kind == "confirm_storage"
+
+
+def test_safetensor_multi_select_downloads_all(tmp_path: Path) -> None:
+    """Multi-select safetensors are all downloaded."""
+    api = _make_api(
+        [("a.safetensors", 1_000_000_000), ("b.safetensors", 2_000_000_000)]
+    )
+    state = AcquireState("huggingface", "acme/multi")
+    recorded: list[dict[str, Any]] = []
+
+    def fake_download(**kwargs: Any) -> str:
+        recorded.append(kwargs)
+        return "/tmp/fake"
+
+    session = HfAcquireSession(
+        api, state, cache_dir=tmp_path, hf_hub_download=fake_download,
+    )
+    session.current_step()
+    session.submit(AcquireChoice(main_indexes=[1, 2]))
+    session.submit(AcquireChoice(confirm=True))
+    _wait_for_terminal(session)
+    paths = [c["filename"] for c in recorded]
+    assert "a.safetensors" in paths
+    assert "b.safetensors" in paths
 
 
 def test_inspection_api_error_returns_failed(tmp_path: Path) -> None:
@@ -191,7 +246,7 @@ def test_full_happy_path_records_hf_hub_download_calls(tmp_path: Path) -> None:
 
     # Step 2: submit main + aux -> confirm_storage.
     next_step = session.submit(
-        AcquireChoice(main_index=main_idx, aux_indexes=[aux_idx])
+        AcquireChoice(main_indexes=[main_idx], aux_indexes=[aux_idx])
     )
     assert next_step.kind == "confirm_storage"
     assert next_step.total_bytes == 7_000_000_000 + 1_000_000_000
@@ -242,21 +297,21 @@ def test_confirm_false_returns_to_select_files(tmp_path: Path) -> None:
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
     session.current_step()  # trigger inspecting
 
-    session.submit(AcquireChoice(main_index=1))
+    session.submit(AcquireChoice(main_indexes=[1]))
     assert session.current_step().kind == "confirm_storage"
 
     next_step = session.submit(AcquireChoice(confirm=False))
     assert next_step.kind == "select_files"
 
 
-def test_invalid_main_index_returns_error_in_select_files(tmp_path: Path) -> None:
+def test_invalid_main_indexes_returns_error_in_select_files(tmp_path: Path) -> None:
     files = [("model-Q4_K_M.gguf", 4_000_000_000)]
     api = _make_api(files)
     state = AcquireState("huggingface", "acme/demo")
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
     session.current_step()
 
-    next_step = session.submit(AcquireChoice(main_index=99))
+    next_step = session.submit(AcquireChoice(main_indexes=[99]))
     assert next_step.kind == "select_files"
     assert "out of range" in (next_step.error or "")
 
@@ -272,9 +327,9 @@ def test_selecting_non_main_as_main_returns_error(tmp_path: Path) -> None:
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
     session.current_step()
     # Index 2 is the mmproj.
-    next_step = session.submit(AcquireChoice(main_index=2))
+    next_step = session.submit(AcquireChoice(main_indexes=[2]))
     assert next_step.kind == "select_files"
-    assert "must be 'main'" in (next_step.error or "")
+    assert "roles" in (next_step.error or "")
 
 
 def test_selecting_two_mmprojs_returns_error(tmp_path: Path) -> None:
@@ -289,7 +344,7 @@ def test_selecting_two_mmprojs_returns_error(tmp_path: Path) -> None:
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
     session.current_step()
     # Indexes 1 (main), 2 and 3 (mmprojs).
-    next_step = session.submit(AcquireChoice(main_index=1, aux_indexes=[2, 3]))
+    next_step = session.submit(AcquireChoice(main_indexes=[1], aux_indexes=[2, 3]))
     assert next_step.kind == "select_files"
     assert "one mmproj" in (next_step.error or "")
 
@@ -306,7 +361,7 @@ def test_cancel_before_download_transitions_to_cancelled(tmp_path: Path) -> None
     state = AcquireState("huggingface", "acme/demo")
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
     session.current_step()
-    session.submit(AcquireChoice(main_index=1))
+    session.submit(AcquireChoice(main_indexes=[1]))
 
     session.cancel()
     step = session.current_step()
@@ -321,7 +376,7 @@ def test_cancel_mid_download_aborts_thread(tmp_path: Path) -> None:
     state = AcquireState("huggingface", "acme/demo")
     session = HfAcquireSession(api, state, cache_dir=tmp_path)
     session.current_step()
-    session.submit(AcquireChoice(main_index=1))
+    session.submit(AcquireChoice(main_indexes=[1]))
 
     download_started = threading.Event()
     download_can_return = threading.Event()

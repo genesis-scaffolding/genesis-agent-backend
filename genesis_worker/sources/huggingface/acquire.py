@@ -43,7 +43,7 @@ AUX_MARKERS = (
     "draft",
 )
 
-_ROLE_ORDER = {"main": 0, "mmproj": 1, "mtp": 2, "unsupported": 3}
+_ROLE_ORDER = {"main": 0, "mmproj": 1, "mtp": 2, "safetensor": 0, "unsupported": 3}
 
 
 @dataclass(frozen=True)
@@ -61,15 +61,19 @@ class _RemoteFile:
 
 
 def classify_path(path: str) -> str:
-    """Classify a remote GGUF path for the file-selection UI."""
+    """Classify a remote file path for the file-selection UI."""
     name = Path(path).name.lower()
-    if "mmproj" in name:
-        return "mmproj"
-    if name.startswith("mtp-"):
-        return "mtp"
-    if any(marker in name for marker in AUX_MARKERS):
-        return "unsupported"
-    return "main"
+    if ".gguf" in name:
+        if "mmproj" in name:
+            return "mmproj"
+        if name.startswith("mtp-"):
+            return "mtp"
+        if any(marker in name for marker in AUX_MARKERS):
+            return "unsupported"
+        return "main"
+    if path.lower().endswith(".safetensors"):
+        return "safetensor"
+    return "unsupported"
 
 
 def group_files(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
@@ -260,27 +264,40 @@ class HfAcquireSession(AcquireSession):
             )
             return
 
-        files: list[_RemoteFile] = []
+        gguf_files: list[_RemoteFile] = []
+        st_files: list[_RemoteFile] = []
         for item in tree:
             path = getattr(item, "path", None)
-            if not path or not path.lower().endswith(GGUF_EXT):
+            if not path:
                 continue
-            # Folder entries have no size; the GGUF filter makes these
-            # impossible, but the guard keeps a future API shape from
-            # turning a folder into a downloadable file.
             if not hasattr(item, "size"):
                 continue
             size = getattr(item, "size", None)
-            files.append(_RemoteFile(path=path, size=size))
+            if path.lower().endswith(GGUF_EXT):
+                gguf_files.append(_RemoteFile(path=path, size=size))
+            elif path.lower().endswith(".safetensors"):
+                st_files.append(_RemoteFile(path=path, size=size))
 
-        self._files = sorted(files, key=lambda f: f.path.lower())
+        self._files = sorted(gguf_files, key=lambda f: f.path.lower())
         self._groups = group_files(self._files)
+        # Each safetensor file is its own unsplittable group.
+        for f in st_files:
+            self._groups.append(
+                AcquireFileGroup(
+                    paths=[f.path],
+                    size=f.size,
+                    role="safetensor",
+                    label=f.path,
+                    is_sharded=False,
+                )
+            )
+        self._groups.sort(key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
-        if not any(g.role == "main" for g in self._groups):
+        if not self._groups:
             self._state.last_step = AcquireStep(
                 kind="failed",
-                title=f"No main GGUF in {self._state.repo_id}",
-                error="repository has no main GGUF candidates",
+                title=f"No supported files in {self._state.repo_id}",
+                error="repository has no .gguf or .safetensors files",
                 can_cancel=False,
             )
             return
@@ -288,7 +305,7 @@ class HfAcquireSession(AcquireSession):
         self._state.last_step = AcquireStep(
             kind="select_files",
             title=f"Select files for {self._state.repo_id}",
-            prompt="Pick one main file and any auxiliaries",
+            prompt="Pick file(s) and any auxiliaries",
             file_groups=self._groups,
             can_cancel=True,
         )
@@ -296,22 +313,32 @@ class HfAcquireSession(AcquireSession):
     # --- select_files -> confirm_storage ----------------------------------
 
     def _submit_select_files(self, choice: AcquireChoice) -> AcquireStep:
-        if choice.main_index is None or choice.main_index < 1:
+        if not choice.main_indexes:
             self._state.last_step = self._select_files_step_with_error(
-                "main_index is required",
+                "select at least one file",
             )
             return self._state.last_step  # type: ignore[return-value]
 
-        if choice.main_index > len(self._groups):
-            self._state.last_step = self._select_files_step_with_error(
-                f"main_index {choice.main_index} out of range",
-            )
-            return self._state.last_step  # type: ignore[return-value]
+        selected_groups: list[AcquireFileGroup] = []
+        for idx in choice.main_indexes:
+            if idx < 1 or idx > len(self._groups):
+                self._state.last_step = self._select_files_step_with_error(
+                    f"index {idx} out of range",
+                )
+                return self._state.last_step  # type: ignore[return-value]
+            selected_groups.append(self._groups[idx - 1])
 
-        main = self._groups[choice.main_index - 1]
-        if main.role != "main":
+        # GGUF repos require exactly one "main" group. Safetensor repos accept
+        # any number of safetensor groups (multi-select); mmproj/mtp aux rules
+        # do not apply.
+        main_roles = {g.role for g in selected_groups}
+        if not (
+            "safetensor" in main_roles
+            or (main_roles == {"main"} and len(selected_groups) == 1)
+        ):
+            roles_seen = "/".join(sorted(main_roles)) or "(none)"
             self._state.last_step = self._select_files_step_with_error(
-                f"selected group is role={main.role!r}, must be 'main'",
+                f"selected roles [{roles_seen}]; GGUF needs exactly one 'main' group",
             )
             return self._state.last_step  # type: ignore[return-value]
 
@@ -325,29 +352,31 @@ class HfAcquireSession(AcquireSession):
             aux.append(self._groups[idx - 1])
 
         # Enforce single-mmproj and single-mtp (matches bin/hf-model.py).
-        if sum(g.role == "mmproj" for g in aux) > 1:
-            self._state.last_step = self._select_files_step_with_error(
-                "select at most one mmproj",
-            )
-            return self._state.last_step  # type: ignore[return-value]
-        if sum(g.role == "mtp" for g in aux) > 1:
-            self._state.last_step = self._select_files_step_with_error(
-                "select at most one MTP/draft",
-            )
-            return self._state.last_step  # type: ignore[return-value]
+        # Only applies to GGUF pipelines; safetensors do not use these roles.
+        if "safetensor" not in main_roles:
+            if sum(g.role == "mmproj" for g in aux) > 1:
+                self._state.last_step = self._select_files_step_with_error(
+                    "select at most one mmproj",
+                )
+                return self._state.last_step  # type: ignore[return-value]
+            if sum(g.role == "mtp" for g in aux) > 1:
+                self._state.last_step = self._select_files_step_with_error(
+                    "select at most one MTP/draft",
+                )
+                return self._state.last_step  # type: ignore[return-value]
 
-        self._state.selected_main = main
+        self._state.selected_main = selected_groups
         self._state.selected_aux = aux
 
         total_bytes: int | None = None
-        sizes: list[int | None] = [main.size, *(g.size for g in aux)]
+        sizes = [g.size for g in (*selected_groups, *aux)]
         if all(s is not None for s in sizes):
             total_bytes = sum(s for s in sizes if s is not None)  # type: ignore[union-attr]
 
         self._state.last_step = AcquireStep(
             kind="confirm_storage",
             title=f"Confirm download for {self._state.repo_id}",
-            prompt=f"Will download {len(aux) + 1} group(s) ({total_bytes or '?'} bytes)",
+            prompt=f"Will download {len(selected_groups) + len(aux)} group(s) ({total_bytes or '?'} bytes)",
             total_bytes=total_bytes,
             cache_dir=self._cache_dir,
             can_cancel=True,
@@ -358,7 +387,7 @@ class HfAcquireSession(AcquireSession):
         return AcquireStep(
             kind="select_files",
             title=f"Select files for {self._state.repo_id}",
-            prompt="Pick one main file and any auxiliaries",
+            prompt="Pick file(s) and any auxiliaries",
             file_groups=self._groups,
             error=error,
             can_cancel=True,
@@ -369,7 +398,7 @@ class HfAcquireSession(AcquireSession):
     def _submit_confirm_storage(self, choice: AcquireChoice) -> AcquireStep:
         if not choice.confirm:
             # User declined: send back to select_files.
-            self._state.selected_main = None
+            self._state.selected_main = []
             self._state.selected_aux = []
             self._state.last_step = AcquireStep(
                 kind="select_files",
@@ -419,10 +448,9 @@ class HfAcquireSession(AcquireSession):
         logger = logging.getLogger("huggingface_hub")
         logger.addHandler(handler)
         try:
-            main = self._state.selected_main
-            if main is None:
+            if not self._state.selected_main:
                 raise RuntimeError("internal: no selected_main when downloading")
-            selected = [main, *self._state.selected_aux]
+            selected = [*self._state.selected_main, *self._state.selected_aux]
             total_files = sum(len(g.paths) for g in selected)
             done = 0
             total = sum(s.size for s in selected if s.size is not None)

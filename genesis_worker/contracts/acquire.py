@@ -47,7 +47,7 @@ class AcquireStep:
 class AcquireChoice:
     """User input for one :class:`AcquireStep`."""
 
-    main_index: int | None = None
+    main_indexes: list[int] | None = None
     aux_indexes: list[int] | None = None
     confirm: bool | None = None
 
@@ -58,7 +58,7 @@ class AcquireState:
     def __init__(self, source: str, repo_id: str) -> None:
         self.source = source
         self.repo_id = repo_id
-        self.selected_main: AcquireFileGroup | None = None
+        self.selected_main: list[AcquireFileGroup] = []
         self.selected_aux: list[AcquireFileGroup] = []
         self.confirmed: bool = False
         self.last_step: AcquireStep | None = None

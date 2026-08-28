@@ -38,8 +38,14 @@ elif step.kind == "select_files" and step.file_groups:
     # one selectable model (with shards as `paths`). Indices submitted to
     # AcquireChoice are 1-based into step.file_groups.
     groups = step.file_groups
-    main_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role == "main"]
-    aux_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role in ("mmproj", "mtp")]
+    main_groups = [
+        (i, g) for i, g in enumerate(groups, start=1)
+        if g.role in ("main", "safetensor")
+    ]
+    aux_groups = [
+        (i, g) for i, g in enumerate(groups, start=1)
+        if g.role in ("mmproj", "mtp")
+    ]
 
     def _label(g) -> str:
         if g.paths:
@@ -47,28 +53,30 @@ elif step.kind == "select_files" and step.file_groups:
         return g.label
 
     with st.form("select-files"):
-        main_choice = None
-        if main_groups:
-            options = [_label(g) for _, g in main_groups]
-            chosen = st.selectbox("Main model", options, key="select-main")
-            main_choice = main_groups[options.index(chosen)][0]
+        options = [_label(g) for _, g in main_groups]
+        chosen_labels: list[str] = st.multiselect(
+            "Model(s) to download",
+            options,
+            key="select-main",
+        )
         aux_choices: list[int] = []
         for role in ("mmproj", "mtp"):
             role_groups = [(i, g) for i, g in aux_groups if g.role == role]
             if not role_groups:
                 continue
-            options = [_label(g) for _, g in role_groups]
+            opts = [_label(g) for _, g in role_groups]
             chosen = st.selectbox(
                 f"{role} (optional)",
-                ["(none)", *options],
+                ["(none)", *opts],
                 key=f"select-{role}",
             )
             if chosen != "(none)":
-                aux_choices.append(role_groups[options.index(chosen)][0])
+                aux_choices.append(role_groups[opts.index(chosen)][0])
         if st.form_submit_button("Continue"):
+            main_indexes = [main_groups[options.index(l)][0] for l in chosen_labels]
             worker.submit_acquire(
                 session,
-                AcquireChoice(main_index=main_choice, aux_indexes=aux_choices or None),
+                AcquireChoice(main_indexes=main_indexes or None, aux_indexes=aux_choices or None),
             )
             st.rerun()
 
