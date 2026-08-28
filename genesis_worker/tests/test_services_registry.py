@@ -44,7 +44,13 @@ def test_registry_unknown_service_raises() -> None:
 
 
 def test_registry_all_returns_every_service() -> None:
-    assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {"llama_swap", "cptr"}
+    assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {"llama_swap", "cptr", "comfyui"}
+
+
+def test_comfyui_service_is_auto_discovered() -> None:
+    """Adding the comfyui subpackage should auto-register it."""
+    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    assert "comfyui" in names
 
 
 def test_abstract_service_cannot_be_instantiated(tmp_path: Path) -> None:
