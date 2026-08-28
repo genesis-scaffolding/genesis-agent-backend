@@ -6,6 +6,78 @@ A toolkit for managing GGUF models behind [llama-swap](https://github.com/mostly
 
 **Work in progress.** Works on my setup; expect rough edges. APIs and file layout will change.
 
+## Services
+
+| Service | Purpose | Backend |
+|---|---|---|
+| `llama_swap` | LLM serving via llama-swap | tmux + native binary |
+| `cptr` | Open WebUI Computer | uv-installed Python tool |
+| `comfyui` | Image/video generation via ComfyUI | Docker container |
+
+## ComfyUI service
+
+ComfyUI runs as a Docker container (`ghcr.io/genesis-scaffolding/comfyui-cuda`). The service pulls the image, manages the container lifecycle, and bridges files between the source-organised model vault and ComfyUI's role-organised model directory.
+
+### Image source
+
+- Default image: `ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64`.
+- Override the tag via `GENESIS_SERVICES__COMFYUI__IMAGE_TAG=...` in `.env`.
+- The Image page lists every tag from the registry; pick a tag, click Install.
+
+### Networking
+
+- Default listen port: `8188` (ComfyUI's own default).
+- Override via `GENESIS_SERVICES__COMFYUI__LISTEN_PORT=...`.
+
+### Bind mounts
+
+The container expects persistent state across restarts. Six bind mounts are configured:
+
+| Host path | Container path | Purpose |
+|---|---|---|
+| `<vault>/comfyui/` | `/opt/comfyui/app/models` | Symlink-managed model files |
+| `<data_dir>/comfyui/data/python/` | `/opt/comfyui/python` | Python venv (slow to rebuild) |
+| `<data_dir>/comfyui/data/custom_nodes/` | `/opt/comfyui/app/custom_nodes` | ComfyUI-Manager-installed nodes |
+| `<data_dir>/comfyui/data/input/` | `/opt/comfyui/app/input` | Input images |
+| `<data_dir>/comfyui/data/output/` | `/opt/comfyui/app/output` | Output images |
+| `<data_dir>/comfyui/data/profiles/` | `/opt/comfyui/app/user` | Workflows and Manager config |
+
+`<vault>` is `settings.paths.resolved_vault_path`; `<data_dir>` is XDG `~/.local/share/genesis-worker/`. All six paths are overridable via `GENESIS_SERVICES__COMFYUI__DATA_*_DIR=...` settings.
+
+### Bridging the model vault
+
+ComfyUI reads `models/<role>/<file>` (e.g. `models/checkpoints/sd_xl.safetensors`). The vault is organised by source (e.g. `huggingface/hub/models--org--repo/snapshots/<sha>/<file>`). The service bridges the two via a user-managed `model_symlink.yaml`:
+
+```yaml
+version: 1
+symlinks:
+  - source: huggingface
+    entry: "Qwen/Qwen-Image"
+    piece: qwen_image_bf16.safetensors
+    target_subdir: diffusion_models
+  - source: huggingface
+    entry: "Wan-AI/Wan2.1-T2V-14B"
+    piece: wan2.1_vae.safetensors
+    target_subdir: vae
+```
+
+The Models page in the dashboard lets you pick catalog entries and pieces and assign ComfyUI roles (checkpoints, loras, vae, controlnet, ...) to each. Symlinks live at `<vault>/comfyui/<role>/<basename>`; ComfyUI reads them transparently because bind-mounts follow host symlinks.
+
+### GPU requirement
+
+The image is CUDA-only. The service probes `nvidia-smi -L` at construction. When `gpu_required=true` (the default) and no NVIDIA GPU is detected, install and Start buttons are disabled with a clear message. Override via `GENESIS_SERVICES__COMFYUI__GPU_REQUIRED=false` for testing without a GPU.
+
+### PUID/PGID
+
+The container runs as `PUID:1000 PGID:1000` by default. The service auto-derives these from `id -u`/`id -g` so the container matches the host user. Override via `GENESIS_SERVICES__COMFYUI__PUID=...` and `GENESIS_SERVICES__COMFYUI__PGID=...` for multi-user hosts.
+
+### Symlink gotchas
+
+- **Ownership.** If the symlinked HF blobs are owned by a UID different from `PUID`, ComfyUI inside the container cannot read them. Auto-derived PUID/PGID matches the host user; check before override.
+- **Stale symlinks.** When `worker.delete_model(source, name)` removes HF cache files, the symlinks dangle. Use the Models page's "Prune dangling" button to clean up.
+- **Snapshot rotation.** The yaml stores catalog-relative identity (`source`, `entry`, `piece` filename), not resolved blob paths. HF snapshot rotations that keep the filename intact don't break symlinks.
+- **Cross-filesystem traversal.** Symlinks crossing mount points (e.g. vault on one disk, files on another) work but may be slow on networked filesystems.
+
 ## What it does
 
 Walks a local models directory, builds a YAML catalog, and uses a small recipe file to generate a llama-swap config. Adding a new model usually means dropping the GGUF on disk and adding a few lines to `recipes.yaml`.
