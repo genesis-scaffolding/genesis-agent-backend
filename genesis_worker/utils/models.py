@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .contracts import ServiceCapabilities
+from ..contracts import ServiceCapabilities
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,21 @@ class HostInfo:
     tailscale_ip: str | None
 
 
+@dataclass(frozen=True)
+class MachineMetrics:
+    """Snapshot of system resource usage at one moment in time."""
+
+    cpu_percent: float
+    ram_used_gb: float
+    ram_total_gb: float
+    gpu_percent: float | None
+    vram_used_gb: float | None
+    vram_total_gb: float | None
+
+
 __all__ = [
     "HostInfo",
+    "MachineMetrics",
     "ServiceInfo",
     "SourceInfo",
 ]

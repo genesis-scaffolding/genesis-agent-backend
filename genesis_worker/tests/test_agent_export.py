@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.paths import repo_root
 from genesis_worker.services.llama_swap.export_pi_config import (
     FALLBACK_PROVIDER_NAME,
     build_provider,
     write_models_json,
 )
+from genesis_worker.utils.paths import repo_root
 
 # ---------------------------------------------------------------------------
 # Synthetic fixtures (no real config.yaml needed)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.paths import repo_root, xdg_path
+from genesis_worker.utils.paths import repo_root, xdg_path
 
 
 def test_repo_root_finds_pyproject_or_makefile(

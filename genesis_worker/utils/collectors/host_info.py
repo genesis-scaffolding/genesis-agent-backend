@@ -13,7 +13,7 @@ import subprocess
 import time
 import urllib.request
 
-from .models import HostInfo
+from ..models import HostInfo
 
 
 def collect_host_info() -> HostInfo:

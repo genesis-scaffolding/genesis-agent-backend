@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from genesis_worker.catalog_build import compute_content_hash
-from genesis_worker.catalog_io import load_catalog, save_catalog
 from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
+from genesis_worker.utils.catalog_io import load_catalog, save_catalog
+from genesis_worker.utils.catalog_utils import compute_content_hash
 
 
 def _entry(name: str, source: str = "huggingface", n: int = 1024) -> ModelEntry:

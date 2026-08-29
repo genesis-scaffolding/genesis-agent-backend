@@ -8,7 +8,7 @@ Persistent catalog with stable `generated_at` and source-agnostic `Catalog` shap
 
 Two related correctness problems with the in-memory catalog:
 
-1. **`generated_at` rotates on every rescan.** `_build_catalog` stamps `datetime.now(UTC)` on every call (`genesis_worker/catalog_build.py:50`). A rescan that observes no change to the vault still produces a new timestamp. The llama-swap config editor's staleness check (`is_config_stale` in `genesis_worker/services/llama_swap/generate_config.py:780`) compares the catalog's `generated_at` against the `generated_at` embedded in `config.yaml`. So every streamlit startup, and every explicit "Rescan" click, makes the config look stale — even when nothing has changed.
+1. **`generated_at` rotates on every rescan.** `build_catalog` stamps `datetime.now(UTC)` on every call (`genesis_worker/utils/catalog_utils.py`). A rescan that observes no change to the vault still produces a new timestamp. The llama-swap config editor's staleness check (`is_config_stale` in `genesis_worker/services/llama_swap/generate_config.py:780`) compares the catalog's `generated_at` against the `generated_at` embedded in `config.yaml`. So every streamlit startup, and every explicit "Rescan" click, makes the config look stale — even when nothing has changed.
 
 2. **The catalog isn't persisted.** It lives only in `GenesisWorker._catalog_cache` (`genesis_worker/facade.py:42`). After an HF acquire completes, the new file lands on disk but the cached catalog doesn't see it until the user clicks "Rescan catalog" (or streamlit restarts and the cache is empty). The button's tooltip also lies — it says "writes to `~/.cache/genesis-worker/`" though rescan writes nothing anywhere.
 

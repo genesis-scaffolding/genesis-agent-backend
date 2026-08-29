@@ -31,6 +31,6 @@ Proposed.
 - The confirmation dialog prevents accidental deletions.
 - Deletion is irreversible — there is no undo or trash.
 - If the service (e.g. llama-swap) is using a model, deleting it while the service is running may cause runtime errors. The UI does not check service state; users are responsible for stopping services before deletion.
-- `compute_content_hash` in `catalog_build.py` must be updated: the hash already excludes `directory`, so a rescan that finds the directory missing will produce the same hash as if the entry were deleted — no stale hash collision.
+- `compute_content_hash` in `genesis_worker/utils/catalog_utils.py` must be updated: the hash already excludes `directory`, so a rescan that finds the directory missing will produce the same hash as if the entry were deleted — no stale hash collision.
 
 
