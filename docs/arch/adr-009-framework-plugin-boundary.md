@@ -121,5 +121,4 @@ Negative:
 Known exception:
 - `Catalog` hardcodes `huggingface` and `lmstudio` as fields, so a framework type names two plugins. ADR-008 pins the `MODEL_CATALOG.yaml` shape for diff-validation against `bin/catalog.py`; generalizing to `entries: list[ModelEntry]` needs a custom serializer to preserve it. Revisit when `bin/catalog.py` retires.
 
-## Spec
-[spec-002-services-and-acquire](specs/spec-002-services-and-acquire.md)
+

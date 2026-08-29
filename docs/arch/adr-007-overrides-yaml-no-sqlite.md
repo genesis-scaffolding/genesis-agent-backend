@@ -65,8 +65,4 @@ Negative:
 Neutral:
 - One more YAML file in the layout; not a problem.
 
-## Spec
-[spec-001-core-architecture](specs/spec-001-core-architecture.md)
 
-## Plan
-[plan-001-core-architecture](plans/plan-001-core-architecture.md)

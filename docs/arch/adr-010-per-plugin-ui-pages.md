@@ -186,8 +186,3 @@ Proposed.
 - The `streamlit_app/` directory shrinks to two files (`app.py`, `run.sh`).
 - Polling cadence is a UX concern, not architectural. Settled in spec-003 / plan-003.
 
-## Spec
-[docs/arch/specs/spec-003-facade-and-ui.md](../specs/spec-003-facade-and-ui.md) — to be revised against this ADR.
-
-## Plan
-[docs/arch/plans/plan-003-facade-and-ui.md](../plans/plan-003-facade-and-ui.md) — to be revised against this ADR.

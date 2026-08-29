@@ -162,10 +162,4 @@ v1 only. `bin/up` continues to work unchanged. The pre-installed llama-swap on P
 
 Accepted.
 
-## Spec
 
-[docs/arch/specs/spec-005-service-install.md](../specs/spec-005-service-install.md)
-
-## Plan
-
-[docs/arch/plans/plan-005-service-install.md](../plans/plan-005-service-install.md)

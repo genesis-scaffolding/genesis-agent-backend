@@ -296,6 +296,4 @@ The bind-mount + symlink pattern has four gotchas the spec must address (the pla
 - GPU probing in the service is a temporary measure; ADR-025 plans to fold host info into the framework (out of scope here). The probing is robust enough (the `nvidia-smi -L` timeout pattern already used by llama-swap's variant detection) that swapping it later is mechanical.
 - `DockerContainer` is a thin wrapper. Future container services (A1111, Fooocus, Kohya) will compose it; they will each write their own `lifecycle.py` with their own bind-mount and arg shape. That's the right level of abstraction — the bind mount is service-specific.
 
-## Plan
 
-[plan-025-comfyui-service](../plans/plan-025-comfyui-service.md)

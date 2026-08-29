@@ -99,10 +99,3 @@ Accepted.
 - `schema_version: 1` is forward-looking. Nothing to migrate today.
 - The `Catalog.by_source()` accessor still exists and is the right way for consumers to iterate. Its internal implementation changed; its contract didn't.
 
-## Spec
-
-[docs/arch/specs/spec-004-persistent-catalog-and-source-agnostic-shape.md](../specs/spec-004-persistent-catalog-and-source-agnostic-shape.md)
-
-## Plan
-
-[docs/arch/plans/plan-004-persistent-catalog-and-source-agnostic-shape.md](../plans/plan-004-persistent-catalog-and-source-agnostic-shape.md)

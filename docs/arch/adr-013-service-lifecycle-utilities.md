@@ -197,10 +197,4 @@ Both `InferenceService` instances already expose `tail_log(n_bytes)`, so `render
 - `lifecycle.py` files in both services shrink to ~20 lines each. They become thin wrappers that compose the framework utilities.
 - `install.py` files in both services shrink: the session class is replaced by a subclass of `BackgroundInstallSession`, leaving only `_run_inner` and the `ServiceInstall` adapter methods.
 
-## Spec
 
-[docs/arch/specs/spec-008-service-lifecycle-utilities.md](../specs/spec-008-service-lifecycle-utilities.md)
-
-## Plan
-
-[docs/arch/plans/plan-008-service-lifecycle-utilities.md](../plans/plan-008-service-lifecycle-utilities.md)

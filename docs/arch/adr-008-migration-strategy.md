@@ -71,7 +71,7 @@ The legacy artifacts listed below have been retired and the Makefile itself is r
 | `config.yaml` (repo root) | Removed (commit `f4e039d`). |
 | `MODEL_CATALOG.{yaml,md}` (repo root) | Removed (commit `f4e039d`). |
 | `pi-models.json` (repo root) | Was always gitignored local-only output of `bin/pi-models.py`; no longer produced. |
-| `Makefile` | Retired and replaced under [ADR-017](adr-017-replace-makefile.md) / [spec-017](specs/spec-017-makefile-rewrite.md) / [plan-017](plans/plan-017-makefile-rewrite.md). |
+
 | `bin/bonsai-server` | The promise to move this debug tool under `scripts/dev/` was never carried out. The tool is unused; the promise is dropped. |
 
 ## Consequences
@@ -89,8 +89,4 @@ Negative:
 Neutral:
 - We accept that the `bin/` scripts' PEP 723 inline-script shebangs and the `Makefile`'s direct-`python3` invocations are inconsistent with the new uv-managed package. Resolved by retirement.
 
-## Spec
-[spec-003-facade-and-ui](specs/spec-003-facade-and-ui.md) (Phase 10 retirement phase is described here)
 
-## Plan
-[plan-003-facade-and-ui](plans/plan-003-facade-and-ui.md) (Phase 10 retirement step list is described here)

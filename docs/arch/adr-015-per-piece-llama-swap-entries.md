@@ -24,13 +24,7 @@ The change is isolated to `generate_config.py`:
 
 Accepted.
 
-## Spec
 
-[spec-010: Per-piece llama-swap config entries](../specs/spec-010-per-piece-llama-swap-entries.md)
-
-## Plan
-
-[plan-010: Per-piece llama-swap config entries](../plans/plan-010-per-piece-llama-swap-entries.md)
 
 ## Consequences
 

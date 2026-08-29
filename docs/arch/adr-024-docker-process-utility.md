@@ -133,6 +133,4 @@ genesis_worker/
 - `DockerContainer` is a thin wrapper. It does not own any state besides the container name; the installable owns image selection, the service owns compose args, the symlink applier (ADR-025) owns bind-mount contents.
 - `pull()` is a static method; there's no `DockerPull` class. This matches `GithubReleaseTarball.available_versions()` being a method on the backend object — the install session carries state, not the pull helper.
 
-## Plan
 
-[plan-024-docker-process-utility](../plans/plan-024-docker-process-utility.md)

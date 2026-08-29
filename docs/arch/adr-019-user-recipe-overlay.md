@@ -56,5 +56,4 @@ Neutral:
 
 Partially supersedes ADR-009 (§ Config and recipes locations): "Recipes … are shipped content, not user configuration" is amended — bundled recipes remain shipped content, but user recipe configuration now exists in the data directory. Annotated inline in ADR-009.
 
-## Plan
-[plan-019-user-recipe-overlay](plans/plan-019-user-recipe-overlay.md)
+

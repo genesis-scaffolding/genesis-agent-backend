@@ -116,6 +116,4 @@ Three alternatives were considered:
 - The contract test (`test_plugin_boundary.py`) walks plugin imports, not context shape. Unaffected by this change.
 - `vault_path` resolution stays in `PathsSettings.resolved_vault_path`; no settings-layer changes.
 
-## Plan
 
-[plan-023-vault-path-on-plugin-context](../plans/plan-023-vault-path-on-plugin-context.md)
