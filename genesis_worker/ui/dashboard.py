@@ -130,7 +130,7 @@ with st.container(border=True):
                         # Badge only — the action button and Web UI link are
                         # rendered in our own layout below so the action row
                         # can sit beside the Admin button, and the URL is
-                        # visible (not a button) under the divider.
+                        # visible (not a button) under the badge.
                         render_service_controls(
                             svc,
                             status,
@@ -138,6 +138,16 @@ with st.container(border=True):
                             show_web_ui_link=False,
                             key_prefix=f"dash-{info.name}",
                         )
+
+                        # Web UI as a clickable URL under the badge. When
+                        # the service isn't running we render a single-line
+                        # placeholder so the card layout doesn't shift
+                        # between states.
+                        endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
+                        if endpoint and status.state.value == "running":
+                            st.markdown(f"[{endpoint}]({endpoint})")
+                        else:
+                            st.markdown("&nbsp;", unsafe_allow_html=True)
 
                         st.divider()
 
@@ -158,15 +168,6 @@ with st.container(border=True):
                                 use_container_width=True,
                             ):
                                 st.switch_page(_to_relative(pages[0].path))
-
-                        # Web UI as a clickable URL. When the service isn't
-                        # running we render a single-line placeholder so the
-                        # card layout doesn't shift between states.
-                        endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
-                        if endpoint and status.state.value == "running":
-                            st.markdown(f"[{endpoint}]({endpoint})")
-                        else:
-                            st.markdown("&nbsp;", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
