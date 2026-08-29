@@ -163,15 +163,12 @@ for installable in svc.installs():
                         st.session_state.pop(drop_key, None)
                         st.rerun()
             else:
-                render_target = st.empty()
-
                 @st.fragment(run_every="2s")
                 def _progress(
-                    session=session, render_target=render_target, drop_key=drop_key
+                    session=session, drop_key=drop_key
                 ) -> None:
                     step = session.view()
-                    with render_target.container():
-                        _render_step(step)
+                    _render_step(step)
                     if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
                         drop_key
                     ):

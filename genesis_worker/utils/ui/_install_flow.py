@@ -54,9 +54,6 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
                 st.rerun()
         return
 
-    _render_step(step)
-    render_target = st.empty()
-
     @st.fragment(run_every="2s")
     def _progress(
         drop_key: str,
@@ -65,8 +62,7 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
     ) -> None:
         session: AcquireSession = st.session_state[sess_key]
         current = session.view()
-        with render_target.container():
-            _render_step(current)
+        _render_step(current)
         if current.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
             drop_key
         ):
