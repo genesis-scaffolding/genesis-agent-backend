@@ -49,4 +49,4 @@ for src_info in worker.list_sources():
         _page(p.path, p.label, p.icon, p.url_path) for p in src.ui_pages
     ]
 
-st.navigation(nav, position="top").run()
+st.navigation(nav).run()
