@@ -22,10 +22,13 @@ st.title("Genesis Worker")
 # equalize their heights — the row's tallest column determines the row
 # height, shorter columns top-align and leave empty space below. We use
 # a wrapping loop (PER_ROW cards per row) so the layout scales to any
-# number of services, and this CSS nudge so cards within the same row
-# stretch to the row's tallest member. Both rules are required: the
-# first equalizes the column slots, the second stretches each card's
-# inner block to fill its column.
+# number of cards, and this CSS nudge so cards within the same row
+# stretch to the row's tallest member. The three rules together are
+# required: (1) equalizes the column slots, (2) makes the column's
+# inner vertical block a flex column, (3) makes the bordered
+# ``st.container`` inside each column flex to fill its column. Without
+# (3) the card's visible border stops at its content height and
+# shorter cards leave the bottom of the column empty.
 st.markdown(
     """<style>
 .card-grid [data-testid="stHorizontalBlock"] {
@@ -33,6 +36,11 @@ st.markdown(
 }
 .card-grid [data-testid="stColumn"] > div {
     height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+.card-grid [data-testid="stColumn"] [data-testid="stContainer"] {
+    flex: 1;
 }
 </style>""",
     unsafe_allow_html=True,
@@ -209,20 +217,35 @@ with st.container(border=True):
                         st.divider()
 
                         # Sources have no lifecycle (no Start/Stop), so
-                        # the action row is a single button that opens
-                        # the source's first management page. When the
-                        # source has no UI page we render a single-line
-                        # placeholder so the card layout doesn't shift.
+                        # the action row is a two-column layout showing
+                        # both UI pages as buttons when the source
+                        # exposes them. HuggingFace exposes two (Acquire
+                        # model + Active sessions); LM Studio exposes
+                        # none — the empty slots are filled by Streamlit
+                        # placeholders so the CSS equal-height nudge
+                        # keeps all cards in the row the same size.
                         pages = src.ui_pages
-                        if pages:
-                            if st.button(
-                                pages[0].label,
-                                key=f"src-open-{info.name}",
-                                use_container_width=True,
-                            ):
-                                st.switch_page(_to_relative(pages[0].path))
-                        else:
-                            st.markdown("&nbsp;", unsafe_allow_html=True)
+                        action_cols = st.columns(2)
+                        with action_cols[0]:
+                            if pages:
+                                if st.button(
+                                    pages[0].label,
+                                    key=f"src-open-{info.name}-0",
+                                    use_container_width=True,
+                                ):
+                                    st.switch_page(_to_relative(pages[0].path))
+                            else:
+                                st.empty()
+                        with action_cols[1]:
+                            if len(pages) >= 2:
+                                if st.button(
+                                    pages[1].label,
+                                    key=f"src-open-{info.name}-1",
+                                    use_container_width=True,
+                                ):
+                                    st.switch_page(_to_relative(pages[1].path))
+                            else:
+                                st.empty()
         st.markdown("</div>", unsafe_allow_html=True)
 
 
