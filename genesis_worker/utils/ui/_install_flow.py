@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ...contracts import AcquireStep, InstallSession, ServiceInstall
+from ...contracts import AcquireSession, AcquireStateKind, AcquireView, ServiceInstall
 
 
 def render_inline_install(installable: ServiceInstall, *, key_prefix: str) -> None:
@@ -37,10 +37,10 @@ def render_inline_install(installable: ServiceInstall, *, key_prefix: str) -> No
 
 
 def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
-    session: InstallSession = st.session_state[sess_key]
-    step = session.current_step()
+    session: AcquireSession = st.session_state[sess_key]
+    step = session.view()
 
-    if step.kind in ("complete", "failed", "cancelled"):
+    if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
         _render_step(step)
         if st.session_state.get(drop_key):
             st.session_state.pop(sess_key, None)
@@ -54,20 +54,16 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
                 st.rerun()
         return
 
-    _render_step(step)
-    render_target = st.empty()
-
     @st.fragment(run_every="2s")
     def _progress(
         drop_key: str,
         sess_key: str,
         key_prefix: str,
     ) -> None:
-        session: InstallSession = st.session_state[sess_key]
-        current = session.current_step()
-        with render_target.container():
-            _render_step(current)
-        if current.kind in ("complete", "failed", "cancelled") and not st.session_state.get(
+        session: AcquireSession = st.session_state[sess_key]
+        current = session.view()
+        _render_step(current)
+        if current.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
             drop_key
         ):
             st.session_state[drop_key] = True
@@ -80,7 +76,7 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
         st.rerun()
 
 
-def _render_step(step: AcquireStep) -> None:
+def _render_step(step: AcquireView) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
     elif step.kind == "failed":

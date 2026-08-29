@@ -1,4 +1,9 @@
-"""Service install ABC and types — plugins own acquisition (ADR-012)."""
+"""Service install ABC and types — plugins own acquisition (ADR-012, ADR-028).
+
+The runtime is unified under :class:`AcquireSession` (see
+``acquire.py``); :class:`ServiceInstall` is the plugin-side entry
+point for "what's installed, what's available, how to install".
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
-from .acquire import AcquireChoice, AcquireStep
+from .acquire import AcquireSession
 
 
 class InstallState(StrEnum):
@@ -40,7 +45,7 @@ class ServiceInstall(ABC):
     def binary_path(self) -> Path | None: ...
 
     @abstractmethod
-    def install(self, *, version: str | None = None) -> InstallSession: ...
+    def install(self, *, version: str | None = None) -> AcquireSession: ...
 
     @abstractmethod
     def uninstall(self, *, version: str | None = None) -> None: ...
@@ -50,28 +55,7 @@ class ServiceInstall(ABC):
         return None
 
 
-class InstallSession(ABC):
-    """Streaming install state machine. Mirrors :class:`AcquireSession`.
-
-    New ``AcquireStep.kind`` values: ``fetching | verifying | extracting``.
-    Terminals ``complete | failed | cancelled`` are reused.
-    """
-
-    @abstractmethod
-    def current_step(self) -> AcquireStep: ...
-
-    @abstractmethod
-    def submit(self, choice: AcquireChoice) -> AcquireStep: ...
-
-    @abstractmethod
-    def cancel(self) -> None: ...
-
-    @abstractmethod
-    def wait(self) -> AcquireStep: ...
-
-
 __all__ = [
-    "InstallSession",
     "InstallState",
     "InstallVersion",
     "ServiceInstall",

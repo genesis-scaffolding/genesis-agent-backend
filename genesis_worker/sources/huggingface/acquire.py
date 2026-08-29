@@ -2,25 +2,24 @@
 
 from __future__ import annotations
 
-import logging
 import re
 import sys
-import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 
 from ...contracts import (
     AcquireChoice,
-    AcquireFileGroup,
     AcquireProgress,
-    AcquireSession,
     AcquireState,
-    AcquireStep,
+    AcquireStateKind,
+    AcquireView,
 )
+from ...utils.background_session import BackgroundSession, _Canceled
 
 GGUF_EXT = ".gguf"
 
@@ -58,6 +57,47 @@ class _RemoteFile:
 
     path: str
     size: int | None
+
+
+@dataclass(frozen=True)
+class AcquireFileGroup:
+    """HF-local: one selectable file, or a group of shards for one selectable model."""
+
+    paths: list[str]
+    size: int | None  # total across the group; None if any shard's size is unknown
+    role: str  # "main", "mmproj", "mtp", "unsupported", "safetensor"
+    label: str
+    is_sharded: bool
+
+
+@dataclass
+class HfAcquireState(AcquireState):
+    """HF-specific state, extends the base with file-group selection."""
+
+    kind: AcquireStateKind
+    repo_id: str
+    confirmed: bool = False
+    bytes_done: int = 0
+    bytes_total: int = 0
+    log_tail: list[str] = field(default_factory=list)
+    failure: str | None = None
+    selected_main: list[AcquireFileGroup] = field(default_factory=list)
+    selected_aux: list[AcquireFileGroup] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class HfAcquireView(AcquireView):
+    """HF-specific view, extends the base with selection targets."""
+
+    targets: list[AcquireFileGroup] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class HfAcquireChoice(AcquireChoice):
+    """HF-specific choice, extends the base with file-group indexes."""
+
+    main_indexes: list[int] | None = None
+    aux_indexes: list[int] | None = None
 
 
 def classify_path(path: str) -> str:
@@ -114,12 +154,24 @@ def group_files(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
     return sorted(groups, key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
 
-class HfAcquireSession(AcquireSession):
-    """State-machine acquire session for one Hugging Face repo.
+@contextmanager
+def _capture_stderr():
+    """Capture stderr for the duration of the block. HF-specific."""
+    buf = StringIO()
+    old = sys.stderr
+    sys.stderr = buf
+    try:
+        yield buf
+    finally:
+        sys.stderr = old
+
+
+class HfAcquireSession(BackgroundSession):
+    """State-machine acquire session for one HuggingFace repo.
 
     Construction:
         api       = HfApi() (or a mock in tests)
-        state     = AcquireState(source='huggingface', repo_id='org/name')
+        hf_state  = HfAcquireState(repo_id='org/name')
         cache_dir = Path to the HF cache root
         revision  = branch / commit to inspect (default 'main')
         hf_hub_download = per-file download callable (default
@@ -131,29 +183,26 @@ class HfAcquireSession(AcquireSession):
 
     def __init__(
         self,
-        api: HfApi,
-        state: AcquireState,
-        cache_dir: Path,
         *,
+        api: HfApi,
+        hf_state: HfAcquireState,
+        cache_dir: Path,
         revision: str = "main",
         hf_hub_download: Callable[..., str] | None = None,
     ) -> None:
+        super().__init__(state=hf_state)
         self._api = api
-        self._state = state
         self._cache_dir = cache_dir
         self._revision = revision
         self._hf_hub_download = hf_hub_download
-        # Cancellation; set by cancel(), checked between file downloads.
-        self._cancel = threading.Event()
         # Inspection results, populated by _inspect().
         self._groups: list[AcquireFileGroup] = []
         self._files: list[_RemoteFile] = []
-        self._error: str | None = None
-        # Download thread (set when transition -> downloading).
-        self._download_thread: threading.Thread | None = None
-        # Logger tail captured during the download.
-        self._log_tail: list[str] = []
-        self._log_lock = threading.Lock()
+        # Transient selection error; surfaced via view() while in SELECTING.
+        self._last_select_error: str | None = None
+        # NOTE: inspection is lazy — runs synchronously on the first
+        # view() that observes INSPECTING. Tests that construct the
+        # session without inspecting don't pay the network round-trip.
 
     # --- Properties --------------------------------------------------------
 
@@ -161,92 +210,100 @@ class HfAcquireSession(AcquireSession):
     def repo_id(self) -> str:
         return self._state.repo_id
 
-    @property
-    def cancel_event(self) -> threading.Event:
-        """The cancel event; exposed for tests that drive the thread directly."""
-        return self._cancel
+    # --- BackgroundSession protocol --------------------------------------
 
-    # --- AcquireSession Protocol ------------------------------------------
-
-    def current_step(self) -> AcquireStep:
-        """Return the current step. Triggers inspection on first call.
-
-        The inspection is synchronous so that the very first
-        ``current_step()`` returns either ``select_files`` (with the
-        file groups populated) or ``failed`` (if the API call raised).
-        """
-        if self._state.last_step is None:
-            self._state.last_step = AcquireStep(
-                kind="inspecting",
-                title=f"Inspecting {self._state.repo_id}",
-            )
-            # Run inspection synchronously so file_groups are ready
-            # by the time the UI fetches the next step.
+    def view(self) -> HfAcquireView:
+        """Project the current state into a UI view."""
+        if self._state.kind == AcquireStateKind.INSPECTING:
             self._inspect()
+        kind = self._state.kind
+        repo_id = self._state.repo_id
 
-        step = self._state.last_step
-        assert step is not None  # for type checkers
-        # While downloading, refresh progress into the live step.
-        if step.kind == "downloading":
-            return self._progress_step()
-        return step
-
-    def submit(self, choice: AcquireChoice) -> AcquireStep:
-        """Advance the state machine based on the user's choice.
-
-        Step -> next-step transitions:
-
-        - inspecting (auto-resolves to select_files on first current_step)
-        - select_files -> confirm_storage (validates main + aux indexes)
-        - confirm_storage + confirm=True -> downloading (spawns thread)
-        - terminal states (complete/failed/cancelled): no-op
-        """
-        step = self._state.last_step
-        if step is None:
-            # First call before any current_step() — same as inspecting.
-            self.current_step()
-            step = self._state.last_step
-
-        if step is None:
-            return AcquireStep(
-                kind="failed",
-                title="Acquire failed",
-                error="internal: no current step after inspection",
+        if kind == AcquireStateKind.SELECTING:
+            return HfAcquireView(
+                kind=kind,
+                title=f"Select files for {repo_id}",
+                prompt="Pick file(s) and any auxiliaries",
+                targets=self._groups,
+                error=self._last_select_error,
+                can_cancel=True,
+            )
+        if kind == AcquireStateKind.CONFIRMING:
+            total_bytes = self._compute_total_bytes()
+            n_groups = len(self._state.selected_main) + len(self._state.selected_aux)  # type: ignore[attr-defined]
+            return HfAcquireView(
+                kind=kind,
+                title=f"Confirm download for {repo_id}",
+                prompt=f"Will download {n_groups} group(s) ({total_bytes or '?'} bytes)",
+                total_bytes=total_bytes,
+                cache_dir=self._cache_dir,
+                can_cancel=True,
+            )
+        if kind == AcquireStateKind.FETCHING:
+            tail = self._state.log_tail[-20:]
+            return HfAcquireView(
+                kind=kind,
+                title=f"Downloading {repo_id}",
+                progress=AcquireProgress(
+                    bytes_done=self._state.bytes_done,
+                    bytes_total=self._state.bytes_total,
+                    speed_bps=0,
+                    eta_s=0,
+                ),
+                cache_dir=self._cache_dir,
+                log_tail=tail,
+                can_cancel=True,
+            )
+        if kind == AcquireStateKind.COMPLETE:
+            tail = self._state.log_tail[-20:]
+            return HfAcquireView(
+                kind=kind,
+                title=f"Downloaded {repo_id}",
+                progress=AcquireProgress(
+                    bytes_done=self._state.bytes_total,
+                    bytes_total=self._state.bytes_total,
+                    speed_bps=0,
+                    eta_s=0,
+                ),
+                log_tail=tail,
                 can_cancel=False,
             )
-
-        if step.kind == "inspecting":
-            # Shouldn't normally be reachable: current_step() already
-            # transitioned past inspecting. Defensive fallback.
-            self._inspect()
-            return self._state.last_step  # type: ignore[return-value]
-
-        if step.kind == "select_files":
-            return self._submit_select_files(choice)
-        if step.kind == "confirm_storage":
-            return self._submit_confirm_storage(choice)
-        # Terminal or in-flight: no transitions from submit.
-        return step
-
-    def cancel(self) -> None:
-        """Request cancellation. The download thread aborts between files."""
-        self._cancel.set()
-        # If we're in a non-download step, transition to cancelled
-        # immediately so the UI sees the right state.
-        step = self._state.last_step
-        if step is not None and step.kind in {"inspecting", "select_files", "confirm_storage"}:
-            self._state.last_step = AcquireStep(
-                kind="cancelled",
+        if kind == AcquireStateKind.FAILED:
+            tail = self._state.log_tail[-20:]
+            return HfAcquireView(
+                kind=kind,
+                title=f"Failed: {repo_id}",
+                error=self._state.failure,
+                log_tail=tail,
+                can_cancel=False,
+            )
+        if kind == AcquireStateKind.CANCELLED:
+            return HfAcquireView(
+                kind=kind,
                 title="Cancelled",
                 can_cancel=False,
             )
-        # Otherwise the download thread will pick up the event and
-        # transition to cancelled itself.
+        # INSPECTING — transient; inspection runs synchronously in __init__,
+        # so the next call should be SELECTING or FAILED. This branch exists
+        # only if the caller reads view() before inspection finishes.
+        return HfAcquireView(
+            kind=kind,
+            title=f"Inspecting {repo_id}",
+            can_cancel=True,
+        )
+
+    def submit(self, choice: AcquireChoice) -> None:
+        kind = self._state.kind
+        if kind == AcquireStateKind.SELECTING:
+            self._submit_select_files(choice)
+        elif kind == AcquireStateKind.CONFIRMING:
+            self._submit_confirm_storage(choice)
+        # FETCHING / terminal: no-op (submit doesn't transition those).
 
     # --- Inspection --------------------------------------------------------
 
     def _inspect(self) -> None:
-        """Walk the repo tree; build file groups; transition to select_files."""
+        """Walk the repo tree; build file groups; transition to SELECTING or FAILED."""
         try:
             tree = self._api.list_repo_tree(
                 self._state.repo_id,
@@ -254,14 +311,9 @@ class HfAcquireSession(AcquireSession):
                 revision=self._revision,
                 recursive=True,
             )
-        except Exception as exc:  # noqa: BLE001 (HF raises many error types)
-            self._error = f"inspect failed: {exc}"
-            self._state.last_step = AcquireStep(
-                kind="failed",
-                title=f"Failed to inspect {self._state.repo_id}",
-                error=self._error,
-                can_cancel=False,
-            )
+        except Exception as exc:  # noqa: BLE001 — HF raises many error types
+            self._state.kind = AcquireStateKind.FAILED
+            self._state.failure = f"inspect failed: {exc}"
             return
 
         gguf_files: list[_RemoteFile] = []
@@ -294,296 +346,133 @@ class HfAcquireSession(AcquireSession):
         self._groups.sort(key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
         if not self._groups:
-            self._state.last_step = AcquireStep(
-                kind="failed",
-                title=f"No supported files in {self._state.repo_id}",
-                error="repository has no .gguf or .safetensors files",
-                can_cancel=False,
-            )
+            self._state.kind = AcquireStateKind.FAILED
+            self._state.failure = "repository has no .gguf or .safetensors files"
             return
 
-        self._state.last_step = AcquireStep(
-            kind="select_files",
-            title=f"Select files for {self._state.repo_id}",
-            prompt="Pick file(s) and any auxiliaries",
-            file_groups=self._groups,
-            can_cancel=True,
-        )
+        self._state.kind = AcquireStateKind.SELECTING
 
-    # --- select_files -> confirm_storage ----------------------------------
+    # --- SELECTING -> CONFIRMING -----------------------------------------
 
-    def _submit_select_files(self, choice: AcquireChoice) -> AcquireStep:
+    def _submit_select_files(self, choice: AcquireChoice) -> None:
+        if not isinstance(choice, HfAcquireChoice):
+            return
         if not choice.main_indexes:
-            self._state.last_step = self._select_files_step_with_error(
-                "select at least one file",
-            )
-            return self._state.last_step  # type: ignore[return-value]
+            self._last_select_error = "select at least one file"
+            return
 
         selected_groups: list[AcquireFileGroup] = []
         for idx in choice.main_indexes:
             if idx < 1 or idx > len(self._groups):
-                self._state.last_step = self._select_files_step_with_error(
-                    f"index {idx} out of range",
-                )
-                return self._state.last_step  # type: ignore[return-value]
+                self._last_select_error = f"index {idx} out of range"
+                return
             selected_groups.append(self._groups[idx - 1])
 
-        # GGUF repos require exactly one "main" group. Safetensor repos accept
-        # any number of safetensor groups (multi-select); mmproj/mtp aux rules
-        # do not apply.
         main_roles = {g.role for g in selected_groups}
         if not (
             "safetensor" in main_roles
             or (main_roles == {"main"} and len(selected_groups) == 1)
         ):
             roles_seen = "/".join(sorted(main_roles)) or "(none)"
-            self._state.last_step = self._select_files_step_with_error(
-                f"selected roles [{roles_seen}]; GGUF needs exactly one 'main' group",
+            self._last_select_error = (
+                f"selected roles [{roles_seen}]; GGUF needs exactly one 'main' group"
             )
-            return self._state.last_step  # type: ignore[return-value]
+            return
 
         aux: list[AcquireFileGroup] = []
         for idx in choice.aux_indexes or []:
             if idx < 1 or idx > len(self._groups):
-                self._state.last_step = self._select_files_step_with_error(
-                    f"aux index {idx} out of range",
-                )
-                return self._state.last_step  # type: ignore[return-value]
+                self._last_select_error = f"aux index {idx} out of range"
+                return
             aux.append(self._groups[idx - 1])
 
-        # Enforce single-mmproj and single-mtp (matches bin/hf-model.py).
-        # Only applies to GGUF pipelines; safetensors do not use these roles.
         if "safetensor" not in main_roles:
             if sum(g.role == "mmproj" for g in aux) > 1:
-                self._state.last_step = self._select_files_step_with_error(
-                    "select at most one mmproj",
-                )
-                return self._state.last_step  # type: ignore[return-value]
+                self._last_select_error = "select at most one mmproj"
+                return
             if sum(g.role == "mtp" for g in aux) > 1:
-                self._state.last_step = self._select_files_step_with_error(
-                    "select at most one MTP/draft",
-                )
-                return self._state.last_step  # type: ignore[return-value]
+                self._last_select_error = "select at most one MTP/draft"
+                return
 
-        self._state.selected_main = selected_groups
-        self._state.selected_aux = aux
+        self._state.selected_main = selected_groups  # type: ignore[attr-defined]
+        self._state.selected_aux = aux  # type: ignore[attr-defined]
+        self._last_select_error = None
+        self._state.kind = AcquireStateKind.CONFIRMING
 
-        total_bytes: int | None = None
-        sizes = [g.size for g in (*selected_groups, *aux)]
-        if all(s is not None for s in sizes):
-            total_bytes = sum(s for s in sizes if s is not None)  # type: ignore[union-attr]
+    # --- CONFIRMING -> FETCHING ------------------------------------------
 
-        self._state.last_step = AcquireStep(
-            kind="confirm_storage",
-            title=f"Confirm download for {self._state.repo_id}",
-            prompt=f"Will download {len(selected_groups) + len(aux)} group(s) ({total_bytes or '?'} bytes)",
-            total_bytes=total_bytes,
-            cache_dir=self._cache_dir,
-            can_cancel=True,
-        )
-        return self._state.last_step  # type: ignore[return-value]
-
-    def _select_files_step_with_error(self, error: str) -> AcquireStep:
-        return AcquireStep(
-            kind="select_files",
-            title=f"Select files for {self._state.repo_id}",
-            prompt="Pick file(s) and any auxiliaries",
-            file_groups=self._groups,
-            error=error,
-            can_cancel=True,
-        )
-
-    # --- confirm_storage -> downloading -----------------------------------
-
-    def _submit_confirm_storage(self, choice: AcquireChoice) -> AcquireStep:
+    def _submit_confirm_storage(self, choice: AcquireChoice) -> None:
         if not choice.confirm:
-            # User declined: send back to select_files.
-            self._state.selected_main = []
-            self._state.selected_aux = []
-            self._state.last_step = AcquireStep(
-                kind="select_files",
-                title=f"Select files for {self._state.repo_id}",
-                prompt="Pick one main file and any auxiliaries",
-                file_groups=self._groups,
-                can_cancel=True,
-            )
-            return self._state.last_step  # type: ignore[return-value]
-
-        # Spawn the download thread.
+            # User declined: back to SELECTING, clear selection.
+            self._state.selected_main = []  # type: ignore[attr-defined]
+            self._state.selected_aux = []  # type: ignore[attr-defined]
+            self._last_select_error = None
+            self._state.kind = AcquireStateKind.SELECTING
+            return
         self._state.confirmed = True
-        # self._state.last_step is still the confirm_storage step we
-        # were called with; capture its total_bytes before we overwrite it.
-        previous_step = self._state.last_step
-        confirm_total = previous_step.total_bytes if previous_step else 0
-        confirm_total = confirm_total or 0
-        self._state.last_step = AcquireStep(
-            kind="downloading",
-            title=f"Downloading {self._state.repo_id}",
-            progress=AcquireProgress(
-                bytes_done=0,
-                bytes_total=confirm_total,
-                speed_bps=0,
-                eta_s=0,
-            ),
-            cache_dir=self._cache_dir,
-            log_tail=[],
-            can_cancel=True,
-        )
-        self._download_thread = threading.Thread(
-            target=self._download_worker,
-            daemon=True,
-        )
-        self._download_thread.start()
-        return self._state.last_step  # type: ignore[return-value]
+        self._state.bytes_total = self._compute_total_bytes() or 0
+        self._state.kind = AcquireStateKind.FETCHING
+        self._start()
 
-    # --- download worker ---------------------------------------------------
+    def _compute_total_bytes(self) -> int | None:
+        sizes = [
+            g.size for g in (*self._state.selected_main, *self._state.selected_aux)  # type: ignore[attr-defined]
+        ]
+        if all(s is not None for s in sizes):
+            return sum(s for s in sizes if s is not None)
+        return None
 
-    def _download_worker(self) -> None:
-        """Background thread: download selected files one at a time."""
-        from huggingface_hub import hf_hub_download
+    # --- Worker thread: download ------------------------------------------
 
+    def _run_inner(self) -> None:
         download = self._hf_hub_download or hf_hub_download
-        handler = _LogTailHandler(self._log_tail, self._log_lock)
-        handler.setLevel(logging.INFO)
-        logger = logging.getLogger("huggingface_hub")
-        logger.addHandler(handler)
-        try:
-            if not self._state.selected_main:
-                raise RuntimeError("internal: no selected_main when downloading")
-            selected = [*self._state.selected_main, *self._state.selected_aux]
-            total_files = sum(len(g.paths) for g in selected)
-            done = 0
-            total = sum(s.size for s in selected if s.size is not None)
-            for group in selected:
-                if self._cancel.is_set():
-                    self._state.last_step = AcquireStep(
-                        kind="cancelled",
-                        title="Cancelled",
-                        can_cancel=False,
-                    )
-                    return
-                for path in group.paths:
-                    if self._cancel.is_set():
-                        self._state.last_step = AcquireStep(
-                            kind="cancelled",
-                            title="Cancelled",
-                            can_cancel=False,
+        selected = [*self._state.selected_main, *self._state.selected_aux]  # type: ignore[attr-defined]
+        if not selected:
+            raise RuntimeError("internal: no selected_main when downloading")
+        total_files = sum(len(g.paths) for g in selected)
+        done = 0
+        total = sum(s.size for s in selected if s.size is not None)
+        for group in selected:
+            if self._cancel_event.is_set():
+                raise _Canceled
+            for path in group.paths:
+                if self._cancel_event.is_set():
+                    raise _Canceled
+                try:
+                    with _capture_stderr() as buf:
+                        download(
+                            repo_id=self._state.repo_id,
+                            filename=path,
+                            cache_dir=str(self._cache_dir),
+                            revision=self._revision,
                         )
-                        return
-                    try:
-                        stderr_capture = StringIO()
-                        old_stderr = sys.stderr
-                        sys.stderr = stderr_capture
-                        try:
-                            download(
-                                repo_id=self._state.repo_id,
-                                filename=path,
-                                cache_dir=str(self._cache_dir),
-                                revision=self._revision,
-                            )
-                        finally:
-                            sys.stderr = old_stderr
-                        captured = stderr_capture.getvalue()
-                        if captured:
-                            for line in captured.rstrip().splitlines():
-                                if line.strip():
-                                    self._log_tail.append(f"[stderr] {line}")
-                    except Exception as exc:  # noqa: BLE001
-                        self._state.last_step = AcquireStep(
-                            kind="failed",
-                            title=f"Download failed: {path}",
-                            error=f"{type(exc).__name__}: {exc}",
-                            log_tail=list(self._log_tail),
-                            can_cancel=False,
-                        )
-                        return
-                    # Check cancel after each file returns so a cancel
-                    # that arrived during the in-flight download aborts
-                    # the rest of the run (the spec's threading.Event
-                    # strategy).
-                    if self._cancel.is_set():
-                        self._state.last_step = AcquireStep(
-                            kind="cancelled",
-                            title="Cancelled",
-                            can_cancel=False,
-                        )
-                        return
-                    done += group.size or 0
-                    file_index = min(done, total_files)
-                    self._log_tail.append(
-                        f"Progress: {done}/{total} bytes "
-                        f"({file_index}/{total_files} files)"
-                    )
-                    self._state.last_step = AcquireStep(
-                        kind="downloading",
-                        title=f"Downloading {self._state.repo_id}",
-                        progress=AcquireProgress(
-                            bytes_done=done,
-                            bytes_total=total,
-                            speed_bps=0,
-                            eta_s=(total - done) // max(done, 1) if done else 0,
-                        ),
-                        cache_dir=self._cache_dir,
-                        log_tail=list(self._log_tail[-20:]),
-                        can_cancel=True,
-                    )
-            self._state.last_step = AcquireStep(
-                kind="complete",
-                title=f"Downloaded {self._state.repo_id}",
-                progress=AcquireProgress(
-                    bytes_done=total,
-                    bytes_total=total,
-                    speed_bps=0,
-                    eta_s=0,
-                ),
-                log_tail=list(self._log_tail[-20:]),
-                can_cancel=False,
-            )
-        finally:
-            logger.removeHandler(handler)
-
-    def _progress_step(self) -> AcquireStep:
-        """Refresh the live downloading step with current log tail.
-
-        The download thread mutates ``state.last_step`` in place with
-        new progress; here we just return a copy with the latest
-        log_tail length preserved.
-        """
-        step = self._state.last_step
-        assert step is not None
-        with self._log_lock:
-            tail = list(self._log_tail[-20:])
-        return AcquireStep(
-            kind=step.kind,
-            title=step.title,
-            progress=step.progress,
-            cache_dir=step.cache_dir,
-            log_tail=tail,
-            can_cancel=step.can_cancel,
-            error=step.error,
-        )
-
-
-class _LogTailHandler(logging.Handler):
-    """Logging handler that captures the last N records into a shared list."""
-
-    def __init__(self, sink: list[str], lock: threading.Lock, maxlen: int = 200) -> None:
-        super().__init__()
-        self._sink = sink
-        self._lock = lock
-        self._maxlen = maxlen
-
-    def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
-        with self._lock:
-            self._sink.append(msg)
-            if len(self._sink) > self._maxlen:
-                del self._sink[: len(self._sink) - self._maxlen]
+                    for line in buf.getvalue().rstrip().splitlines():
+                        if line.strip():
+                            self._append_log(f"[stderr] {line}")
+                except _Canceled:
+                    raise
+                except Exception as exc:
+                    # Preserve detail; supervisor captures the failure.
+                    raise RuntimeError(f"download failed for {path}: {exc}") from exc
+                if self._cancel_event.is_set():
+                    raise _Canceled
+                done += group.size or 0
+                file_index = min(done, total_files)
+                self._append_log(
+                    f"Progress: {done}/{total} bytes "
+                    f"({file_index}/{total_files} files)"
+                )
+                self._state.bytes_done = done
+                self._state.bytes_total = total
+        self._state.kind = AcquireStateKind.COMPLETE
 
 
 __all__ = [
+    "AcquireFileGroup",
+    "HfAcquireChoice",
     "HfAcquireSession",
+    "HfAcquireState",
+    "HfAcquireView",
     "classify_path",
     "group_files",
 ]
-

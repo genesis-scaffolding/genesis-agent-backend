@@ -13,11 +13,21 @@ acquire session — the facade constructs the session on demand when
 ``start_acquire()`` is called.
 """
 
-from .acquire import HfAcquireSession, classify_path, group_files
+from .acquire import (
+    HfAcquireChoice,
+    HfAcquireSession,
+    HfAcquireState,
+    HfAcquireView,
+    classify_path,
+    group_files,
+)
 from .source import HuggingFaceSource
 
 __all__ = [
+    "HfAcquireChoice",
     "HfAcquireSession",
+    "HfAcquireState",
+    "HfAcquireView",
     "HuggingFaceSource",
     "classify_path",
     "group_files",

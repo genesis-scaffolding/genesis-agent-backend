@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.contracts import ServiceState
 from genesis_worker.utils.ui._service_controls import render_service_controls
 from genesis_worker.utils.ui._tail_log import render_tail_log
 
@@ -19,23 +18,18 @@ st.title(svc.display_name)
 with st.container(border=True):
     st.header("Service info")
 
-    # Auto-refresh while the service is in a non-terminal transition
-    # (starting / stopping). The render_service_controls helper
-    # disables the action button in those states; the fragment
-    # re-polls the worker's status so the user sees the transition
-    # from STARTING to RUNNING without manually reloading the page.
-    @st.fragment(run_every="2s")
-    def _service_info() -> None:
-        status = worker.service_status(SERVICE_NAME)
-        render_service_controls(svc, status, key_prefix="status-comfyui")
-
-        # While transitioning, show a one-line "what's happening" hint.
-        if status.state == ServiceState.STARTING:
-            st.caption("Container is starting - ComfyUI may take 30-60s to become reachable.")
-        elif status.state == ServiceState.STOPPING:
-            st.caption("Container is stopping...")
-
-    _service_info()
+    # Status is fetched once per page render. We don't wrap this in a
+    # fragment: ``render_service_controls`` may render the inline install
+    # flow, which creates its own polling fragment. Nested fragments
+    # confuse Streamlit's placeholder reservation during long docker
+    # pulls (the worker thread blocks in ``subprocess.run`` for minutes
+    # with zero state updates, while the outer fragment keeps rerunning
+    # every 2s against the unchanged inner state — the page goes white).
+    # Same trade-off as the llama-swap status page: the install flow's
+    # internal fragment triggers a full app rerun on terminal, which
+    # auto-switches the button from Install → Start. The Start → Running
+    # transition is observed by manually reloading the page.
+    render_service_controls(svc, worker.service_status(SERVICE_NAME), key_prefix="status-comfyui")
 
     st.divider()
 

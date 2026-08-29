@@ -6,11 +6,11 @@ implements, the types that cross the boundary, and the context it is constructed
 
 from .acquire import (
     AcquireChoice,
-    AcquireFileGroup,
     AcquireProgress,
     AcquireSession,
     AcquireState,
-    AcquireStep,
+    AcquireStateKind,
+    AcquireView,
 )
 from .catalog import Catalog, DiscoveredModel, ModelEntry, ModelPiece
 from .classify import (
@@ -21,7 +21,7 @@ from .classify import (
     role_sort_key,
 )
 from .context import PluginContext, ServiceContext, SourceContext
-from .install import InstallSession, InstallState, InstallVersion, ServiceInstall
+from .install import InstallState, InstallVersion, ServiceInstall
 from .plugin import Plugin
 from .secret import NoSecretsAccessor, SecretsAccessor, StaticSecretsAccessor
 from .service import (
@@ -41,15 +41,14 @@ __all__ = [
     "SKIP_FILENAMES",
     "WEIGHT_EXTS",
     "AcquireChoice",
-    "AcquireFileGroup",
     "AcquireProgress",
     "AcquireSession",
     "AcquireState",
-    "AcquireStep",
+    "AcquireStateKind",
+    "AcquireView",
     "Catalog",
     "DiscoveredModel",
     "InferenceService",
-    "InstallSession",
     "InstallState",
     "InstallVersion",
     "ModelEntry",

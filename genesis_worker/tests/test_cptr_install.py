@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from genesis_worker.contracts import AcquireChoice, AcquireStep, InstallState
+from genesis_worker.contracts import AcquireChoice, AcquireView, InstallState
 from genesis_worker.services.cptr.install import (
     CptrInstall,
     _uv_tool_installed_version,
@@ -168,10 +168,10 @@ def test_installed_version_queries_uv_each_call(monkeypatch: pytest.MonkeyPatch)
 # --- install session -------------------------------------------------------
 
 
-def _wait_for_terminal(session) -> AcquireStep:  # type: ignore[no-untyped-def]
+def _wait_for_terminal(session) -> AcquireView:  # type: ignore[no-untyped-def]
     """Drain the install session and return the final step."""
     session.wait()
-    return session.current_step()
+    return session.view()
 
 
 def test_install_session_runs_uv_tool_install(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,7 +189,7 @@ def test_install_session_runs_uv_tool_install(monkeypatch: pytest.MonkeyPatch) -
 
     inst = CptrInstall()
     session = inst.install(version="0.9.21")
-    assert isinstance(session, object)  # InstallSession ABC; not type-checked here
+    assert isinstance(session, object)  # AcquireSession ABC; not type-checked here
     step = _wait_for_terminal(session)
     assert step.kind == "complete"
     assert calls and calls[0][:3] == ["uv", "tool", "install"]
@@ -260,7 +260,7 @@ def test_install_session_missing_uv(monkeypatch: pytest.MonkeyPatch) -> None:
     inst = CptrInstall()
     step = _wait_for_terminal(inst.install(version="0.9.21"))
     assert step.kind == "failed"
-    assert "uv" in (step.title or "").lower()
+    assert "uv" in (step.error or "")
 
 
 def test_install_session_submit_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:

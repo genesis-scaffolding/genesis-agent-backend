@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.contracts import AcquireStep
+from genesis_worker.contracts import AcquireStateKind, AcquireView
 
 SERVICE_NAME = "llama_swap"
 
@@ -35,7 +35,7 @@ def _drop_pending_key(name: str) -> str:
     return f"{_DROP_PENDING_PREFIX}/{name}"
 
 
-def _render_step(step: AcquireStep) -> None:
+def _render_step(step: AcquireView) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
     elif step.kind == "failed":
@@ -131,9 +131,9 @@ for installable in svc.installs():
 
         if in_flight:
             session = st.session_state[sess_key]
-            current_step = session.current_step()
+            current_step = session.view()
 
-            if current_step.kind in ("complete", "failed", "cancelled"):
+            if current_step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
                 _render_step(current_step)
                 # Schedule drop on next parent rerun.
                 if st.session_state.get(drop_key):
@@ -147,16 +147,13 @@ for installable in svc.installs():
                         st.session_state.pop(drop_key, None)
                         st.rerun()
             else:
-                render_target = st.empty()
-
                 @st.fragment(run_every="2s")
                 def _progress(
-                    session=session, render_target=render_target, drop_key=drop_key
+                    session=session, drop_key=drop_key
                 ) -> None:
-                    step = session.current_step()
-                    with render_target.container():
-                        _render_step(step)
-                    if step.kind in ("complete", "failed", "cancelled") and not st.session_state.get(
+                    step = session.view()
+                    _render_step(step)
+                    if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
                         drop_key
                     ):
                         st.session_state[drop_key] = True
