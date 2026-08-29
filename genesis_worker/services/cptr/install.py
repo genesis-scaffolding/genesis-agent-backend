@@ -5,6 +5,10 @@ each tool's name and version. The installable shells out to uv for both
 install and uninstall, and to ``uv tool list`` (not a local cache) for
 ``installed_version`` — that way a version installed from the shell
 outside the worker is still reported correctly.
+
+The install itself is driven by :class:`UvToolAcquireSession` in
+``utils/acquire/uv_tool.py`` — this module only owns the installable
+metadata (version listing, PyPI lookup, installed-state probe).
 """
 
 from __future__ import annotations
@@ -18,14 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from ...contracts import (
-    AcquireStateKind,
-    AcquireView,
-    InstallSession,
+    AcquireSession,
     InstallState,
     InstallVersion,
     ServiceInstall,
 )
-from ...utils.install import BackgroundInstallSession, _Canceled
+from ...utils.acquire import UvToolAcquireSession
 
 _PYPI_URL = "https://pypi.org/pypi/cptr/json"
 _PACKAGE_NAME = "cptr"
@@ -70,66 +72,6 @@ def _uv_tool_installed_version(package: str, *, timeout: float) -> str | None:
         if len(parts) >= 2 and parts[0] == package:
             return parts[1].lstrip("v") or None
     return None
-
-
-# --- session ---------------------------------------------------------------
-
-
-class _UvToolInstallSession(BackgroundInstallSession):
-    """Streaming install session backed by ``uv tool install``."""
-
-    def __init__(self, *, package_name: str, version: str | None) -> None:
-        self._package_name = package_name
-        self._version = version
-        super().__init__()
-
-    @property
-    def _name(self) -> str:
-        return self._package_name
-
-    def _run_inner(self) -> None:
-        spec = (
-            f"{self._package_name}=={self._version}"
-            if self._version
-            else f"{self._package_name}@latest"
-        )
-        self._publish(
-            AcquireView(kind=AcquireStateKind.FETCHING, title=f"running uv tool install {spec}")
-        )
-        if self._cancel.is_set():
-            raise _Canceled
-
-        try:
-            result = subprocess.run(
-                ["uv", "tool", "install", spec],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=_UV_TIMEOUT_S,
-            )
-        except (FileNotFoundError, OSError) as exc:
-            raise RuntimeError(f"uv not found on PATH: {exc}") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"uv tool install timed out after {_UV_TIMEOUT_S:.0f}s"
-            ) from exc
-
-        if self._cancel.is_set():
-            raise _Canceled
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"uv tool install failed (rc={result.returncode}): "
-                f"{result.stderr.strip() or result.stdout.strip() or 'no output'}"
-            )
-
-        if shutil.which(self._package_name) is None:
-            raise RuntimeError(
-                f"{self._package_name} binary not on PATH after install — "
-                "is ~/.local/bin on PATH?"
-            )
-
-        self._publish(AcquireView(kind=AcquireStateKind.COMPLETE, title=f"installed {spec}"))
 
 
 # --- installable -----------------------------------------------------------
@@ -182,8 +124,12 @@ class CptrInstall(ServiceInstall):
         found = shutil.which(_BINARY_NAME)
         return Path(found) if found else None
 
-    def install(self, *, version: str | None = None) -> InstallSession:
-        return _UvToolInstallSession(package_name=_PACKAGE_NAME, version=version)
+    def install(self, *, version: str | None = None) -> AcquireSession:
+        return UvToolAcquireSession(
+            package_name=_PACKAGE_NAME,
+            version=version,
+            timeout_s=_UV_TIMEOUT_S,
+        )
 
     def uninstall(self, *, version: str | None = None) -> None:
         try:
@@ -201,3 +147,4 @@ class CptrInstall(ServiceInstall):
 
 
 __all__ = ["CptrInstall"]
+

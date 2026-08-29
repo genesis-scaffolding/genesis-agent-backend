@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.contracts import AcquireView
+from genesis_worker.contracts import AcquireStateKind, AcquireView
 
 SERVICE_NAME = "comfyui"
 
@@ -148,9 +148,9 @@ for installable in svc.installs():
 
         if in_flight:
             session = st.session_state[sess_key]
-            current_step = session.current_step()
+            current_step = session.view()
 
-            if current_step.kind in ("complete", "failed", "cancelled"):
+            if current_step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
                 _render_step(current_step)
                 if st.session_state.get(drop_key):
                     st.session_state.pop(sess_key, None)
@@ -169,10 +169,10 @@ for installable in svc.installs():
                 def _progress(
                     session=session, render_target=render_target, drop_key=drop_key
                 ) -> None:
-                    step = session.current_step()
+                    step = session.view()
                     with render_target.container():
                         _render_step(step)
-                    if step.kind in ("complete", "failed", "cancelled") and not st.session_state.get(
+                    if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
                         drop_key
                     ):
                         st.session_state[drop_key] = True

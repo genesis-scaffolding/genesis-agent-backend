@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ...contracts import AcquireView, InstallSession, ServiceInstall
+from ...contracts import AcquireSession, AcquireStateKind, AcquireView, ServiceInstall
 
 
 def render_inline_install(installable: ServiceInstall, *, key_prefix: str) -> None:
@@ -37,10 +37,10 @@ def render_inline_install(installable: ServiceInstall, *, key_prefix: str) -> No
 
 
 def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
-    session: InstallSession = st.session_state[sess_key]
-    step = session.current_step()
+    session: AcquireSession = st.session_state[sess_key]
+    step = session.view()
 
-    if step.kind in ("complete", "failed", "cancelled"):
+    if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
         _render_step(step)
         if st.session_state.get(drop_key):
             st.session_state.pop(sess_key, None)
@@ -63,11 +63,11 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
         sess_key: str,
         key_prefix: str,
     ) -> None:
-        session: InstallSession = st.session_state[sess_key]
-        current = session.current_step()
+        session: AcquireSession = st.session_state[sess_key]
+        current = session.view()
         with render_target.container():
             _render_step(current)
-        if current.kind in ("complete", "failed", "cancelled") and not st.session_state.get(
+        if current.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
             drop_key
         ):
             st.session_state[drop_key] = True

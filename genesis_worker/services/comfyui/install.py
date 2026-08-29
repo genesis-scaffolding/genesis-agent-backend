@@ -1,9 +1,10 @@
-"""Installable + install session for the ComfyUI Docker image.
+"""Installable for the ComfyUI Docker image.
 
-The installable wraps ``DockerContainer`` for image-present checks, tag
-listing, and pull. The install session subclasses
-:class:`~genesis_worker.utils.install.BackgroundInstallSession` and
-streams ``docker pull`` stderr lines to the UI as ``AcquireView`` updates.
+The installable owns version listing, arch filtering, the selection
+file, and uninstall. The actual pull is driven by
+:class:`~genesis_worker.utils.acquire.docker_pull.DockerPullAcquireSession`,
+which streams ``docker pull --progress=json`` stderr lines as
+``AcquireView`` updates.
 """
 
 from __future__ import annotations
@@ -18,17 +19,13 @@ import time
 from pathlib import Path
 
 from ...contracts import (
-    AcquireProgress,
-    AcquireStateKind,
-    AcquireView,
-    InstallSession,
+    AcquireSession,
     InstallState,
     InstallVersion,
     ServiceInstall,
 )
-from ...utils.install import BackgroundInstallSession, _Canceled
+from ...utils.acquire import DockerPullAcquireSession
 from ...utils.process import DockerContainer
-from ...utils.process.docker_pull_progress import DockerPullProgress
 
 _RELEASE_CACHE_TTL_S = 15 * 60  # 15 min — same as GithubReleaseTarball.
 
@@ -202,9 +199,9 @@ class ComfyUiImage(ServiceInstall):
     def binary_path(self) -> Path | None:
         return None
 
-    def install(self, *, version: str | None = None) -> InstallSession:
+    def install(self, *, version: str | None = None) -> AcquireSession:
         target_tag = version or self._image_tag
-        return _DockerPullInstallSession(
+        return DockerPullAcquireSession(
             image=f"{self._image_repo}:{target_tag}",
             on_complete=lambda: self._record_selection(target_tag),
         )
@@ -236,68 +233,6 @@ class ComfyUiImage(ServiceInstall):
         # selected tag.
         if target == self.installed_version() and self._selection_path.is_file():
             self._selection_path.unlink()
-
-
-class _DockerPullInstallSession(BackgroundInstallSession):
-    """Streaming install session backed by ``docker pull --progress=json``.
-
-    Each stderr line is parsed by :class:`DockerPullProgress`; the
-    aggregate (bytes_done, bytes_total, phase) is published as an
-    :class:`AcquireView` with the progress field populated. The
-    Status page's ``_render_step`` already renders
-    ``st.progress(...)`` when ``step.progress is not None``, so the
-    UI shows a live bar without further changes.
-    """
-
-    def __init__(self, *, image: str, on_complete=None) -> None:
-        self._image = image
-        self._on_complete = on_complete
-        super().__init__()
-
-    @property
-    def _name(self) -> str:
-        return self._image
-
-    def _run_inner(self) -> None:
-        self._parser = DockerPullProgress()
-        self._publish(
-            AcquireView(kind=AcquireStateKind.FETCHING, title=f"pulling {self._image}")
-        )
-        try:
-            DockerContainer.pull(
-                self._image,
-                progress=self._on_progress,
-                cancel=self._cancel.is_set,
-                progress_format="json",
-            )
-        except _Canceled:
-            raise
-        except RuntimeError as exc:
-            raise RuntimeError(str(exc)) from exc
-        if self._on_complete is not None:
-            self._on_complete()
-        self._publish(
-            AcquireView(kind=AcquireStateKind.COMPLETE, title=f"pulled {self._image}")
-        )
-
-    def _on_progress(self, line: str) -> None:
-        if self._cancel.is_set():
-            raise _Canceled
-        self._parser.update(line)
-        snap = self._parser.snapshot()
-        self._publish(
-            AcquireView(
-                kind=AcquireStateKind.FETCHING,
-                title=f"{snap.phase} {self._image}",
-                total_bytes=snap.bytes_total or None,
-                progress=AcquireProgress(
-                    bytes_done=snap.bytes_done,
-                    bytes_total=snap.bytes_total,
-                    speed_bps=0,
-                    eta_s=0,
-                ),
-            )
-        )
 
 
 __all__ = ["ComfyUiImage"]

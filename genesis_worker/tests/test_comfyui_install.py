@@ -26,7 +26,7 @@ from genesis_worker.utils.process import DockerContainer
 
 def _wait_for_terminal(session) -> AcquireView:  # type: ignore[no-untyped-def]
     session.wait()
-    return session.current_step()
+    return session.view()
 
 
 def _make_installable(
@@ -182,7 +182,7 @@ def test_install_session_runs_docker_pull(tmp_path: Path, monkeypatch: pytest.Mo
     session = inst.install(version="v0.99.0-cuda-13.0-amd64")
     step = _wait_for_terminal(session)
     assert step.kind == "complete"
-    assert "pulled" in (step.title or "")
+    assert "Pulled" in (step.title or "")
     assert captured == [["ghcr.io/genesis-scaffolding/comfyui-cuda:v0.99.0-cuda-13.0-amd64"]]
 
 
@@ -209,12 +209,12 @@ def test_install_session_publishes_progress_from_json_lines(
     session = inst.install(version="v1")
     # Drain the worker; final step is "complete", but we want to assert
     # the in-flight step had progress populated.
-    # Use a deadline-based poll on current_step to read an intermediate state.
+    # Use a deadline-based poll on view() to read an intermediate state.
     import time
     deadline = time.monotonic() + 2.0
     seen_with_progress = None
     while time.monotonic() < deadline:
-        step = session.current_step()
+        step = session.view()
         if step.kind == "fetching" and step.progress is not None and step.progress.bytes_total > 0:
             seen_with_progress = step
             break
