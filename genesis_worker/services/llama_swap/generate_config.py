@@ -176,7 +176,7 @@ def short_source_label(source: str) -> str:
     if not source:
         return "x"
     cleaned = "".join(c for c in source.lower() if c.isalnum())
-    return (cleaned[:3] or "x")
+    return cleaned[:3] or "x"
 
 
 def detect_file_sets(entry: ModelEntry) -> list[DetectedFileSet]:
@@ -427,9 +427,7 @@ def evaluate_recipe(
     if reasoning_budget is None and default_recipe:
         reasoning_budget = default_recipe.reasoning_budget
 
-    reasoning_budget_message = ovr.get(
-        "reasoning_budget_message", recipe.reasoning_budget_message
-    )
+    reasoning_budget_message = ovr.get("reasoning_budget_message", recipe.reasoning_budget_message)
     if reasoning_budget_message is None and default_recipe:
         reasoning_budget_message = default_recipe.reasoning_budget_message
 
@@ -468,9 +466,7 @@ def evaluate_recipe(
         "reasoning_budget_message": _source_simple(
             ovr, recipe, default_recipe, "reasoning_budget_message"
         ),
-        "chat_template_file": _source_simple(
-            ovr, recipe, default_recipe, "chat_template_file"
-        ),
+        "chat_template_file": _source_simple(ovr, recipe, default_recipe, "chat_template_file"),
         "sampling": _source_recipe_only(ovr, recipe, "sampling"),
         "chat_template_kwargs": _source_recipe_only(ovr, recipe, "chat_template_kwargs"),
     }
@@ -488,6 +484,7 @@ def evaluate_recipe(
         chat_template_file=chat_template_file,
         sampling=sampling,
         chat_template_kwargs=chat_template_kwargs,
+        provenance=provenance,
     )
 
     return EvaluatedConfig(
@@ -526,6 +523,7 @@ def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
         chat_template_file=evaluated.chat_template_file,
         sampling=evaluated.sampling,
         chat_template_kwargs=evaluated.chat_template_kwargs,
+        provenance=evaluated.provenance,
     )
 
 
@@ -543,6 +541,7 @@ def cmd_from_evaluated_dict(
     chat_template_file: str | None,
     sampling: dict[str, Any],
     chat_template_kwargs: dict[str, Any] | None,
+    provenance: dict[str, FieldSource] | None = None,
 ) -> str:
     """Format the llama-server cmd string from resolved fields.
 
@@ -565,7 +564,10 @@ def cmd_from_evaluated_dict(
         spec
         and isinstance(spec, dict)
         and spec.get("type") == "draft-mtp"
-        and files.is_mtp
+        and (
+            files.is_mtp
+            or (provenance is not None and provenance.get("spec") == FieldSource.OVERRIDE)
+        )
     ):
         spec_parts = ["--spec-type", "draft-mtp"]
         if "n_max" in spec:
@@ -590,9 +592,7 @@ def cmd_from_evaluated_dict(
         runtime.extend(["--reasoning-budget", str(reasoning_budget)])
 
     if reasoning_budget_message:
-        runtime.extend(
-            ["--reasoning-budget-message", shlex.quote(reasoning_budget_message)]
-        )
+        runtime.extend(["--reasoning-budget-message", shlex.quote(reasoning_budget_message)])
 
     runtime.extend(["--kv-unified", "--jinja", "-fa", "on"])
     sections.append("  " + " ".join(runtime) + " \\")
