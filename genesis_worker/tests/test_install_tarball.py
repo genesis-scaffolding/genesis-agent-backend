@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from genesis_worker.services.llama_swap.installs import GithubReleaseTarball
+from genesis_worker.utils.acquire import GithubReleaseTarball
 from genesis_worker.utils.install import InstallLayout, Manifest
 
 
