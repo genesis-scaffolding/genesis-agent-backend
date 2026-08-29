@@ -30,6 +30,8 @@ def render_action_button(
     worker,
     name: str,
     key_prefix: str,
+    *,
+    use_container_width: bool = False,
 ) -> None:
     """Render the action button for the current state.
 
@@ -37,26 +39,31 @@ def render_action_button(
     dashboard's action row beside the Admin button) can do so without having
     to re-implement the state-to-button mapping.
 
+    ``use_container_width`` stretches the button to fill its column. The
+    status pages default to ``False`` (single full-width column, content
+    width is fine); the dashboard cards pass ``True`` so Start/Stop/Install
+    matches the Admin button's width.
+
     The five states map to: Stop (RUNNING), disabled Starting… (STARTING),
     disabled Stopping… (STOPPING), inline install (!available and
     STOPPED/UNAVAILABLE), Start (available and STOPPED/FAILED/UNAVAILABLE).
     """
     if state == ServiceState.RUNNING:
-        if st.button("Stop", key=f"{key_prefix}-stop"):
+        if st.button("Stop", key=f"{key_prefix}-stop", use_container_width=use_container_width):
             worker.stop_service(name)
             st.rerun()
         return
 
     if state == ServiceState.STARTING:
-        st.button("Starting…", key=f"{key_prefix}-starting", disabled=True)
+        st.button("Starting…", key=f"{key_prefix}-starting", disabled=True, use_container_width=use_container_width)
         return
 
     if state == ServiceState.STOPPING:
-        st.button("Stopping…", key=f"{key_prefix}-stopping", disabled=True)
+        st.button("Stopping…", key=f"{key_prefix}-stopping", disabled=True, use_container_width=use_container_width)
         return
 
     if state == ServiceState.FAILED:
-        if st.button("Start", key=f"{key_prefix}-start", help="Service previously failed; see logs."):
+        if st.button("Start", key=f"{key_prefix}-start", help="Service previously failed; see logs.", use_container_width=use_container_width):
             worker.start_service(name)
             st.rerun()
         return
@@ -65,12 +72,16 @@ def render_action_button(
     if not is_available:
         installable = worker.service(name).primary_installable()
         if installable is not None:
-            render_inline_install(installable, key_prefix=f"{key_prefix}-install")
+            render_inline_install(
+                installable,
+                key_prefix=f"{key_prefix}-install",
+                use_container_width=use_container_width,
+            )
         else:
             st.caption("Not installed")
         return
 
-    if st.button("Start", key=f"{key_prefix}-start"):
+    if st.button("Start", key=f"{key_prefix}-start", use_container_width=use_container_width):
         worker.start_service(name)
         st.rerun()
 

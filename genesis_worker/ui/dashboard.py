@@ -142,10 +142,11 @@ with st.container(border=True):
                         # Web UI as a clickable URL under the badge. When
                         # the service isn't running we render a single-line
                         # placeholder so the card layout doesn't shift
-                        # between states.
+                        # between states. The trailing ↗ signals "opens
+                        # externally" the way most UIs do.
                         endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
                         if endpoint and status.state.value == "running":
-                            st.markdown(f"[{endpoint}]({endpoint})")
+                            st.markdown(f"[{endpoint} ↗]({endpoint})")
                         else:
                             st.markdown("&nbsp;", unsafe_allow_html=True)
 
@@ -159,6 +160,7 @@ with st.container(border=True):
                                 worker,
                                 info.name,
                                 key_prefix=f"dash-{info.name}",
+                                use_container_width=True,
                             )
                         with action_cols[1]:
                             pages = svc.ui_pages

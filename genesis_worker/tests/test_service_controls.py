@@ -31,7 +31,8 @@ def test_render_action_button_signature_unchanged() -> None:
 
     sig = inspect.signature(render_action_button)
     params = list(sig.parameters.keys())
-    assert params == ["state", "is_available", "worker", "name", "key_prefix"]
+    assert params == ["state", "is_available", "worker", "name", "key_prefix", "use_container_width"]
+    assert sig.parameters["use_container_width"].default is False
 
 
 def test_service_state_branches_cover_every_value() -> None:
