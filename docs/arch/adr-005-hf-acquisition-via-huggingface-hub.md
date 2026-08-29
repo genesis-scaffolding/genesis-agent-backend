@@ -81,8 +81,4 @@ Negative:
 Neutral:
 - We still depend on `huggingface_hub` being the upstream-supported way to talk to the HF Hub. It is.
 
-## Spec
-[spec-002-services-and-acquire](specs/spec-002-services-and-acquire.md)
 
-## Plan
-[plan-002-services-and-acquire](plans/plan-002-services-and-acquire.md)

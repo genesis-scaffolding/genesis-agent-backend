@@ -55,10 +55,4 @@ Accepted
 - **Neutral**: `cmd_from_evaluated_dict` gains a small path-resolution branch.
   No new public interface is added.
 
-## Spec
 
-Link: `docs/arch/specs/spec-016-chat-template-relocation.md`
-
-## Plan
-
-Link: `docs/arch/plans/plan-016-chat-template-relocation.md`

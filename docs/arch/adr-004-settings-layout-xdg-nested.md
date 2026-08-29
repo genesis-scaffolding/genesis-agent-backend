@@ -148,8 +148,4 @@ Negative:
 Neutral:
 - No backwards compatibility concerns beyond the running setup on this machine.
 
-## Spec
-[spec-001-core-architecture](specs/spec-001-core-architecture.md)
 
-## Plan
-[plan-001-core-architecture](plans/plan-001-core-architecture.md)

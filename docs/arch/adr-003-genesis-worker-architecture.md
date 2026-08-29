@@ -138,8 +138,4 @@ Negative:
 Neutral:
 - `AcquireSession` lifecycle (server-side state, cancellation, progress polling) is in-memory in v1. SQLite-backed durability is v2.
 
-## Spec
-[spec-001-core-architecture](specs/spec-001-core-architecture.md)
 
-## Plan
-[plan-001-core-architecture](plans/plan-001-core-architecture.md)

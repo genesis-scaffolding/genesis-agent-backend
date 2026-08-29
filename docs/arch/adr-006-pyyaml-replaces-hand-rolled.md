@@ -49,8 +49,4 @@ Negative:
 Neutral:
 - We accept that pydantic models and `yaml.dump` interop requires care for `Path` / `datetime` / enum fields. Mitigated by custom representers.
 
-## Spec
-[spec-001-core-architecture](specs/spec-001-core-architecture.md)
 
-## Plan
-[plan-001-core-architecture](plans/plan-001-core-architecture.md)

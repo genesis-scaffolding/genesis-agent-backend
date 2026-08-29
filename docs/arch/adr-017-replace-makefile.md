@@ -47,8 +47,4 @@ Neutral:
   `scripts/dev/` and stays") was never relocated. We drop the promise
   silently — no one has asked for it.
 
-## Spec
-[spec-017-makefile-rewrite](specs/spec-017-makefile-rewrite.md)
 
-## Plan
-[plan-017-makefile-rewrite](plans/plan-017-makefile-rewrite.md)

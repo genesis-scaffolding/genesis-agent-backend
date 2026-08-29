@@ -44,8 +44,4 @@ Negative:
 Neutral:
 - Anyone wanting that integration coverage back will need to either (a) ship a synthetic `Catalog` fixture (medium-sized refactor) or (b) gate the test on `GENESIS_VAULT_PATH` and accept honest skip semantics.
 
-## Spec
-[spec-018-drop-stale-recipe-vault-fixtures](specs/spec-018-drop-stale-recipe-vault-fixtures.md)
 
-## Plan
-[plan-018-drop-stale-recipe-vault-fixtures](plans/plan-018-drop-stale-recipe-vault-fixtures.md)

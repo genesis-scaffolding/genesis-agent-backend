@@ -33,10 +33,4 @@ Proposed.
 - If the service (e.g. llama-swap) is using a model, deleting it while the service is running may cause runtime errors. The UI does not check service state; users are responsible for stopping services before deletion.
 - `compute_content_hash` in `catalog_build.py` must be updated: the hash already excludes `directory`, so a rescan that finds the directory missing will produce the same hash as if the entry were deleted — no stale hash collision.
 
-## Spec
 
-- [spec-009-model-deletion.md](../arch/specs/spec-009-model-deletion.md)
-
-## Plan
-
-- [plan-009-model-deletion.md](../arch/plans/plan-009-model-deletion.md)
