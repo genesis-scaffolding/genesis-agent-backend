@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from genesis_worker.ui._render import format_bytes
 from genesis_worker.utils.ui._nav import to_relative as _to_relative
 from genesis_worker.utils.ui._service_controls import (
     render_action_button,
@@ -189,6 +190,7 @@ with st.container(border=True):
     if not sources:
         st.info("No sources registered.")
     else:
+        catalog_by_source = worker.catalog().by_source()
         PER_ROW = 3
         st.markdown('<div class="card-grid">', unsafe_allow_html=True)
         for row_start in range(0, len(sources), PER_ROW):
@@ -197,6 +199,8 @@ with st.container(border=True):
             for col, info in zip(cols, row, strict=False):
                 with col:
                     src = worker.source(info.name)
+                    entries = catalog_by_source.get(info.name, [])
+                    bytes_ = sum(e.total_bytes for e in entries)
 
                     with st.container(border=True):
                         st.subheader(info.display_name)
@@ -208,6 +212,16 @@ with st.container(border=True):
                             "Available" if info.is_available else "Unavailable",
                             color="green" if info.is_available else "gray",
                         )
+
+                        # Model inventory for this source. Same data the
+                        # Catalog page's vault summary uses; on the cards
+                        # we render it as a compact "N models · SIZE"
+                        # caption above the path.
+                        if entries:
+                            plural = "s" if len(entries) != 1 else ""
+                            st.caption(f"{len(entries)} model{plural} · {format_bytes(bytes_)}")
+                        else:
+                            st.caption("No models")
 
                         # Local path is informational only — unlike the
                         # service's URL, there is no external target to
