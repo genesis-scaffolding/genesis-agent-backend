@@ -8,12 +8,44 @@ from __future__ import annotations
 
 import streamlit as st
 
+from genesis_worker.ui._render import format_bytes
 from genesis_worker.utils.ui._nav import to_relative as _to_relative
-from genesis_worker.utils.ui._service_controls import render_service_controls
+from genesis_worker.utils.ui._service_controls import (
+    render_action_button,
+    render_service_controls,
+)
 
 worker = st.session_state["worker"]
 
 st.title("Genesis Worker")
+
+# Streamlit's ``st.columns`` lays out equal-width columns but does not
+# equalize their heights — the row's tallest column determines the row
+# height, shorter columns top-align and leave empty space below. We use
+# a wrapping loop (PER_ROW cards per row) so the layout scales to any
+# number of cards, and this CSS nudge so cards within the same row
+# stretch to the row's tallest member. The three rules together are
+# required: (1) equalizes the column slots, (2) makes the column's
+# inner vertical block a flex column, (3) makes the bordered
+# ``st.container`` inside each column flex to fill its column. Without
+# (3) the card's visible border stops at its content height and
+# shorter cards leave the bottom of the column empty.
+st.markdown(
+    """<style>
+.card-grid [data-testid="stHorizontalBlock"] {
+    align-items: stretch;
+}
+.card-grid [data-testid="stColumn"] > div {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+.card-grid [data-testid="stColumn"] [data-testid="stContainer"] {
+    flex: 1;
+}
+</style>""",
+    unsafe_allow_html=True,
+)
 
 
 # --- Section 1: Host ---------------------------------------------------------
@@ -91,45 +123,144 @@ with st.container(border=True):
     if not services:
         st.info("No services registered.")
     else:
-        cols = st.columns(6)
-        for col, info in zip(cols, services, strict=False):
-            with col:
-                svc = worker.service(info.name)
-                status = worker.service_status(info.name)
-                caps = info.capabilities
+        PER_ROW = 3
+        st.markdown('<div class="card-grid">', unsafe_allow_html=True)
+        for row_start in range(0, len(services), PER_ROW):
+            row = services[row_start : row_start + PER_ROW]
+            cols = st.columns(PER_ROW, gap="medium")
+            for col, info in zip(cols, row, strict=False):
+                with col:
+                    svc = worker.service(info.name)
+                    status = worker.service_status(info.name)
+                    caps = info.capabilities
 
-                with st.container(border=True):
-                    st.subheader(info.display_name)
-                    # render_service_controls shows badge + Start/Stop + inline install.
-                    # Web UI link is handled separately below so it can live in the
-                    # nav_cols layout alongside the Admin button.
-                    render_service_controls(
-                        svc,
-                        status,
-                        show_web_ui_link=False,
-                        key_prefix=f"dash-{info.name}",
-                    )
+                    with st.container(border=True):
+                        st.subheader(info.display_name)
+                        # Badge only — the action button and Web UI link are
+                        # rendered in our own layout below so the action row
+                        # can sit beside the Admin button, and the URL is
+                        # visible (not a button) under the badge.
+                        render_service_controls(
+                            svc,
+                            status,
+                            show_action_button=False,
+                            show_web_ui_link=False,
+                            key_prefix=f"dash-{info.name}",
+                        )
 
-                    st.divider()
+                        # Web UI as a clickable URL under the badge. When
+                        # the service isn't running we render a single-line
+                        # placeholder so the card layout doesn't shift
+                        # between states. The trailing ↗ signals "opens
+                        # externally" the way most UIs do.
+                        endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
+                        if endpoint and status.state.value == "running":
+                            st.markdown(f"[{endpoint} ↗]({endpoint})")
+                        else:
+                            st.markdown("&nbsp;", unsafe_allow_html=True)
 
-                    nav_cols = st.columns(2)
-                    with nav_cols[0]:
-                        endpoint = svc.web_ui_endpoint()
-                        if caps.has_web_ui and status.state.value == "running" and endpoint:
-                            st.link_button(
-                                "Web UI",
-                                endpoint,
-                                key=f"webui-{info.name}",
+                        st.divider()
+
+                        action_cols = st.columns(2)
+                        with action_cols[0]:
+                            render_action_button(
+                                status.state,
+                                svc.is_available(),
+                                worker,
+                                info.name,
+                                key_prefix=f"dash-{info.name}",
                                 use_container_width=True,
                             )
-                    with nav_cols[1]:
-                        pages = svc.ui_pages
-                        if pages and st.button(
-                            "Admin",
-                            key=f"admin-{info.name}",
-                            use_container_width=True,
-                        ):
-                            st.switch_page(_to_relative(pages[0].path))
+                        with action_cols[1]:
+                            pages = svc.ui_pages
+                            if pages and st.button(
+                                "Admin",
+                                key=f"admin-{info.name}",
+                                use_container_width=True,
+                            ):
+                                st.switch_page(_to_relative(pages[0].path))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# --- Section 3: Sources ------------------------------------------------------
+with st.container(border=True):
+    st.header("Sources")
+
+    sources = worker.list_sources()
+    if not sources:
+        st.info("No sources registered.")
+    else:
+        catalog_by_source = worker.catalog().by_source()
+        PER_ROW = 3
+        st.markdown('<div class="card-grid">', unsafe_allow_html=True)
+        for row_start in range(0, len(sources), PER_ROW):
+            row = sources[row_start : row_start + PER_ROW]
+            cols = st.columns(PER_ROW, gap="medium")
+            for col, info in zip(cols, row, strict=False):
+                with col:
+                    src = worker.source(info.name)
+                    entries = catalog_by_source.get(info.name, [])
+                    bytes_ = sum(e.total_bytes for e in entries)
+
+                    with st.container(border=True):
+                        st.subheader(info.display_name)
+                        # Source availability — analogous to a service's
+                        # running state. ``info.is_available`` is the
+                        # source-side check; the framework already called
+                        # ``src.is_available()`` when building the list.
+                        st.badge(
+                            "Available" if info.is_available else "Unavailable",
+                            color="green" if info.is_available else "gray",
+                        )
+
+                        # Model inventory for this source. Same data the
+                        # Catalog page's vault summary uses; on the cards
+                        # we render it as a compact "N models · SIZE"
+                        # caption above the path.
+                        if entries:
+                            plural = "s" if len(entries) != 1 else ""
+                            st.caption(f"{len(entries)} model{plural} · {format_bytes(bytes_)}")
+                        else:
+                            st.caption("No models")
+
+                        # Local path is informational only — unlike the
+                        # service's URL, there is no external target to
+                        # open, so we render plain text.
+                        st.caption(str(src.local_path))
+
+                        st.divider()
+
+                        # Sources have no lifecycle (no Start/Stop), so
+                        # the action row is a two-column layout showing
+                        # both UI pages as buttons when the source
+                        # exposes them. HuggingFace exposes two (Acquire
+                        # model + Active sessions); LM Studio exposes
+                        # none — the empty slots are filled by Streamlit
+                        # placeholders so the CSS equal-height nudge
+                        # keeps all cards in the row the same size.
+                        pages = src.ui_pages
+                        action_cols = st.columns(2)
+                        with action_cols[0]:
+                            if pages:
+                                if st.button(
+                                    pages[0].label,
+                                    key=f"src-open-{info.name}-0",
+                                    use_container_width=True,
+                                ):
+                                    st.switch_page(_to_relative(pages[0].path))
+                            else:
+                                st.empty()
+                        with action_cols[1]:
+                            if len(pages) >= 2:
+                                if st.button(
+                                    pages[1].label,
+                                    key=f"src-open-{info.name}-1",
+                                    use_container_width=True,
+                                ):
+                                    st.switch_page(_to_relative(pages[1].path))
+                            else:
+                                st.empty()
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # --- Debug panel -----------------------------------------------------------
