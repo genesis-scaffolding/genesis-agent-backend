@@ -15,6 +15,26 @@ worker = st.session_state["worker"]
 
 st.title("Genesis Worker")
 
+# Streamlit's ``st.columns`` lays out equal-width columns but does not
+# equalize their heights — the row's tallest column determines the row
+# height, shorter columns top-align and leave empty space below. We use
+# a wrapping loop (PER_ROW cards per row) so the layout scales to any
+# number of services, and this CSS nudge so cards within the same row
+# stretch to the row's tallest member. Both rules are required: the
+# first equalizes the column slots, the second stretches each card's
+# inner block to fill its column.
+st.markdown(
+    """<style>
+.service-grid-row [data-testid="stHorizontalBlock"] {
+    align-items: stretch;
+}
+.service-grid-row [data-testid="stColumn"] > div {
+    height: 100%;
+}
+</style>""",
+    unsafe_allow_html=True,
+)
+
 
 # --- Section 1: Host ---------------------------------------------------------
 # Auto-refreshing system strip is a fragment so its 10s tick doesn't
@@ -91,45 +111,50 @@ with st.container(border=True):
     if not services:
         st.info("No services registered.")
     else:
-        cols = st.columns(6)
-        for col, info in zip(cols, services, strict=False):
-            with col:
-                svc = worker.service(info.name)
-                status = worker.service_status(info.name)
-                caps = info.capabilities
+        PER_ROW = 3
+        st.markdown('<div class="service-grid-row">', unsafe_allow_html=True)
+        for row_start in range(0, len(services), PER_ROW):
+            row = services[row_start : row_start + PER_ROW]
+            cols = st.columns(PER_ROW, gap="medium")
+            for col, info in zip(cols, row, strict=False):
+                with col:
+                    svc = worker.service(info.name)
+                    status = worker.service_status(info.name)
+                    caps = info.capabilities
 
-                with st.container(border=True):
-                    st.subheader(info.display_name)
-                    # render_service_controls shows badge + Start/Stop + inline install.
-                    # Web UI link is handled separately below so it can live in the
-                    # nav_cols layout alongside the Admin button.
-                    render_service_controls(
-                        svc,
-                        status,
-                        show_web_ui_link=False,
-                        key_prefix=f"dash-{info.name}",
-                    )
+                    with st.container(border=True):
+                        st.subheader(info.display_name)
+                        # render_service_controls shows badge + Start/Stop + inline install.
+                        # Web UI link is handled separately below so it can live in the
+                        # nav_cols layout alongside the Admin button.
+                        render_service_controls(
+                            svc,
+                            status,
+                            show_web_ui_link=False,
+                            key_prefix=f"dash-{info.name}",
+                        )
 
-                    st.divider()
+                        st.divider()
 
-                    nav_cols = st.columns(2)
-                    with nav_cols[0]:
-                        endpoint = svc.web_ui_endpoint()
-                        if caps.has_web_ui and status.state.value == "running" and endpoint:
-                            st.link_button(
-                                "Web UI",
-                                endpoint,
-                                key=f"webui-{info.name}",
+                        nav_cols = st.columns(2)
+                        with nav_cols[0]:
+                            endpoint = svc.web_ui_endpoint()
+                            if caps.has_web_ui and status.state.value == "running" and endpoint:
+                                st.link_button(
+                                    "Web UI",
+                                    endpoint,
+                                    key=f"webui-{info.name}",
+                                    use_container_width=True,
+                                )
+                        with nav_cols[1]:
+                            pages = svc.ui_pages
+                            if pages and st.button(
+                                "Admin",
+                                key=f"admin-{info.name}",
                                 use_container_width=True,
-                            )
-                    with nav_cols[1]:
-                        pages = svc.ui_pages
-                        if pages and st.button(
-                            "Admin",
-                            key=f"admin-{info.name}",
-                            use_container_width=True,
-                        ):
-                            st.switch_page(_to_relative(pages[0].path))
+                            ):
+                                st.switch_page(_to_relative(pages[0].path))
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # --- Debug panel -----------------------------------------------------------
