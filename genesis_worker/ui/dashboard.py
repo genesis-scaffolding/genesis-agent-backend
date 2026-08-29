@@ -9,7 +9,10 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis_worker.utils.ui._nav import to_relative as _to_relative
-from genesis_worker.utils.ui._service_controls import render_service_controls
+from genesis_worker.utils.ui._service_controls import (
+    render_action_button,
+    render_service_controls,
+)
 
 worker = st.session_state["worker"]
 
@@ -124,29 +127,30 @@ with st.container(border=True):
 
                     with st.container(border=True):
                         st.subheader(info.display_name)
-                        # render_service_controls shows badge + Start/Stop + inline install.
-                        # Web UI link is handled separately below so it can live in the
-                        # nav_cols layout alongside the Admin button.
+                        # Badge only — the action button and Web UI link are
+                        # rendered in our own layout below so the action row
+                        # can sit beside the Admin button, and the URL is
+                        # visible (not a button) under the divider.
                         render_service_controls(
                             svc,
                             status,
+                            show_action_button=False,
                             show_web_ui_link=False,
                             key_prefix=f"dash-{info.name}",
                         )
 
                         st.divider()
 
-                        nav_cols = st.columns(2)
-                        with nav_cols[0]:
-                            endpoint = svc.web_ui_endpoint()
-                            if caps.has_web_ui and status.state.value == "running" and endpoint:
-                                st.link_button(
-                                    "Web UI",
-                                    endpoint,
-                                    key=f"webui-{info.name}",
-                                    use_container_width=True,
-                                )
-                        with nav_cols[1]:
+                        action_cols = st.columns(2)
+                        with action_cols[0]:
+                            render_action_button(
+                                status.state,
+                                svc.is_available(),
+                                worker,
+                                info.name,
+                                key_prefix=f"dash-{info.name}",
+                            )
+                        with action_cols[1]:
                             pages = svc.ui_pages
                             if pages and st.button(
                                 "Admin",
@@ -154,6 +158,15 @@ with st.container(border=True):
                                 use_container_width=True,
                             ):
                                 st.switch_page(_to_relative(pages[0].path))
+
+                        # Web UI as a clickable URL. When the service isn't
+                        # running we render a single-line placeholder so the
+                        # card layout doesn't shift between states.
+                        endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
+                        if endpoint and status.state.value == "running":
+                            st.markdown(f"[{endpoint}]({endpoint})")
+                        else:
+                            st.markdown("&nbsp;", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 

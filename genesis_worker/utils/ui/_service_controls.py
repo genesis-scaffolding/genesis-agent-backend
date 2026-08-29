@@ -24,7 +24,7 @@ def _render_badge(state: ServiceState) -> None:
         st.badge("Stopped", color="gray")
 
 
-def _render_action_button(
+def render_action_button(
     state: ServiceState,
     is_available: bool,
     worker,
@@ -32,6 +32,10 @@ def _render_action_button(
     key_prefix: str,
 ) -> None:
     """Render the action button for the current state.
+
+    Public so callers that want to lay the button out themselves (e.g. the
+    dashboard's action row beside the Admin button) can do so without having
+    to re-implement the state-to-button mapping.
 
     The five states map to: Stop (RUNNING), disabled Starting… (STARTING),
     disabled Stopping… (STOPPING), inline install (!available and
@@ -76,12 +80,19 @@ def render_service_controls(
     status: ServiceStatus,
     *,
     show_web_ui_link: bool = True,
+    show_action_button: bool = True,
     key_prefix: str = "",
 ) -> None:
     """Render service info: state badge, Start/Stop, inline install, Web UI link.
 
     ``key_prefix`` namespaces Streamlit widget keys to avoid collisions when
     multiple instances appear on the same page.
+
+    ``show_action_button`` and ``show_web_ui_link`` are independent toggles so
+    callers that want to lay the action button and the Web UI link out
+    themselves (e.g. the dashboard's action row) can disable them here and
+    render them in their own layout via :func:`render_action_button` and the
+    service's ``web_ui_endpoint``.
 
     Assumes the caller has already fetched ``worker.service_status(name)`` and
     holds it in ``status``. Reads ``svc.is_available()`` and
@@ -95,13 +106,14 @@ def render_service_controls(
     name = svc.name
 
     _render_badge(status.state)
-    _render_action_button(
-        status.state,
-        svc.is_available(),
-        worker,
-        name,
-        key_prefix,
-    )
+    if show_action_button:
+        render_action_button(
+            status.state,
+            svc.is_available(),
+            worker,
+            name,
+            key_prefix,
+        )
 
     if show_web_ui_link:
         endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()

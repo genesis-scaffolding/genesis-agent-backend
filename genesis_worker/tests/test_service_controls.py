@@ -18,19 +18,29 @@ def test_render_service_controls_signature_unchanged() -> None:
 
     sig = inspect.signature(render_service_controls)
     params = list(sig.parameters.keys())
-    assert params == ["svc", "status", "show_web_ui_link", "key_prefix"]
+    assert params == ["svc", "status", "show_web_ui_link", "show_action_button", "key_prefix"]
     # Defaults preserved.
     assert sig.parameters["show_web_ui_link"].default is True
+    assert sig.parameters["show_action_button"].default is True
     assert sig.parameters["key_prefix"].default == ""
+
+
+def test_render_action_button_signature_unchanged() -> None:
+    """The action button helper is called from the dashboard's action row."""
+    from genesis_worker.utils.ui._service_controls import render_action_button
+
+    sig = inspect.signature(render_action_button)
+    params = list(sig.parameters.keys())
+    assert params == ["state", "is_available", "worker", "name", "key_prefix"]
 
 
 def test_service_state_branches_cover_every_value() -> None:
     """Every :class:`ServiceState` should have an explicit branch in the helper."""
     from genesis_worker.contracts import ServiceState
-    from genesis_worker.utils.ui._service_controls import _render_action_button
+    from genesis_worker.utils.ui._service_controls import render_action_button
 
     # Read the function source as text and grep for each state name.
-    src = inspect.getsource(_render_action_button)
+    src = inspect.getsource(render_action_button)
     for state in ServiceState:
         # All states except the fall-through STOPPED / UNAVAILABLE branch
         # should appear as an explicit ``if`` or ``elif``.
