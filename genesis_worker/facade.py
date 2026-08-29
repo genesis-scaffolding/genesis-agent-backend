@@ -160,10 +160,10 @@ class GenesisWorker:
         return session
 
     def acquire_step(self, session: AcquireSession):
-        return session.current_step()
+        return session.view()
 
     def submit_acquire(self, session: AcquireSession, choice):
-        return session.submit(choice)
+        session.submit(choice)
 
     def cancel_acquire(self, session: AcquireSession) -> None:
         """Cancel an in-flight session. Idempotent."""
@@ -179,11 +179,11 @@ class GenesisWorker:
         out: list[dict] = []
         for sid, (src, sess) in list(self._sessions.items()):
             try:
-                step = sess.current_step()
+                view = sess.view()
             except Exception:  # noqa: BLE001 — stale session; skip
                 self._sessions.pop(sid, None)
                 continue
-            if step.kind in _TERMINAL_KINDS:
+            if view.kind in _TERMINAL_KINDS:
                 self._sessions.pop(sid, None)
                 continue
             if source_name is not None and src != source_name:
@@ -193,7 +193,7 @@ class GenesisWorker:
                     "id": sid,
                     "source": src,
                     "repo_id": getattr(sess, "repo_id", "?"),
-                    "state": step.kind,
+                    "state": view.kind,
                     "session": sess,
                 }
             )

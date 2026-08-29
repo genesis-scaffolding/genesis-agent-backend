@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ...contracts import AcquireStep, InstallSession, ServiceInstall
+from ...contracts import AcquireView, InstallSession, ServiceInstall
 
 
 def render_inline_install(installable: ServiceInstall, *, key_prefix: str) -> None:
@@ -80,7 +80,7 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str) -> None:
         st.rerun()
 
 
-def _render_step(step: AcquireStep) -> None:
+def _render_step(step: AcquireView) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
     elif step.kind == "failed":

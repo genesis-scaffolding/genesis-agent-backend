@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis_worker.contracts import AcquireStep
+from genesis_worker.contracts import AcquireView
 
 SERVICE_NAME = "llama_swap"
 
@@ -35,7 +35,7 @@ def _drop_pending_key(name: str) -> str:
     return f"{_DROP_PENDING_PREFIX}/{name}"
 
 
-def _render_step(step: AcquireStep) -> None:
+def _render_step(step: AcquireView) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
     elif step.kind == "failed":

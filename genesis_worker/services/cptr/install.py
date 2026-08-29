@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from ...contracts import (
-    AcquireStep,
+    AcquireStateKind,
+    AcquireView,
     InstallSession,
     InstallState,
     InstallVersion,
@@ -93,7 +94,7 @@ class _UvToolInstallSession(BackgroundInstallSession):
             else f"{self._package_name}@latest"
         )
         self._publish(
-            AcquireStep(kind="fetching", title=f"running uv tool install {spec}")
+            AcquireView(kind=AcquireStateKind.FETCHING, title=f"running uv tool install {spec}")
         )
         if self._cancel.is_set():
             raise _Canceled
@@ -128,7 +129,7 @@ class _UvToolInstallSession(BackgroundInstallSession):
                 "is ~/.local/bin on PATH?"
             )
 
-        self._publish(AcquireStep(kind="complete", title=f"installed {spec}"))
+        self._publish(AcquireView(kind=AcquireStateKind.COMPLETE, title=f"installed {spec}"))
 
 
 # --- installable -----------------------------------------------------------

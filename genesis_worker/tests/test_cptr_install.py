@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from genesis_worker.contracts import AcquireChoice, AcquireStep, InstallState
+from genesis_worker.contracts import AcquireChoice, AcquireView, InstallState
 from genesis_worker.services.cptr.install import (
     CptrInstall,
     _uv_tool_installed_version,
@@ -168,7 +168,7 @@ def test_installed_version_queries_uv_each_call(monkeypatch: pytest.MonkeyPatch)
 # --- install session -------------------------------------------------------
 
 
-def _wait_for_terminal(session) -> AcquireStep:  # type: ignore[no-untyped-def]
+def _wait_for_terminal(session) -> AcquireView:  # type: ignore[no-untyped-def]
     """Drain the install session and return the final step."""
     session.wait()
     return session.current_step()

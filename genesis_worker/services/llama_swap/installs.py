@@ -20,7 +20,8 @@ from typing import Any, ClassVar
 
 from ...contracts import (
     AcquireProgress,
-    AcquireStep,
+    AcquireStateKind,
+    AcquireView,
     InstallSession,
     InstallState,
     InstallVersion,
@@ -338,7 +339,7 @@ class _GithubReleaseInstallSession(BackgroundInstallSession):
     def _run_inner(self) -> None:
         backend = self._backend
         self._publish(
-            AcquireStep(kind="fetching", title=f"querying {backend.name} releases")
+            AcquireView(kind=AcquireStateKind.FETCHING, title=f"querying {backend.name} releases")
         )
         if self._cancel.is_set():
             raise _Canceled
@@ -395,8 +396,8 @@ class _GithubReleaseInstallSession(BackgroundInstallSession):
                 last_t = now
             eta = int((total - done) / speed_bps) if speed_bps and total else 0
             self._publish(
-                AcquireStep(
-                    kind="fetching",
+                AcquireView(
+                    kind=AcquireStateKind.FETCHING,
                     title=f"downloading {asset_name}",
                     total_bytes=total or declared_size or None,
                     progress=AcquireProgress(
@@ -410,8 +411,8 @@ class _GithubReleaseInstallSession(BackgroundInstallSession):
             )
 
         self._publish(
-            AcquireStep(
-                kind="fetching",
+            AcquireView(
+                kind=AcquireStateKind.FETCHING,
                 title=f"downloading {asset_name}",
                 total_bytes=declared_size or None,
                 cache_dir=cache_dir,
@@ -434,8 +435,8 @@ class _GithubReleaseInstallSession(BackgroundInstallSession):
 
         # --- verifying -------------------------------------------------------
         self._publish(
-            AcquireStep(
-                kind="verifying",
+            AcquireView(
+                kind=AcquireStateKind.VERIFYING,
                 title=f"verifying {asset_name}",
                 cache_dir=cache_dir,
             )
@@ -452,8 +453,8 @@ class _GithubReleaseInstallSession(BackgroundInstallSession):
             shutil.rmtree(install_root)
         install_root.mkdir(parents=True)
         self._publish(
-            AcquireStep(
-                kind="extracting",
+            AcquireView(
+                kind=AcquireStateKind.EXTRACTING,
                 title=f"extracting {asset_name}",
                 cache_dir=install_root,
             )
@@ -479,8 +480,8 @@ class _GithubReleaseInstallSession(BackgroundInstallSession):
         backend.layout.set_current_symlink(version)
 
         self._publish(
-            AcquireStep(
-                kind="complete",
+            AcquireView(
+                kind=AcquireStateKind.COMPLETE,
                 title=f"installed {version}",
                 cache_dir=install_root,
             )

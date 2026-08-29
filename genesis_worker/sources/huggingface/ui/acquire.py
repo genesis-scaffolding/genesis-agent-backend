@@ -6,7 +6,8 @@ import time
 
 import streamlit as st
 
-from genesis_worker.contracts import AcquireChoice
+from genesis_worker.contracts import AcquireStateKind
+from genesis_worker.sources.huggingface import HfAcquireChoice, HfAcquireView
 
 worker = st.session_state["worker"]
 sid_key = "acquire_session_huggingface"
@@ -23,21 +24,21 @@ if session is None:
             st.rerun()
     st.stop()
 
-step = worker.acquire_step(session)
-st.subheader(step.title)
+view = worker.acquire_step(session)
+st.subheader(view.title)
 
-if step.kind == "inspecting":
+if view.kind == AcquireStateKind.INSPECTING:
     st.caption("Inspecting repository. This can take a few seconds.")
     if st.button("Cancel", key="acquire-cancel-inspecting"):
         worker.cancel_acquire(session)
         st.session_state.pop(sid_key, None)
         st.rerun()
 
-elif step.kind == "select_files" and step.file_groups:
-    # Each entry in step.file_groups is an AcquireFileGroup:
+elif view.kind == AcquireStateKind.SELECTING and isinstance(view, HfAcquireView):
+    # Each entry in view.targets is an AcquireFileGroup:
     # one selectable model (with shards as `paths`). Indices submitted to
-    # AcquireChoice are 1-based into step.file_groups.
-    groups = step.file_groups
+    # HfAcquireChoice are 1-based into view.targets.
+    groups = view.targets
     main_groups = [
         (i, g) for i, g in enumerate(groups, start=1)
         if g.role in ("main", "safetensor")
@@ -51,6 +52,9 @@ elif step.kind == "select_files" and step.file_groups:
         if g.paths:
             return f"{g.label}  ({g.paths[0]})"
         return g.label
+
+    if view.error:
+        st.error(view.error)
 
     with st.form("select-files"):
         options = [_label(g) for _, g in main_groups]
@@ -76,17 +80,20 @@ elif step.kind == "select_files" and step.file_groups:
             main_indexes = [main_groups[options.index(l)][0] for l in chosen_labels]
             worker.submit_acquire(
                 session,
-                AcquireChoice(main_indexes=main_indexes or None, aux_indexes=aux_choices or None),
+                HfAcquireChoice(
+                    main_indexes=main_indexes or None,
+                    aux_indexes=aux_choices or None,
+                ),
             )
             st.rerun()
 
-elif step.kind == "confirm_storage":
-    total_gb = (step.total_bytes or 0) / (1024 ** 3)
+elif view.kind == AcquireStateKind.CONFIRMING:
+    total_gb = (view.total_bytes or 0) / (1024 ** 3)
     st.warning(f"Will download {total_gb:.1f} GB")
     cols = st.columns([1, 1])
     with cols[0]:
         if st.button("Confirm", key="acquire-confirm"):
-            worker.submit_acquire(session, AcquireChoice(confirm=True))
+            worker.submit_acquire(session, HfAcquireChoice(confirm=True))
             st.rerun()
     with cols[1]:
         if st.button("Cancel", key="acquire-cancel-confirm"):
@@ -94,12 +101,12 @@ elif step.kind == "confirm_storage":
             st.session_state.pop(sid_key, None)
             st.rerun()
 
-elif step.kind == "downloading":
-    if step.progress:
-        ratio = step.progress.bytes_done / max(step.progress.bytes_total, 1)
+elif view.kind == AcquireStateKind.FETCHING:
+    if view.progress:
+        ratio = view.progress.bytes_done / max(view.progress.bytes_total, 1)
         st.progress(min(ratio, 1.0))
-    if step.log_tail:
-        st.code("\n".join(step.log_tail[-10:]))
+    if view.log_tail:
+        st.code("\n".join(view.log_tail[-10:]))
     if st.button("Cancel", key="acquire-cancel-downloading"):
         worker.cancel_acquire(session)
         st.session_state.pop(sid_key, None)
@@ -107,8 +114,14 @@ elif step.kind == "downloading":
     time.sleep(2)
     st.rerun()
 
-elif step.kind in ("complete", "failed", "cancelled"):
-    st.write(f"Session {step.kind}")
+elif view.kind in (
+    AcquireStateKind.COMPLETE,
+    AcquireStateKind.FAILED,
+    AcquireStateKind.CANCELLED,
+):
+    st.write(f"Session {view.kind}")
+    if view.error:
+        st.error(view.error)
     if st.button("Done"):
         del st.session_state[sid_key]
         st.rerun()

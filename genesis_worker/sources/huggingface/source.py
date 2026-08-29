@@ -7,7 +7,7 @@ from pathlib import Path
 from ...contracts import (
     SKIP_FILENAMES,
     AcquireSession,
-    AcquireState,
+    AcquireStateKind,
     DiscoveredModel,
     ModelPiece,
     ModelSource,
@@ -16,7 +16,7 @@ from ...contracts import (
     classify,
     role_sort_key,
 )
-from .acquire import HfAcquireSession
+from .acquire import HfAcquireSession, HfAcquireState
 from .options import HuggingFaceOptions
 
 
@@ -37,7 +37,7 @@ class HuggingFaceSource(ModelSource):
 
         return HfAcquireSession(
             api=HfApi(),
-            state=AcquireState(source=self.name, repo_id=repo_id),
+            hf_state=HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id=repo_id),
             cache_dir=self.local_path,
             revision=self._options.default_revision,
         )

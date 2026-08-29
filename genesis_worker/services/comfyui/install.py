@@ -3,7 +3,7 @@
 The installable wraps ``DockerContainer`` for image-present checks, tag
 listing, and pull. The install session subclasses
 :class:`~genesis_worker.utils.install.BackgroundInstallSession` and
-streams ``docker pull`` stderr lines to the UI as ``AcquireStep`` updates.
+streams ``docker pull`` stderr lines to the UI as ``AcquireView`` updates.
 """
 
 from __future__ import annotations
@@ -19,7 +19,8 @@ from pathlib import Path
 
 from ...contracts import (
     AcquireProgress,
-    AcquireStep,
+    AcquireStateKind,
+    AcquireView,
     InstallSession,
     InstallState,
     InstallVersion,
@@ -242,7 +243,7 @@ class _DockerPullInstallSession(BackgroundInstallSession):
 
     Each stderr line is parsed by :class:`DockerPullProgress`; the
     aggregate (bytes_done, bytes_total, phase) is published as an
-    :class:`AcquireStep` with the progress field populated. The
+    :class:`AcquireView` with the progress field populated. The
     Status page's ``_render_step`` already renders
     ``st.progress(...)`` when ``step.progress is not None``, so the
     UI shows a live bar without further changes.
@@ -260,7 +261,7 @@ class _DockerPullInstallSession(BackgroundInstallSession):
     def _run_inner(self) -> None:
         self._parser = DockerPullProgress()
         self._publish(
-            AcquireStep(kind="fetching", title=f"pulling {self._image}")
+            AcquireView(kind=AcquireStateKind.FETCHING, title=f"pulling {self._image}")
         )
         try:
             DockerContainer.pull(
@@ -276,7 +277,7 @@ class _DockerPullInstallSession(BackgroundInstallSession):
         if self._on_complete is not None:
             self._on_complete()
         self._publish(
-            AcquireStep(kind="complete", title=f"pulled {self._image}")
+            AcquireView(kind=AcquireStateKind.COMPLETE, title=f"pulled {self._image}")
         )
 
     def _on_progress(self, line: str) -> None:
@@ -285,8 +286,8 @@ class _DockerPullInstallSession(BackgroundInstallSession):
         self._parser.update(line)
         snap = self._parser.snapshot()
         self._publish(
-            AcquireStep(
-                kind="fetching",
+            AcquireView(
+                kind=AcquireStateKind.FETCHING,
                 title=f"{snap.phase} {self._image}",
                 total_bytes=snap.bytes_total or None,
                 progress=AcquireProgress(

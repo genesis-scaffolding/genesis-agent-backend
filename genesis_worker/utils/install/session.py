@@ -6,19 +6,19 @@ import threading
 from abc import abstractmethod
 from dataclasses import dataclass
 
-from ...contracts import AcquireChoice, AcquireStep, InstallSession
+from ...contracts import AcquireChoice, AcquireStateKind, AcquireView, InstallSession
 
 
 class _Canceled(Exception):
     """Raised by ``_run_inner`` to signal cancellation.
 
-    Caught by the thread supervisor and translated to a 'cancelled' AcquireStep.
+    Caught by the thread supervisor and translated to a 'cancelled' AcquireView.
     """
 
 
 @dataclass
 class _SessionState:
-    step: AcquireStep
+    step: AcquireView
     canceled: bool = False
     done: bool = False
 
@@ -33,7 +33,7 @@ class BackgroundInstallSession(InstallSession):
 
     def __init__(self) -> None:
         self._state = _SessionState(
-            step=AcquireStep(kind="fetching", title=f"installing {self._name}")
+            step=AcquireView(kind=AcquireStateKind.FETCHING, title=f"installing {self._name}")
         )
         self._cancel = threading.Event()
         self._done = False
@@ -55,7 +55,7 @@ class BackgroundInstallSession(InstallSession):
         Check ``self._cancel.is_set()`` between long-running steps (e.g.
         between files, between fetch and extract).
 
-        On success: call ``self._publish(AcquireStep(kind='complete', ...))``.
+        On success: call ``self._publish(AcquireView(kind='complete', ...))``.
         On failure: raise an exception (any subclass of ``Exception``).
         On cancellation: raise ``_Canceled``.
 
@@ -63,7 +63,7 @@ class BackgroundInstallSession(InstallSession):
         appropriate step.
         """
 
-    def _publish(self, step: AcquireStep) -> None:
+    def _publish(self, step: AcquireView) -> None:
         self._state.step = step
 
     def _run(self) -> None:
@@ -71,12 +71,12 @@ class BackgroundInstallSession(InstallSession):
             self._run_inner()
         except _Canceled:
             self._publish(
-                AcquireStep(kind="cancelled", title="cancelled", can_cancel=False)
+                AcquireView(kind=AcquireStateKind.CANCELLED, title="cancelled", can_cancel=False)
             )
         except Exception as exc:  # noqa: BLE001
             self._publish(
-                AcquireStep(
-                    kind="failed",
+                AcquireView(
+                    kind=AcquireStateKind.FAILED,
                     title=f"install failed: {exc}",
                     error=str(exc),
                 )
@@ -86,16 +86,16 @@ class BackgroundInstallSession(InstallSession):
 
     # InstallSession protocol
 
-    def current_step(self) -> AcquireStep:
+    def current_step(self) -> AcquireView:
         return self._state.step
 
-    def submit(self, choice: AcquireChoice) -> AcquireStep:
+    def submit(self, choice: AcquireChoice) -> AcquireView:
         return self._state.step
 
     def cancel(self) -> None:
         self._cancel.set()
 
-    def wait(self) -> AcquireStep:
+    def wait(self) -> AcquireView:
         self._thread.join()
         return self._state.step
 

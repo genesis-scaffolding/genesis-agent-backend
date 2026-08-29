@@ -4,7 +4,8 @@ Used by Phase 10 retirement; not wired into the Makefile in v1.
 """
 
 from .. import GenesisWorker
-from ..contracts import AcquireChoice
+from ..contracts import AcquireChoice, AcquireStateKind
+from ..sources.huggingface import HfAcquireChoice, HfAcquireView
 
 
 def main() -> int:
@@ -14,22 +15,23 @@ def main() -> int:
     worker = GenesisWorker()
     session = worker.start_acquire("huggingface", repo_id)
     while True:
-        step = worker.acquire_step(session)
-        print(f"[{step.kind}] {step.title}")
-        if step.kind == "complete":
+        view = worker.acquire_step(session)
+        print(f"[{view.kind}] {view.title}")
+        if view.kind == AcquireStateKind.COMPLETE:
             return 0
-        if step.kind in ("failed", "cancelled"):
+        if view.kind in (AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
             return 1
-        if step.kind == "confirm_storage":
+        if view.kind == AcquireStateKind.CONFIRMING:
             ans = input("confirm? [y/N]: ").strip().lower()
             worker.submit_acquire(session, AcquireChoice(confirm=ans == "y"))
-        elif step.kind == "select_files" and step.file_groups:
-            selections: dict[str, str] = {}
-            for group in step.file_groups:
+        elif view.kind == AcquireStateKind.SELECTING and isinstance(view, HfAcquireView):
+            for group in view.targets:
                 print(f"  {group.label}: {group.paths}")
                 idx = int(input("index: "))
-                selections[group.role] = group.paths[idx]
-            worker.submit_acquire(session, AcquireChoice(main_index=0))
+                worker.submit_acquire(
+                    session,
+                    HfAcquireChoice(main_indexes=[idx]),
+                )
         else:
             input("press enter to refresh...")
 

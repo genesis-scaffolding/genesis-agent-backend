@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.contracts import AcquireStep
+from genesis_worker.contracts import AcquireView
 from genesis_worker.services.comfyui.install import (
     ComfyUiImage,
     _cache_path,
@@ -24,7 +24,7 @@ from genesis_worker.utils.process import DockerContainer
 # ---------------------------------------------------------------------------
 
 
-def _wait_for_terminal(session) -> AcquireStep:  # type: ignore[no-untyped-def]
+def _wait_for_terminal(session) -> AcquireView:  # type: ignore[no-untyped-def]
     session.wait()
     return session.current_step()
 

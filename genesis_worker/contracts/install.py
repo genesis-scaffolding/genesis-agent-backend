@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
-from .acquire import AcquireChoice, AcquireStep
+from .acquire import AcquireChoice, AcquireView
 
 
 class InstallState(StrEnum):
@@ -53,21 +53,21 @@ class ServiceInstall(ABC):
 class InstallSession(ABC):
     """Streaming install state machine. Mirrors :class:`AcquireSession`.
 
-    New ``AcquireStep.kind`` values: ``fetching | verifying | extracting``.
+    New ``AcquireView.kind`` values: ``fetching | verifying | extracting``.
     Terminals ``complete | failed | cancelled`` are reused.
     """
 
     @abstractmethod
-    def current_step(self) -> AcquireStep: ...
+    def current_step(self) -> AcquireView: ...
 
     @abstractmethod
-    def submit(self, choice: AcquireChoice) -> AcquireStep: ...
+    def submit(self, choice: AcquireChoice) -> AcquireView: ...
 
     @abstractmethod
     def cancel(self) -> None: ...
 
     @abstractmethod
-    def wait(self) -> AcquireStep: ...
+    def wait(self) -> AcquireView: ...
 
 
 __all__ = [
