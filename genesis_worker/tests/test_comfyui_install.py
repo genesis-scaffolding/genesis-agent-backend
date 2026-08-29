@@ -16,7 +16,7 @@ from genesis_worker.services.comfyui.install import (
     _read_cache,
     _write_cache,
 )
-from genesis_worker.utils.install import _Canceled
+from genesis_worker.utils.background_session import _Canceled
 from genesis_worker.utils.process import DockerContainer
 
 # ---------------------------------------------------------------------------

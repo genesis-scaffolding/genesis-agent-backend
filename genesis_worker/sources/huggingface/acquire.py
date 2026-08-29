@@ -19,8 +19,7 @@ from ...contracts import (
     AcquireStateKind,
     AcquireView,
 )
-from ...utils.background_session import BackgroundSession
-from ...utils.install.session import _Canceled
+from ...utils.background_session import BackgroundSession, _Canceled
 
 GGUF_EXT = ".gguf"
 

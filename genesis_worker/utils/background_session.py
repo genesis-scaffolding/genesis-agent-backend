@@ -19,7 +19,16 @@ from ..contracts import (
     AcquireStateKind,
     AcquireView,
 )
-from .install.session import _Canceled
+
+
+class _Canceled(Exception):
+    """Raised inside ``_run_inner`` to signal cancellation.
+
+    The thread supervisor catches it and transitions state to ``CANCELLED``.
+    Defined here so the exception lives next to the runtime that raises
+    and catches it.
+    """
+
 
 _INTERACTIVE_KINDS = frozenset({
     AcquireStateKind.INSPECTING,
@@ -117,4 +126,4 @@ class BackgroundSession(AcquireSession):
         """
 
 
-__all__ = ["BackgroundSession"]
+__all__ = ["BackgroundSession", "_Canceled"]

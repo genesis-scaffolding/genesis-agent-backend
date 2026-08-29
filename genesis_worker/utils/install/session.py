@@ -7,13 +7,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 
 from ...contracts import AcquireChoice, AcquireStateKind, AcquireView, InstallSession
-
-
-class _Canceled(Exception):
-    """Raised by ``_run_inner`` to signal cancellation.
-
-    Caught by the thread supervisor and translated to a 'cancelled' AcquireView.
-    """
+from ..background_session import _Canceled
 
 
 @dataclass
