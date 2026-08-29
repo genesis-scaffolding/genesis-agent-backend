@@ -7,10 +7,10 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .catalog_build import CatalogService
+from .catalog import CatalogService
 from .contracts import AcquireSession, Catalog, InferenceService, ModelSource, SecretsAccessor
-from .models import ServiceInfo, SourceInfo
 from .registries import ServiceRegistry, SourceRegistry
+from .utils.models import ServiceInfo, SourceInfo
 
 if TYPE_CHECKING:
     from .settings import Settings
@@ -105,7 +105,7 @@ class GenesisWorker:
         """
         if self._catalog_cache is None:
             # Try the persisted file first; fall back to a fresh rescan.
-            from .catalog_io import load_catalog
+            from .utils.catalog_io import load_catalog
 
             loaded = load_catalog(self._settings.paths.state_dir / "catalog.json")
             if loaded is not None:
@@ -120,7 +120,7 @@ class GenesisWorker:
         Raises:
             ValueError: no entry matching (source, name) exists.
         """
-        from .catalog_io import save_catalog
+        from .utils.catalog_io import save_catalog
 
         catalog = self.catalog()
         entry = next(
@@ -236,12 +236,12 @@ class GenesisWorker:
         return self._service_registry.get(name).status()
 
     def collect_metrics(self):
-        from .metrics import collect_metrics as _collect
+        from .utils.collectors.metrics import collect_metrics as _collect
 
         return _collect()
 
     def collect_host_info(self):
-        from .host_info import collect_host_info as _collect
+        from .utils.collectors.host_info import collect_host_info as _collect
 
         return _collect()
 

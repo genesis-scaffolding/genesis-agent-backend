@@ -13,7 +13,7 @@ from genesis_worker.contracts import (
     StopResult,
     UiPage,
 )
-from genesis_worker.metrics import MachineMetrics
+from genesis_worker.utils.models import MachineMetrics
 
 
 def test_facade_lists_services(tmp_path: Path) -> None:
@@ -92,9 +92,9 @@ def test_facade_catalog_persists_across_instances(tmp_path: Path, monkeypatch) -
 
 def test_delete_model_removes_entry_and_directory(tmp_path: Path) -> None:
     from genesis_worker import GenesisWorker as _GW
-    from genesis_worker.catalog_build import compute_content_hash
     from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
     from genesis_worker.settings import PathsSettings, Settings
+    from genesis_worker.utils.catalog_utils import compute_content_hash
 
     vault = tmp_path / "vault"
     model_dir = vault / "org" / "repo"
@@ -137,9 +137,9 @@ def test_delete_model_removes_entry_and_directory(tmp_path: Path) -> None:
 
 def test_delete_model_removes_entry_when_directory_already_gone(tmp_path: Path) -> None:
     from genesis_worker import GenesisWorker as _GW
-    from genesis_worker.catalog_build import compute_content_hash
     from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
     from genesis_worker.settings import PathsSettings, Settings
+    from genesis_worker.utils.catalog_utils import compute_content_hash
 
     vault = tmp_path / "vault"
     model_dir = vault / "org" / "repo"
@@ -176,9 +176,9 @@ def test_delete_model_removes_entry_when_directory_already_gone(tmp_path: Path) 
 
 def test_delete_model_raises_for_unknown_entry(tmp_path: Path) -> None:
     from genesis_worker import GenesisWorker as _GW
-    from genesis_worker.catalog_build import compute_content_hash
     from genesis_worker.contracts import Catalog, ModelEntry, ModelPiece
     from genesis_worker.settings import PathsSettings, Settings
+    from genesis_worker.utils.catalog_utils import compute_content_hash
 
     vault = tmp_path / "vault"
     model_dir = vault / "other" / "repo"

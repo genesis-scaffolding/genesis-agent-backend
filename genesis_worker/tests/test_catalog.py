@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.catalog_build import CatalogService, compute_content_hash
+from genesis_worker.catalog import CatalogService
 from genesis_worker.contracts import ModelEntry, ModelPiece
 from genesis_worker.registries import SourceRegistry
 from genesis_worker.settings import PathsSettings, Settings
+from genesis_worker.utils.catalog_utils import compute_content_hash
 
 
 @pytest.fixture

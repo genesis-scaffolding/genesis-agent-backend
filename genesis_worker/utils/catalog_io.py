@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .contracts import Catalog
+from ..contracts import Catalog
 
 
 def load_catalog(path: Path) -> Catalog | None:

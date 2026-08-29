@@ -25,7 +25,7 @@ Services are not homogeneous the way sources are. Every source needs exactly one
 ```
 genesis_worker/
   contracts/     the only module plugins may import
-  <framework>    settings.py  paths.py  facade.py  catalog_build.py  registries
+  <framework>    settings.py  paths.py  facade.py  catalog.py  registries
   sources/       plugin directory
   services/      plugin directory
 ```
@@ -51,7 +51,7 @@ The natural place for that helper is in a `utils` package that both sides can im
 genesis_worker/
   contracts/     contracts (ABCs, types)
   utils/         shared helpers — self-contained, importable by both sides
-  <framework>    settings.py  paths.py  facade.py  catalog_build.py  registries
+  <framework>    settings.py  paths.py  facade.py  catalog.py  registries
   sources/       plugin directory
   services/      plugin directory
 ```

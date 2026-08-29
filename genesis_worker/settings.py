@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .contracts import SecretsAccessor
-from .paths import repo_root, xdg_path
+from .utils.paths import repo_root, xdg_path
 
 # The directory the worker owns under each XDG base. Change it here to rename them all.
 XDG_BASE = "genesis-worker"

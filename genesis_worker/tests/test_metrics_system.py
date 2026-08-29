@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from genesis_worker.metrics import MachineMetrics, collect_metrics
+from genesis_worker.utils.collectors.metrics import collect_metrics
+from genesis_worker.utils.models import MachineMetrics
 
 
 def test_collect_returns_dataclass_with_cpu_ram() -> None:

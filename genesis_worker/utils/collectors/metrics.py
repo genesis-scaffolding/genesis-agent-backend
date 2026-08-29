@@ -2,17 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class MachineMetrics:
-    cpu_percent: float
-    ram_used_gb: float
-    ram_total_gb: float
-    gpu_percent: float | None
-    vram_used_gb: float | None
-    vram_total_gb: float | None
+from ..models import MachineMetrics
 
 
 def collect_metrics() -> MachineMetrics:
@@ -54,4 +44,4 @@ def collect_metrics() -> MachineMetrics:
     )
 
 
-__all__ = ["MachineMetrics", "collect_metrics"]
+__all__ = ["collect_metrics"]
