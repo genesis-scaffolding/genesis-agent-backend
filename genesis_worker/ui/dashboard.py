@@ -28,10 +28,10 @@ st.title("Genesis Worker")
 # inner block to fill its column.
 st.markdown(
     """<style>
-.service-grid-row [data-testid="stHorizontalBlock"] {
+.card-grid [data-testid="stHorizontalBlock"] {
     align-items: stretch;
 }
-.service-grid-row [data-testid="stColumn"] > div {
+.card-grid [data-testid="stColumn"] > div {
     height: 100%;
 }
 </style>""",
@@ -115,7 +115,7 @@ with st.container(border=True):
         st.info("No services registered.")
     else:
         PER_ROW = 3
-        st.markdown('<div class="service-grid-row">', unsafe_allow_html=True)
+        st.markdown('<div class="card-grid">', unsafe_allow_html=True)
         for row_start in range(0, len(services), PER_ROW):
             row = services[row_start : row_start + PER_ROW]
             cols = st.columns(PER_ROW, gap="medium")
@@ -170,6 +170,59 @@ with st.container(border=True):
                                 use_container_width=True,
                             ):
                                 st.switch_page(_to_relative(pages[0].path))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# --- Section 3: Sources ------------------------------------------------------
+with st.container(border=True):
+    st.header("Sources")
+
+    sources = worker.list_sources()
+    if not sources:
+        st.info("No sources registered.")
+    else:
+        PER_ROW = 3
+        st.markdown('<div class="card-grid">', unsafe_allow_html=True)
+        for row_start in range(0, len(sources), PER_ROW):
+            row = sources[row_start : row_start + PER_ROW]
+            cols = st.columns(PER_ROW, gap="medium")
+            for col, info in zip(cols, row, strict=False):
+                with col:
+                    src = worker.source(info.name)
+
+                    with st.container(border=True):
+                        st.subheader(info.display_name)
+                        # Source availability — analogous to a service's
+                        # running state. ``info.is_available`` is the
+                        # source-side check; the framework already called
+                        # ``src.is_available()`` when building the list.
+                        st.badge(
+                            "Available" if info.is_available else "Unavailable",
+                            color="green" if info.is_available else "gray",
+                        )
+
+                        # Local path is informational only — unlike the
+                        # service's URL, there is no external target to
+                        # open, so we render plain text.
+                        st.caption(str(src.local_path))
+
+                        st.divider()
+
+                        # Sources have no lifecycle (no Start/Stop), so
+                        # the action row is a single button that opens
+                        # the source's first management page. When the
+                        # source has no UI page we render a single-line
+                        # placeholder so the card layout doesn't shift.
+                        pages = src.ui_pages
+                        if pages:
+                            if st.button(
+                                pages[0].label,
+                                key=f"src-open-{info.name}",
+                                use_container_width=True,
+                            ):
+                                st.switch_page(_to_relative(pages[0].path))
+                        else:
+                            st.markdown("&nbsp;", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
