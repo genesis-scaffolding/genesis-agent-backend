@@ -12,6 +12,12 @@
 #   applies). Recipes that share a match keyword are SIBLINGS — all emit
 #   entries (e.g. qwen3.6-thinking + qwen3.6-instruct both match "qwen3.6").
 #
+# extra_flags:               (optional; cascades from default)
+#   List of arbitrary strings appended verbatim to the llama-server cmd line.
+#   Each item is emitted as a separate line with a trailing `\`.
+#   Example: ["--threads 8", "--some-undocumented-flag"]
+#   Use this as an escape hatch for flags not yet exposed in the UI.
+#
 # binary:                    (optional; cascades from default)
 #   Path to llama-server. Absolute paths used as-is; relative paths resolved
 #   against the repo root.

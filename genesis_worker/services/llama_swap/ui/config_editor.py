@@ -89,6 +89,14 @@ def _render_effective(cfg: EvaluatedConfig) -> None:
                 _badge(cfg.provenance["chat_template_kwargs"]),
             )
         )
+    if cfg.extra_flags:
+        rows.append(
+            (
+                "Extra flags",
+                " ".join(cfg.extra_flags),
+                _badge(cfg.provenance["extra_flags"]),
+            )
+        )
 
     rows.append(("Hardcoded flags (always)", " ".join(cfg.hardcoded_flags), ""))
 
@@ -251,6 +259,20 @@ def _render_override_form(
                 new_overrides["chat_template_kwargs"] = json.loads(ctk_val)
             except json.JSONDecodeError as exc:
                 st.error(f"Chat template kwargs JSON invalid: {exc}")
+
+        # --- Extra flags ---
+        ef_val = st.text_area(
+            "Extra llama.cpp flags (one per line)",
+            value="\n".join(
+                current_overrides.get("extra_flags", cfg.extra_flags or [])
+            ),
+            key=f"ov-{entry_id}-ef",
+            height=100,
+        )
+        if (ef_val or "").strip():
+            new_overrides["extra_flags"] = [
+                ln.strip() for ln in ef_val.splitlines() if ln.strip()
+            ]
 
         # --- Spec ---
         spec_val = st.text_area(

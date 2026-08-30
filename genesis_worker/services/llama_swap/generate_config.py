@@ -125,6 +125,7 @@ class EvaluatedConfig:
     provenance: dict[str, FieldSource]
     cmd: str
 
+    extra_flags: tuple[str, ...] = ()
     hardcoded_flags: tuple[str, ...] = (
         "--kv-unified",
         "--jinja",
@@ -455,6 +456,10 @@ def evaluate_recipe(
     sampling = ovr.get("sampling", recipe.sampling) or {}
     chat_template_kwargs = ovr.get("chat_template_kwargs", recipe.chat_template_kwargs)
 
+    extra_flags: list[str] = ovr.get("extra_flags", list(recipe.extra_flags))
+    if not extra_flags and default_recipe:
+        extra_flags = list(default_recipe.extra_flags)
+
     provenance: dict[str, FieldSource] = {
         "binary": binary_source,
         "kv_cache": _source_simple(ovr, recipe, default_recipe, "kv_cache"),
@@ -469,6 +474,7 @@ def evaluate_recipe(
         "chat_template_file": _source_simple(ovr, recipe, default_recipe, "chat_template_file"),
         "sampling": _source_recipe_only(ovr, recipe, "sampling"),
         "chat_template_kwargs": _source_recipe_only(ovr, recipe, "chat_template_kwargs"),
+        "extra_flags": _source_recipe_only(ovr, recipe, "extra_flags"),
     }
 
     cmd = cmd_from_evaluated_dict(
@@ -484,6 +490,7 @@ def evaluate_recipe(
         chat_template_file=chat_template_file,
         sampling=sampling,
         chat_template_kwargs=chat_template_kwargs,
+        extra_flags=tuple(extra_flags),
         provenance=provenance,
     )
 
@@ -542,6 +549,7 @@ def cmd_from_evaluated_dict(
     sampling: dict[str, Any],
     chat_template_kwargs: dict[str, Any] | None,
     provenance: dict[str, FieldSource] | None = None,
+    extra_flags: tuple[str, ...] = (),
 ) -> str:
     """Format the llama-server cmd string from resolved fields.
 
@@ -614,6 +622,9 @@ def cmd_from_evaluated_dict(
     if chat_template_kwargs:
         ctk_json = json.dumps(chat_template_kwargs, separators=(",", ":"))
         sections.append(f"  --chat-template-kwargs '{ctk_json}'")
+
+    if extra_flags:
+        sections.append("  " + " \\\n  ".join(extra_flags) + " \\")
 
     if sections and sections[-1].endswith(" \\"):
         sections[-1] = sections[-1][:-2]

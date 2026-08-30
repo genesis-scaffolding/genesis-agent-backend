@@ -102,6 +102,7 @@ class Recipe(BaseModel):
     chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
     parallel: int | None = None
     spec: dict[str, Any] | None = None
+    extra_flags: list[str] = Field(default_factory=list)
     kv_cache: str | None = None
     mmproj_offload: bool | None = None
     ctx_min: int | None = None
