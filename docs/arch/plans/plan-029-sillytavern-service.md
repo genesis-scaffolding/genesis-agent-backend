@@ -24,8 +24,8 @@ No GPU options. No TZ (deferred).
 
 `genesis_worker/services/sillytavern/config.py` — seeds `config.yaml` so the Docker-published host is not blocked by SillyTavern's default whitelist.
 
-- **Problem:** ST ships `whitelist: [127.0.0.1]` + `whitelistDockerHosts: true`. On Docker-CE-on-Linux `whitelistDockerHosts` can't resolve `gateway.docker.internal`, so published connections arrive from the bridge gateway (`172.17.0.1`) and are refused.
-- **Fix:** `seed_config(config_path)` writes `config.yaml` **only if absent** (never clobbers user edits) with `whitelistMode: true`, `whitelistDockerHosts: false`, and `whitelist: [127.0.0.1, <detected bridge gateway(s)>]` (fallback `172.17.0.1`). Detection runs `docker network inspect` for bridge gateways; keeps whitelist mode on so SSRF `privateAddressWhitelist` stays protected.
+- **Problem:** ST ships `whitelist: [127.0.0.1]` + `whitelistDockerHosts: true`. On Docker-CE-on-Linux `whitelistDockerHosts` tries to resolve `host.docker.internal` / `gateway.docker.internal` (ENOTFOUND) while the real client IP is never whitelisted. Two client paths hit the container: (a) `localhost` / the health probe arrives NAT'd from the docker bridge gateway (`172.17.0.1`); (b) the docker host itself over its own LAN/hostname IP (e.g. `p3:9090`) reaches the container with that raw source IP — which neither path whitelisted.
+- **Fix:** `seed_config(config_path)` runs on every `start()` and **idempotently** enforces the security keys (never clobbers unrelated edits), correcting a config that already exists at ST's defaults too. It sets `whitelistDockerHosts: false` and guarantees `whitelist` contains `127.0.0.1`, the docker bridge gateway(s) (health-check source), and every address this host itself presents via its own interfaces (LAN / hostname / tailscale). Bridge gateways are found via `docker network ls -q` + `docker network inspect <ids>`, filtering by `Driver == "bridge"` (some daemons omit `Type`); falls back to `172.17.0.1` when Docker/network info is unavailable. Keeps whitelist mode on so SSRF `privateAddressWhitelist` stays protected; the set we add is limited to the host itself, never the wider LAN or internet.
 - The entrypoint copies `default/config.yaml` only when the file is missing and `npm run init` fills missing keys without overwriting — so our values survive. Verified end-to-end: host curl → HTTP 200, no blocked requests.
 - `--whitelist=false` was rejected as a flag alternative: alone it makes the server exit (code 1); combined with `--basicAuthMode` it runs but forces a login on every access.
 
@@ -62,7 +62,7 @@ Run before committing:
 
 `test_plugin_boundary.py` will re-walk the new package — imports must stay within `contracts`/`utils`.
 
-New `tests/test_sillytavern_config.py` covers `seed_config`: writes when absent / skips existing / includes detected gateways / falls back without docker.
+New `tests/test_sillytavern_config.py` covers `seed_config` and the two helpers: writes / corrects a pre-existing default / preserves other keys / includes detected gateways + host own-addresses / falls back without docker / no-op when already correct / `ip` parsing + no-`ip` fallback.
 
 ## Verification summary
 
