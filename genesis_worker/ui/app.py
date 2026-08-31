@@ -33,20 +33,17 @@ def _page(path: Path, title: str, icon: str, url_path: str | None) -> st.Page:
 nav: dict[str, list[st.Page]] = {
     "Overview": [
         _page(_FRAMEWORK_UI / "dashboard.py", "Dashboard", ":material/dashboard:", None),
-        _page(_FRAMEWORK_UI / "catalog.py", "Catalog", ":material/folder:", None),
+        _page(_FRAMEWORK_UI / "catalog.py", "Model Catalog", ":material/folder:", None),
+        _page(_FRAMEWORK_UI / "services_catalog.py", "Service Catalog", ":material/apps:", None),
     ],
 }
 
-for svc_info in worker.list_services():
+for svc_info in worker.list_enabled_services():
     svc = worker.service(svc_info.name)
-    nav[svc_info.display_name] = [
-        _page(p.path, p.label, p.icon, p.url_path) for p in svc.ui_pages
-    ]
+    nav[svc_info.display_name] = [_page(p.path, p.label, p.icon, p.url_path) for p in svc.ui_pages]
 
 for src_info in worker.list_sources():
     src = worker.source(src_info.name)
-    nav[src_info.display_name] = [
-        _page(p.path, p.label, p.icon, p.url_path) for p in src.ui_pages
-    ]
+    nav[src_info.display_name] = [_page(p.path, p.label, p.icon, p.url_path) for p in src.ui_pages]
 
 st.navigation(nav).run()

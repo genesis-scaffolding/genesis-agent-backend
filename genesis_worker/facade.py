@@ -216,14 +216,41 @@ class GenesisWorker:
         ]
 
     def list_services(self) -> list[ServiceInfo]:
-        """Return display info for every registered service."""
+        """Return display info for every registered service, regardless of enabled state.
+
+        Used by the Service Catalog page (a meta-view that must show
+        disabled services too). For the dashboard and sidebar use
+        :meth:`list_enabled_services`.
+        """
         return [
             ServiceInfo(
                 name=svc.name,
                 display_name=svc.display_name,
                 capabilities=svc.capabilities(),
+                category=svc.category,
+                description=svc.description,
             )
             for svc in self._service_registry.all()
+        ]
+
+    def list_enabled_services(self) -> list[ServiceInfo]:
+        """Return display info for enabled services only.
+
+        The dashboard and the sidebar both filter to enabled services
+        (ADR-029). Disabled services are absent from these surfaces and
+        can only be reached via the Service Catalog page.
+        """
+        enabled = self._service_registry.enabled_names()
+        return [
+            ServiceInfo(
+                name=svc.name,
+                display_name=svc.display_name,
+                capabilities=svc.capabilities(),
+                category=svc.category,
+                description=svc.description,
+            )
+            for svc in self._service_registry.all()
+            if svc.name in enabled
         ]
 
     def start_service(self, name: str):

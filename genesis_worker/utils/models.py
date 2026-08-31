@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..contracts import ServiceCapabilities
+from ..contracts import ServiceCapabilities, ServiceCategory
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,8 @@ class ServiceInfo:
     name: str
     display_name: str
     capabilities: ServiceCapabilities
+    category: ServiceCategory = ServiceCategory.OTHER
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -31,9 +33,9 @@ class HostInfo:
     """Display view of the host this worker is running on."""
 
     hostname: str
-    os: str            # e.g., "Linux 6.5.0-arch1-1"
-    arch: str          # e.g., "x86_64"
-    python: str        # e.g., "3.11.7"
+    os: str  # e.g., "Linux 6.5.0-arch1-1"
+    arch: str  # e.g., "x86_64"
+    python: str  # e.g., "3.11.7"
     uptime_s: int | None
     public_ip: str | None
     tailscale_ip: str | None

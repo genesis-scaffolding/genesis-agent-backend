@@ -11,6 +11,7 @@ from ...contracts import (
     InferenceService,
     InstallState,
     ServiceCapabilities,
+    ServiceCategory,
     ServiceContext,
     ServiceInstall,
     ServiceResourceEstimate,
@@ -92,6 +93,14 @@ class Crawl4AiService(InferenceService):
             has_web_ui=True,
             can_install=True,
         )
+
+    @property
+    def category(self) -> ServiceCategory:
+        return ServiceCategory.CRAWLER
+
+    @property
+    def description(self) -> str:
+        return "Web crawler + dashboard"
 
     def resource_estimate(self) -> ServiceResourceEstimate:
         # No GPU; Crawl4AI is a Python crawler/UI, light on resources.

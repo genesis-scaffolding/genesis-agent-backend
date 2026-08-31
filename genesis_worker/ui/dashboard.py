@@ -6,8 +6,11 @@ page stays focused on the host, live diagnostics, and services.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
+from genesis_worker.contracts import ServiceCategory
 from genesis_worker.ui._render import format_bytes
 from genesis_worker.utils.ui._nav import to_relative as _to_relative
 from genesis_worker.utils.ui._service_controls import (
@@ -16,6 +19,12 @@ from genesis_worker.utils.ui._service_controls import (
 )
 
 worker = st.session_state["worker"]
+
+# Resolved once at module load: the framework's Service Catalog page.
+# Used by the "Manage services" button in the Services section to give
+# users a one-click path to enable/disable services (the dashboard and
+# sidebar only show enabled services — ADR-029).
+_SERVICES_CATALOG_PATH = Path(__file__).parent / "services_catalog.py"
 
 st.title("Genesis Worker")
 
@@ -116,70 +125,117 @@ with st.container(border=True):
 
 
 # --- Section 2: Services -----------------------------------------------------
+# Enabled services only (ADR-029). Disabled services are absent from the
+# dashboard by design — the Service Catalog page is where they're managed.
+# We group by ``ServiceCategory`` so the layout scales as the fleet grows:
+# one bordered container with a subheader per non-empty category, the
+# existing 3-column card grid inside each subheader. Empty categories
+# render nothing, so adding a new category is non-breaking.
+
+
+_CATEGORY_HEADERS = {
+    ServiceCategory.LLM: "LLM inference",
+    ServiceCategory.IMAGE: "Image generation",
+    ServiceCategory.CHAT: "Chat UIs",
+    ServiceCategory.CRAWLER: "Web crawlers",
+    ServiceCategory.MEDIA: "Media servers",
+    ServiceCategory.UTILITY: "Utilities",
+    ServiceCategory.OTHER: "Other",
+}
+
+
+def _render_service_card(col, info) -> None:
+    """One service card. Extracted so the per-category loop stays readable."""
+    with col:
+        svc = worker.service(info.name)
+        status = worker.service_status(info.name)
+
+        with st.container(border=True):
+            st.subheader(info.display_name)
+            # Badge only — the action button and Web UI link are
+            # rendered in our own layout below so the action row
+            # can sit beside the Admin button, and the URL is
+            # visible (not a button) under the badge.
+            render_service_controls(
+                svc,
+                status,
+                show_action_button=False,
+                show_web_ui_link=False,
+                key_prefix=f"dash-{info.name}",
+            )
+
+            # Web UI as a clickable URL under the badge. When
+            # the service isn't running we render a single-line
+            # placeholder so the card layout doesn't shift
+            # between states. The trailing ↗ signals "opens
+            # externally" the way most UIs do.
+            endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
+            if endpoint and status.state.value == "running":
+                st.markdown(f"[{endpoint} ↗]({endpoint})")
+            else:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+
+            st.divider()
+
+            action_cols = st.columns(2)
+            with action_cols[0]:
+                render_action_button(
+                    status.state,
+                    svc.is_available(),
+                    worker,
+                    info.name,
+                    key_prefix=f"dash-{info.name}",
+                    use_container_width=True,
+                )
+            with action_cols[1]:
+                pages = svc.ui_pages
+                if pages and st.button(
+                    "Admin",
+                    key=f"admin-{info.name}",
+                    use_container_width=True,
+                ):
+                    st.switch_page(_to_relative(pages[0].path))
+
+
 with st.container(border=True):
-    st.header("Services")
+    head_cols = st.columns([4, 1])
+    with head_cols[0]:
+        st.header("Services")
+        st.caption("Disabled services are hidden.")
+    with head_cols[1]:
+        # Right-aligned action; vertical-aligns with the caption so it
+        # sits at the right edge of the section header row.
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        if st.button(
+            "Manage services",
+            key="dash-manage-services",
+            use_container_width=True,
+        ):
+            st.switch_page(_to_relative(_SERVICES_CATALOG_PATH))
 
-    services = worker.list_services()
-    if not services:
-        st.info("No services registered.")
+    services_info = worker.list_enabled_services()
+    if not services_info:
+        st.info("No services enabled. Visit **Service Catalog** in the sidebar to enable some.")
     else:
-        PER_ROW = 3
-        st.markdown('<div class="card-grid">', unsafe_allow_html=True)
-        for row_start in range(0, len(services), PER_ROW):
-            row = services[row_start : row_start + PER_ROW]
-            cols = st.columns(PER_ROW, gap="medium")
-            for col, info in zip(cols, row, strict=False):
-                with col:
-                    svc = worker.service(info.name)
-                    status = worker.service_status(info.name)
-                    caps = info.capabilities
+        # Group by category in iteration order so the visual order is stable
+        # when categories are added later (ADR-029).
+        by_category: dict[ServiceCategory, list] = {}
+        for info in services_info:
+            by_category.setdefault(info.category, []).append(info)
 
-                    with st.container(border=True):
-                        st.subheader(info.display_name)
-                        # Badge only — the action button and Web UI link are
-                        # rendered in our own layout below so the action row
-                        # can sit beside the Admin button, and the URL is
-                        # visible (not a button) under the badge.
-                        render_service_controls(
-                            svc,
-                            status,
-                            show_action_button=False,
-                            show_web_ui_link=False,
-                            key_prefix=f"dash-{info.name}",
-                        )
-
-                        # Web UI as a clickable URL under the badge. When
-                        # the service isn't running we render a single-line
-                        # placeholder so the card layout doesn't shift
-                        # between states. The trailing ↗ signals "opens
-                        # externally" the way most UIs do.
-                        endpoint = getattr(svc, "web_ui_endpoint", lambda: None)()
-                        if endpoint and status.state.value == "running":
-                            st.markdown(f"[{endpoint} ↗]({endpoint})")
-                        else:
-                            st.markdown("&nbsp;", unsafe_allow_html=True)
-
-                        st.divider()
-
-                        action_cols = st.columns(2)
-                        with action_cols[0]:
-                            render_action_button(
-                                status.state,
-                                svc.is_available(),
-                                worker,
-                                info.name,
-                                key_prefix=f"dash-{info.name}",
-                                use_container_width=True,
-                            )
-                        with action_cols[1]:
-                            pages = svc.ui_pages
-                            if pages and st.button(
-                                "Admin",
-                                key=f"admin-{info.name}",
-                                use_container_width=True,
-                            ):
-                                st.switch_page(_to_relative(pages[0].path))
-        st.markdown("</div>", unsafe_allow_html=True)
+        for category in ServiceCategory:
+            infos = by_category.get(category, [])
+            if not infos:
+                continue
+            st.subheader(_CATEGORY_HEADERS[category])
+            PER_ROW = 3
+            st.markdown('<div class="card-grid">', unsafe_allow_html=True)
+            for row_start in range(0, len(infos), PER_ROW):
+                row = infos[row_start : row_start + PER_ROW]
+                cols = st.columns(PER_ROW, gap="medium")
+                for col, info in zip(cols, row, strict=False):
+                    _render_service_card(col, info)
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 # --- Section 3: Sources ------------------------------------------------------

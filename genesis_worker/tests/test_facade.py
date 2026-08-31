@@ -22,6 +22,63 @@ def test_facade_lists_services(tmp_path: Path) -> None:
     assert any(s.name == "llama_swap" for s in services)
 
 
+def test_list_enabled_services_filters_by_registry_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """list_enabled_services() must only return services the registry has enabled.
+
+    Hermetic: uses a tmp state_dir so we don't pollute user state, and
+    mocks ``is_available`` so the bootstrap doesn't auto-enable things
+    behind our back.
+    """
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.services.llama_swap import LlamaSwapService
+    from genesis_worker.services.sillytavern import SillyTavernService
+    from genesis_worker.settings import PathsSettings, Settings
+
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
+    monkeypatch.setattr(SillyTavernService, "is_available", lambda self: False)
+
+    settings = Settings(
+        paths=PathsSettings(
+            data_dir=tmp_path / "data",
+            config_dir=tmp_path / "config",
+            cache_dir=tmp_path / "cache",
+            state_dir=tmp_path / "state",
+            log_dir=tmp_path / "log",
+        )
+    )
+    w = _GW(settings=settings)
+    w.services.enable("llama_swap")
+
+    enabled_names = {s.name for s in w.list_enabled_services()}
+    all_names = {s.name for s in w.list_services()}
+    assert "llama_swap" in enabled_names
+    assert "sillytavern" not in enabled_names
+    # list_services still returns everything; only list_enabled_services filters.
+    assert all_names.issuperset(enabled_names)
+
+
+def test_service_info_carries_category_and_description(tmp_path: Path) -> None:
+    """ServiceInfo gains category + description fields (ADR-029).
+
+    Hermetic test against tmp state_dir.
+    """
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.contracts import ServiceCategory
+    from genesis_worker.services.llama_swap import LlamaSwapService
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(
+        paths=PathsSettings(state_dir=tmp_path / "state")
+    )
+    w = _GW(settings=settings)
+
+    llama = next(s for s in w.list_services() if s.name == "llama_swap")
+    assert llama.category == ServiceCategory.LLM
+    assert llama.description == "OpenAI-compatible LLM server"
+
+
 def test_facade_returns_service_instance(tmp_path: Path) -> None:
     w = GenesisWorker()
     svc = w.service("llama_swap")

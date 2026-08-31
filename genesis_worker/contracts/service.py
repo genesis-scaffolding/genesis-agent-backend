@@ -23,6 +23,22 @@ class ServiceState(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class ServiceCategory(StrEnum):
+    """Dashboard grouping. Iteration order is the visual order on the dashboard.
+
+    New values are non-breaking — existing services keep their declared
+    category, the new value just sits empty until something fills it.
+    """
+
+    LLM = "llm"
+    IMAGE = "image"
+    CHAT = "chat"
+    CRAWLER = "crawler"
+    MEDIA = "media"
+    UTILITY = "utility"
+    OTHER = "other"
+
+
 @dataclass(frozen=True)
 class ServiceCapabilities:
     """What the service can do. Drives capability-driven UI."""
@@ -106,6 +122,26 @@ class InferenceService(Plugin):
     @abstractmethod
     def wait_ready(self, timeout_s: float) -> bool: ...
 
+    @property
+    def category(self) -> ServiceCategory:
+        """Dashboard grouping. Defaults to ``OTHER``; plugins must override.
+
+        ``OTHER`` is a stopgap, not a destination — the dashboard renders
+        it under a less prominent heading and the AGENTS.md plugin-author
+        rule requires every new service to declare its real category.
+        """
+        return ServiceCategory.OTHER
+
+    @property
+    def description(self) -> str:
+        """One short sentence for the Service Catalog row.
+
+        Keep it tight (~25-30 chars) so the catalog row doesn't grow with
+        verbose copy. If a service needs more, it belongs on the service's
+        own landing page.
+        """
+        return ""
+
     # can_install
 
     def installs(self) -> list[ServiceInstall]:
@@ -159,6 +195,7 @@ class InferenceService(Plugin):
 __all__ = [
     "InferenceService",
     "ServiceCapabilities",
+    "ServiceCategory",
     "ServiceResourceEstimate",
     "ServiceState",
     "ServiceStatus",

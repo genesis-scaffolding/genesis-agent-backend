@@ -8,6 +8,7 @@ from pathlib import Path
 from ...contracts import (
     InferenceService,
     ServiceCapabilities,
+    ServiceCategory,
     ServiceContext,
     ServiceInstall,
     ServiceResourceEstimate,
@@ -46,6 +47,14 @@ class CptrService(InferenceService):
             has_web_ui=True,
             can_install=True,
         )
+
+    @property
+    def category(self) -> ServiceCategory:
+        return ServiceCategory.CHAT
+
+    @property
+    def description(self) -> str:
+        return "Open WebUI automation"
 
     def installs(self) -> list[ServiceInstall]:
         return [self._install]

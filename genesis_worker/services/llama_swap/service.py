@@ -10,6 +10,7 @@ from ...contracts import (
     Catalog,
     InferenceService,
     ServiceCapabilities,
+    ServiceCategory,
     ServiceContext,
     ServiceInstall,
     ServiceResourceEstimate,
@@ -97,6 +98,14 @@ class LlamaSwapService(InferenceService):
             has_web_ui=True,
             can_install=True,
         )
+
+    @property
+    def category(self) -> ServiceCategory:
+        return ServiceCategory.LLM
+
+    @property
+    def description(self) -> str:
+        return "OpenAI-compatible LLM server"
 
     def installs(self) -> list[ServiceInstall]:
         return [
