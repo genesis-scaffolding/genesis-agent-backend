@@ -91,6 +91,7 @@ class DockerContainer:
         gpu_flags: list[str] | None = None,
         hostname: str | None = None,
         restart: str = "unless-stopped",
+        shm_size: str | None = None,
         extra_args: list[str] | None = None,
     ) -> StartResult:
         """Create and start a detached container.
@@ -100,7 +101,9 @@ class DockerContainer:
         path to host path; both bind mounts are read-write. ``env`` is the
         container environment. ``runtime`` is the Docker runtime
         (``nvidia`` or ``None``). ``gpu_flags`` are the value of ``--gpus``
-        when ``runtime`` is set.
+        when ``runtime`` is set. ``shm_size`` adds ``--shm-size`` when set
+        (e.g. ``"1g"`` for browser-backed services that need more than the
+        64 MB default).
 
         Any prior container of the same name is removed first
         (idempotent). The function returns ``StartResult(ok=True)`` only
@@ -123,6 +126,8 @@ class DockerContainer:
             argv += ["--runtime", runtime]
         if gpu_flags:
             argv += ["--gpus", ",".join(gpu_flags)]
+        if shm_size:
+            argv += ["--shm-size", shm_size]
         argv.append(image)
         if command:
             argv += list(command)

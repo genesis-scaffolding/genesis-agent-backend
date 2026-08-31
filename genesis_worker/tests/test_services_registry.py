@@ -45,7 +45,7 @@ def test_registry_unknown_service_raises() -> None:
 
 def test_registry_all_returns_every_service() -> None:
     assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {
-        "llama_swap", "cptr", "comfyui", "sillytavern"
+        "llama_swap", "cptr", "comfyui", "sillytavern", "crawl4ai"
     }
 
 
@@ -60,6 +60,13 @@ def test_sillytavern_service_is_auto_discovered() -> None:
 
     names = {svc.name for svc in ServiceRegistry(Settings()).all()}
     assert "sillytavern" in names
+
+
+def test_crawl4ai_service_is_auto_discovered() -> None:
+    """Adding the crawl4ai subpackage should auto-register it."""
+
+    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    assert "crawl4ai" in names
 
 
 def test_abstract_service_cannot_be_instantiated(tmp_path: Path) -> None:
