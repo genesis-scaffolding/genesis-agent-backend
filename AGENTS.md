@@ -83,6 +83,7 @@ Rules, both directions:
 - **An extension owns its options schema.** `Settings.sources` / `Settings.services` are `dict[str, dict[str, Any]]`; the framework carries a slice without interpreting it. The extension defines its own pydantic options model and parses `ctx.options` at construction. Adding an extension must not require editing `settings.py`.
 - **Extensions own their paths as attributes**, derived from the context once in `__init__`. Not methods with resolution logic in them.
 - Capability-gated behaviour (`can_generate_config`, `can_export_for_agent`) is declared on the ABC as optional methods, so the framework stays capability-driven instead of branching on extension names.
+- **Every new `InferenceService` subclass must override `category`** to declare its dashboard group (ADR-029). The default `OTHER` is a stopgap, not a destination — the dashboard renders `OTHER` services under a less prominent heading as a nudge to update. Also override `description` with one short sentence (~25–30 chars) for the Service Catalog row; longer copy belongs on the service's own landing page.
 
 ## Stack
 
