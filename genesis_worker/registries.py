@@ -17,6 +17,7 @@ from .contracts import (
     ServiceContext,
     SourceContext,
 )
+from .utils.state.enabled_services import load_enabled_set, save_enabled_set
 
 if TYPE_CHECKING:
     from .settings import Settings
@@ -124,13 +125,20 @@ class SourceRegistry(_Registry):
 
 
 class ServiceRegistry(_Registry):
-    """Constructs and holds one instance of every discovered service plugin."""
+    """Constructs and holds one instance of every discovered service plugin.
+
+    Also owns the per-service enabled/disabled set (ADR-029). The set is
+    persisted at ``<state_dir>/enabled_services.yaml``; on first run
+    (no file) we bootstrap by auto-enabling every service that reports
+    ``is_available() == True``. After that the set is user-controlled.
+    """
 
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
         for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
             build = cast("Callable[[ServiceContext], InferenceService]", cls)
             self._instances[cls.name] = build(self._context(cls))
+        self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
 
     def _context(self, cls: type[InferenceService]) -> ServiceContext:
         return ServiceContext(
@@ -138,11 +146,74 @@ class ServiceRegistry(_Registry):
             **self._common_kwargs(cls),
         )
 
+    def _load_or_bootstrap_enabled_set(self) -> set[str]:
+        """Read the persisted enabled set, or bootstrap on first run.
+
+        Bootstrap rule (ADR-029): on first run (no state file), enable
+        every service that reports ``is_available() == True``. This
+        matches the user-facing intent ("out of the gate, services are
+        disabled until enabled, or already installed and ready to run").
+        One-shot — a service installed after bootstrap stays disabled
+        until the user enables it on the Service Catalog page.
+        """
+        existing = load_enabled_set(self._settings.paths.state_dir)
+        if existing is not None:
+            return existing
+        services = cast("dict[str, InferenceService]", self._instances)
+        to_enable = {name for name, svc in services.items() if svc.is_available()}
+        save_enabled_set(self._settings.paths.state_dir, to_enable)
+        return to_enable
+
     def get(self, name: str) -> InferenceService:
         return self._instances[name]  # type: ignore[return-value]
 
     def all(self) -> list[InferenceService]:
         return list(self._instances.values())  # type: ignore[arg-type]
+
+    # --- enable / disable (ADR-029) --------------------------------------
+
+    def is_enabled(self, name: str) -> bool:
+        return name in self._enabled
+
+    def enabled_names(self) -> set[str]:
+        return set(self._enabled)
+
+    def enable(self, name: str) -> None:
+        """Mark a service enabled. Idempotent. Raises on unknown service."""
+        if name not in self._instances:
+            raise KeyError(f"unknown service: {name}")
+        if name in self._enabled:
+            return
+        self._enabled.add(name)
+        save_enabled_set(self._settings.paths.state_dir, self._enabled)
+
+    def disable(self, name: str) -> None:
+        """Mark a service disabled. Refuses when the service is running.
+
+        The running-guard enforces "only services that are not currently
+        on can be turned off" at the framework level — a buggy UI can't
+        sidestep it. Stops-then-disables is the correct user flow.
+        """
+        svc = cast("dict[str, InferenceService]", self._instances)[name]
+        if svc.is_running():
+            raise RuntimeError(
+                f"cannot disable {svc.display_name}: service is running — stop it first"
+            )
+        # Idempotent: if already disabled, just skip the persist.
+        if name not in self._enabled:
+            return
+        self._enabled.discard(name)
+        save_enabled_set(self._settings.paths.state_dir, self._enabled)
+
+    def enabled(self) -> list[InferenceService]:
+        """Enabled services in registration order. Used by dashboard + sidebar."""
+        services = cast("dict[str, InferenceService]", self._instances)
+        return [svc for name, svc in services.items() if name in self._enabled]
+
+    def disabled(self) -> list[InferenceService]:
+        """Disabled services in registration order. Used by the catalog page."""
+        services = cast("dict[str, InferenceService]", self._instances)
+        return [svc for name, svc in services.items() if name not in self._enabled]
 
 
 __all__ = ["ServiceRegistry", "SourceRegistry"]

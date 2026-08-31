@@ -27,6 +27,7 @@ from .secret import NoSecretsAccessor, SecretsAccessor, StaticSecretsAccessor
 from .service import (
     InferenceService,
     ServiceCapabilities,
+    ServiceCategory,
     ServiceResourceEstimate,
     ServiceState,
     ServiceStatus,
@@ -59,6 +60,7 @@ __all__ = [
     "PluginContext",
     "SecretsAccessor",
     "ServiceCapabilities",
+    "ServiceCategory",
     "ServiceContext",
     "ServiceInstall",
     "ServiceResourceEstimate",
