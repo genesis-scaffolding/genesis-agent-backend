@@ -167,6 +167,36 @@ def test_run_passes_runtime_and_gpus_when_set(monkeypatch: pytest.MonkeyPatch) -
     assert argv[argv.index("--gpus") + 1] == "driver=nvidia,count=1"
 
 
+def test_run_passes_shm_size_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def _runner(args, **kw):  # type: ignore[no-untyped-def]
+        calls.append(list(args))
+        return _completed(args, returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _runner)
+    monkeypatch.setattr("genesis_worker.utils.process.docker._run", _runner)
+
+    DockerContainer("c1").run(image="img:latest", shm_size="1g")
+    argv = calls[1]
+    assert "--shm-size" in argv
+    assert argv[argv.index("--shm-size") + 1] == "1g"
+
+
+def test_run_omits_shm_size_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def _runner(args, **kw):  # type: ignore[no-untyped-def]
+        calls.append(list(args))
+        return _completed(args, returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _runner)
+    monkeypatch.setattr("genesis_worker.utils.process.docker._run", _runner)
+
+    DockerContainer("c1").run(image="img:latest")
+    assert "--shm-size" not in calls[1]
+
+
 def test_run_returns_failure_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         subprocess,
