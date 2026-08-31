@@ -44,8 +44,10 @@ def render_action_button(
     width is fine); the dashboard cards pass ``True`` so Start/Stop/Install
     matches the Admin button's width.
 
-    The five states map to: Stop (RUNNING), disabled Starting… (STARTING),
-    disabled Stopping… (STOPPING), inline install (!available and
+    The five states map to: Stop (RUNNING), disabled Starting… (STARTING,
+    polled and auto-refreshed when the container reaches RUNNING),
+    disabled Stopping… (STOPPING, polled and auto-refreshed when the
+    container reaches STOPPED), inline install (!available and
     STOPPED/UNAVAILABLE), Start (available and STOPPED/FAILED/UNAVAILABLE).
     """
     if state == ServiceState.RUNNING:
@@ -55,15 +57,59 @@ def render_action_button(
         return
 
     if state == ServiceState.STARTING:
-        st.button("Starting…", key=f"{key_prefix}-starting", disabled=True, use_container_width=use_container_width)
+        # Wrap in a polling fragment so the button auto-switches to "Stop"
+        # when the container finishes coming up. Without this, the page
+        # would show "Starting…" indefinitely and only a manual reload
+        # would update it; for slow starters (SillyTavern's Node.js
+        # entrypoint takes a few seconds, large images take longer) the
+        # transition is otherwise invisible.
+        @st.fragment(run_every="2s")
+        def _wait_for_state_change(*, expected: str, label: str, btn_key: str) -> None:
+            current = worker.service_status(name).state
+            if current.value != expected:
+                # State moved on (e.g. STARTING -> RUNNING). Re-render the
+                # full app so the outer page redraws with the new button.
+                st.rerun(scope="app")
+            st.button(
+                label,
+                key=btn_key,
+                disabled=True,
+                use_container_width=use_container_width,
+            )
+
+        _wait_for_state_change.__name__ = f"_wait_for_{key_prefix}_starting"
+        _wait_for_state_change(
+            expected=ServiceState.STARTING.value,
+            label="Starting…",
+            btn_key=f"{key_prefix}-starting",
+        )
         return
 
     if state == ServiceState.STOPPING:
-        st.button("Stopping…", key=f"{key_prefix}-stopping", disabled=True, use_container_width=use_container_width)
+
+        @st.fragment(run_every="2s")
+        def _wait_for_stop(*, btn_key: str) -> None:
+            current = worker.service_status(name).state
+            if current != ServiceState.STOPPING:
+                st.rerun(scope="app")
+            st.button(
+                "Stopping…",
+                key=btn_key,
+                disabled=True,
+                use_container_width=use_container_width,
+            )
+
+        _wait_for_stop.__name__ = f"_wait_for_{key_prefix}_stopping"
+        _wait_for_stop(btn_key=f"{key_prefix}-stopping")
         return
 
     if state == ServiceState.FAILED:
-        if st.button("Start", key=f"{key_prefix}-start", help="Service previously failed; see logs.", use_container_width=use_container_width):
+        if st.button(
+            "Start",
+            key=f"{key_prefix}-start",
+            help="Service previously failed; see logs.",
+            use_container_width=use_container_width,
+        ):
             worker.start_service(name)
             st.rerun()
         return
