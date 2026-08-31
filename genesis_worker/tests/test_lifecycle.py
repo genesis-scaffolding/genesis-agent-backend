@@ -120,8 +120,14 @@ def test_status_returns_stopped_when_no_session() -> None:
     assert s.endpoint == "http://127.0.0.1:1/v1"
 
 
+@pytest.mark.integration
 def test_wait_ready_returns_true_when_endpoint_responds(tmp_path: Path) -> None:
-    """wait_ready succeeds against a background http.server."""
+    """wait_ready succeeds against a background http.server.
+
+    Integration: spawns a real ``http.server`` on loopback and makes a
+    real socket connection. State is hermetic; the network touch is
+    why this is marked.
+    """
     port = _free_port()
     body = json.dumps({"data": []}).encode()
     _serve_in_background(port, body)

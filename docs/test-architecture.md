@@ -13,7 +13,7 @@ covers what you're testing.
 |---|---|---|
 | **Pure unit** | Stdlib + the module under test, everything else mocked | Logic, parsing, dataclass behavior, schema validation |
 | **Hermetic** | tmp_path + monkeypatch; no real subprocesses, no real network | Plugin wiring, facade wiring, lifecycle calls on the plugin instance |
-| **Integration** | Real subprocess / real network / real docker, opt-in via a `pytest.mark.integration` marker | End-to-end flows that can't be meaningfully mocked |
+| **Integration** | Real subprocess / real network / real docker, opt-in via `@pytest.mark.integration` | End-to-end flows that can't be meaningfully mocked |
 
 **Default: hermetic.** Pure unit is finer-grained and worth the extra
 mocking for things like parsing; integration is opt-in because it has
@@ -115,6 +115,28 @@ pattern appears in three or more tests, extract a factory.
 (`python -m genesis_worker.cli.up --help`). This is the right pattern
 for a smoke test — there's no value in mocking the CLI to test the
 CLI. Keep these tests but never extend them beyond `--help` checks.
+
+The four `test_cli_help_exits_zero[*]` tests are marked
+`@pytest.mark.integration` for this reason. Skip them in fast unit
+runs with `pytest -m "not integration"`.
+
+### Running integration tests
+
+By default, `pytest` runs every test including integration ones. To
+run only fast unit + hermetic tests:
+
+```bash
+pytest -m "not integration"
+```
+
+To run only integration tests (e.g. in a CI job):
+
+```bash
+pytest -m integration
+```
+
+The default stays unchanged so existing workflows don't break — but
+the marker gives everyone a knob when they want it.
 
 ## The "ask first" rule
 
