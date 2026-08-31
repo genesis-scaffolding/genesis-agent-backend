@@ -19,6 +19,7 @@ from ...contracts import (
     UiPage,
 )
 from . import lifecycle
+from .config import seed_config
 from .install import SillyTavernImage
 from .options import SillyTavernOptions
 
@@ -136,6 +137,11 @@ class SillyTavernService(InferenceService):
             volumes["/home/node/app/plugins"] = str(self._plugins_path)
 
         env = {"PUID": str(self._puid), "PGID": str(self._pgid)}
+
+        # SillyTavern's default Docker whitelist blocks the host on Linux
+        # (whitelistDockerHosts can't resolve the gateway). Seed config.yaml
+        # before the container starts so published host traffic is allowed.
+        seed_config(self._config_path)
 
         return lifecycle.start_sillytavern(
             image=self.image_ref,

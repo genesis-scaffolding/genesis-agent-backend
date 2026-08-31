@@ -20,13 +20,24 @@ No GPU options. No TZ (deferred).
 - `name = "sillytavern"`, `source_url` = the ST GitHub Packages container page.
 - Keep: 15-min tag cache, `available_versions` (arch-agnostic), selection file, `install` → `DockerPullAcquireSession`, `uninstall` → `docker rmi`.
 
-## Step 3 — `lifecycle.py`
+## Step 3 — `config.py` (Docker host reachability)
+
+`genesis_worker/services/sillytavern/config.py` — seeds `config.yaml` so the Docker-published host is not blocked by SillyTavern's default whitelist.
+
+- **Problem:** ST ships `whitelist: [127.0.0.1]` + `whitelistDockerHosts: true`. On Docker-CE-on-Linux `whitelistDockerHosts` can't resolve `gateway.docker.internal`, so published connections arrive from the bridge gateway (`172.17.0.1`) and are refused.
+- **Fix:** `seed_config(config_path)` writes `config.yaml` **only if absent** (never clobbers user edits) with `whitelistMode: true`, `whitelistDockerHosts: false`, and `whitelist: [127.0.0.1, <detected bridge gateway(s)>]` (fallback `172.17.0.1`). Detection runs `docker network inspect` for bridge gateways; keeps whitelist mode on so SSRF `privateAddressWhitelist` stays protected.
+- The entrypoint copies `default/config.yaml` only when the file is missing and `npm run init` fills missing keys without overwriting — so our values survive. Verified end-to-end: host curl → HTTP 200, no blocked requests.
+- `--whitelist=false` was rejected as a flag alternative: alone it makes the server exit (code 1); combined with `--basicAuthMode` it runs but forces a login on every access.
+
+## Step 4 — `lifecycle.py`
 
 `genesis_worker/services/sillytavern/lifecycle.py`:
 - `start_sillytavern` mounts config+data always; extensions/plugins only when set; env `PUID`/`PGID`; maps `{8000/tcp}: (listen_host, listen_port)` (container port 8000 fixed); no `runtime`/`gpu_flags`; forwards `extra_args`.
 - `status`/`wait_ready` use `HealthProbe` on `/` against the host port; `is_running`/`logs` via `DockerContainer`.
 
-## Step 4 — `service.py`
+`service.start()` calls `seed_config(self._config_path)` before `lifecycle.start_sillytavern` so the file is in place before the container boots.
+
+## Step 5 — `service.py`
 
 `genesis_worker/services/sillytavern/service.py` — `SillyTavernService(InferenceService)`:
 - `name="sillytavern"`, `display_name="SillyTavern"`.
@@ -35,13 +46,13 @@ No GPU options. No TZ (deferred).
 - `web_ui_endpoint` → `http://<public_host>:9090/`; `runtime_endpoint` → None.
 - Installs → `[self._install]`.
 
-## Step 5 — `__init__.py` and UI
+## Step 6 — `__init__.py` and UI
 
 - `__init__.py` re-exports `SillyTavernOptions`, `SillyTavernService`.
 - `ui/status.py` — landing page: ServiceInfo/controls + container info + console tail. No GPU row.
 - `ui/image.py` — version picker + Install/Reinstall/Uninstall/Refresh tags. No GPU-disable logic.
 
-## Step 6 — Gates
+## Step 7 — Tests + Gates
 
 Run before committing:
 - `uv run pytest -q`
@@ -50,6 +61,8 @@ Run before committing:
 - `uv run ruff format --check genesis_worker`
 
 `test_plugin_boundary.py` will re-walk the new package — imports must stay within `contracts`/`utils`.
+
+New `tests/test_sillytavern_config.py` covers `seed_config`: writes when absent / skips existing / includes detected gateways / falls back without docker.
 
 ## Verification summary
 
