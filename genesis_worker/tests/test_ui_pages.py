@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from genesis_worker import GenesisWorker
 from genesis_worker.contracts import UiPage
+from genesis_worker.settings import PathsSettings, Settings
 
 
-def test_services_ship_pages_with_existing_files() -> None:
-    w = GenesisWorker()
+def _hermetic_worker(tmp_path: Path) -> GenesisWorker:
+    """Worker with an isolated state_dir.
+
+    Every test in this module reads metadata only, but we still isolate
+    state_dir so the registry bootstrap doesn't auto-enable services on
+    the developer's real install.
+    """
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    return GenesisWorker(settings=settings)
+
+
+def test_services_ship_pages_with_existing_files(tmp_path: Path) -> None:
+    w = _hermetic_worker(tmp_path)
     for info in w.list_services():
         svc = w.service(info.name)
         for page in svc.ui_pages:
@@ -19,8 +33,8 @@ def test_services_ship_pages_with_existing_files() -> None:
             assert "ui" in page.path.parts, f"{info.name}: page outside ui/: {page.path}"
 
 
-def test_sources_ship_pages_with_existing_files() -> None:
-    w = GenesisWorker()
+def test_sources_ship_pages_with_existing_files(tmp_path: Path) -> None:
+    w = _hermetic_worker(tmp_path)
     for info in w.list_sources():
         src = w.source(info.name)
         for page in src.ui_pages:
@@ -31,9 +45,9 @@ def test_sources_ship_pages_with_existing_files() -> None:
             assert "ui" in page.path.parts
 
 
-def test_landing_page_is_first_entry() -> None:
+def test_landing_page_is_first_entry(tmp_path: Path) -> None:
     """The first entry of ui_pages is the landing page (ADR-010 convention)."""
-    w = GenesisWorker()
+    w = _hermetic_worker(tmp_path)
     for info in w.list_services():
         svc = w.service(info.name)
         pages = svc.ui_pages
@@ -44,8 +58,8 @@ def test_landing_page_is_first_entry() -> None:
         assert pages[0].label, f"{info.name}: landing has empty label"
 
 
-def test_llama_swap_ships_full_page_set() -> None:
-    w = GenesisWorker()
+def test_llama_swap_ships_full_page_set(tmp_path: Path) -> None:
+    w = _hermetic_worker(tmp_path)
     svc = w.service("llama_swap")
     labels = [p.label for p in svc.ui_pages]
     assert "Status" in labels
@@ -54,8 +68,8 @@ def test_llama_swap_ships_full_page_set() -> None:
     assert "Pi export" in labels
 
 
-def test_huggingface_ships_acquire_page() -> None:
-    w = GenesisWorker()
+def test_huggingface_ships_acquire_page(tmp_path: Path) -> None:
+    w = _hermetic_worker(tmp_path)
     src = w.source("huggingface")
     labels = [p.label for p in src.ui_pages]
     assert "Acquire model" in labels

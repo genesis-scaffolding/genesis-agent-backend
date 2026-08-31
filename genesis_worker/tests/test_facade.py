@@ -17,7 +17,12 @@ from genesis_worker.utils.models import MachineMetrics
 
 
 def test_facade_lists_services(tmp_path: Path) -> None:
-    w = GenesisWorker()
+    """Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
+    services on the real install."""
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     services = w.list_services()
     assert any(s.name == "llama_swap" for s in services)
 
@@ -75,48 +80,106 @@ def test_service_info_carries_category_and_description(tmp_path: Path) -> None:
 
 
 def test_facade_returns_service_instance(tmp_path: Path) -> None:
-    w = GenesisWorker()
+    """Hermetic: isolated state_dir."""
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     svc = w.service("llama_swap")
     assert svc.capabilities().can_serve_llm
 
 
 def test_facade_service_status(tmp_path: Path) -> None:
-    w = GenesisWorker()
+    """Hermetic: isolated state_dir."""
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     status = w.service_status("llama_swap")
     assert isinstance(status, ServiceStatus)
     assert status.state in (ServiceState.RUNNING, ServiceState.STOPPED, ServiceState.FAILED)
 
 
-def test_facade_start_service_returns_start_result(tmp_path: Path) -> None:
-    """Calling start when already running returns a result; we don't actually start."""
-    w = GenesisWorker()
+def test_facade_start_service_returns_start_result(tmp_path: Path, monkeypatch) -> None:
+    """Facade wiring: ``start_service`` delegates to the service's ``start``.
+
+    Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
+    llama-swap on the real install, and the service's ``start`` method
+    is patched so we don't actually launch docker / talk to the running
+    llama-server.
+    """
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.services.llama_swap import LlamaSwapService
+    from genesis_worker.settings import PathsSettings, Settings
+
+    monkeypatch.setattr(
+        LlamaSwapService,
+        "start",
+        lambda self: StartResult(ok=True, message="mock-start"),
+    )
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = _GW(settings=settings)
     result = w.start_service("llama_swap")
     assert isinstance(result, StartResult)
+    assert result.ok is True
 
 
-def test_facade_stop_service_returns_stop_result(tmp_path: Path) -> None:
-    w = GenesisWorker()
+def test_facade_stop_service_returns_stop_result(tmp_path: Path, monkeypatch) -> None:
+    """Facade wiring: ``stop_service`` delegates to the service's ``stop``.
+
+    Hermetic: same isolation strategy as the start test. Without it,
+    this test stops the real llama-server every time pytest runs —
+    which is how a dev-loop llama-server gets repeatedly killed.
+    """
+    from genesis_worker import GenesisWorker as _GW
+    from genesis_worker.services.llama_swap import LlamaSwapService
+    from genesis_worker.settings import PathsSettings, Settings
+
+    monkeypatch.setattr(
+        LlamaSwapService,
+        "stop",
+        lambda self: StopResult(ok=True, message="mock-stop"),
+    )
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = _GW(settings=settings)
     result = w.stop_service("llama_swap")
     assert isinstance(result, StopResult)
+    assert result.ok is True
 
 
 def test_facade_collect_metrics(tmp_path: Path) -> None:
-    w = GenesisWorker()
+    """Hermetic: isolated state_dir."""
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     m = w.collect_metrics()
     assert isinstance(m, MachineMetrics)
 
 
 def test_ui_pages_property_exists_with_concrete_default(tmp_path: Path) -> None:
-    """Default ui_pages returns an empty list. Plugins override."""
-    w = GenesisWorker()
+    """Default ui_pages returns an empty list. Plugins override.
+
+    Hermetic: isolated state_dir.
+    """
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     svc = w.service("llama_swap")
     assert isinstance(svc.ui_pages, list)
     assert all(isinstance(p, UiPage) for p in svc.ui_pages)
 
 
 def test_service_capabilities_distinguishes_web_ui(tmp_path: Path) -> None:
-    """has_web_ui means the service's own web UI on its native port."""
-    w = GenesisWorker()
+    """has_web_ui means the service's own web UI on its native port.
+
+    Hermetic: isolated state_dir.
+    """
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     caps = w.service("llama_swap").capabilities()
     assert isinstance(caps, ServiceCapabilities)
     # The contract documents that has_web_ui is about the service's own web UI
