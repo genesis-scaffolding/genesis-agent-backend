@@ -643,7 +643,7 @@ def test_exec_run_timeout_returns_minus_one(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda args, **kw: (_ (_("timeout") if False else None)),  # unreachable; raise instead
+        lambda args, **kw: 1 / 0,  # unreachable; raise instead
     )
 
     def _runner(args, **kw):  # type: ignore[no-untyped-def]

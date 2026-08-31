@@ -66,7 +66,6 @@ def test_service_info_carries_category_and_description(tmp_path: Path) -> None:
     """
     from genesis_worker import GenesisWorker as _GW
     from genesis_worker.contracts import ServiceCategory
-    from genesis_worker.services.llama_swap import LlamaSwapService
     from genesis_worker.settings import PathsSettings, Settings
 
     settings = Settings(

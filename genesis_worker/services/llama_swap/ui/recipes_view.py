@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 import yaml
+from pydantic import ValidationError
 
 from genesis_worker.services.llama_swap.recipes import Recipe
 
@@ -84,11 +85,11 @@ with st.container(border=True):
             try:
                 parsed = yaml.safe_load(new_yaml) or {}
                 if not isinstance(parsed, dict):
-                    raise ValueError("YAML root must be a mapping")
+                    raise TypeError("YAML root must be a mapping")
                 svc.save_recipe_override(new_name, parsed)
                 st.success(f"Recipe {new_name} added")
                 st.rerun()
-            except Exception as exc:
+            except (yaml.YAMLError, ValidationError, OSError, TypeError) as exc:
                 st.error(f"Add failed: {exc}")
 
 recipes = svc.list_recipes()
@@ -126,11 +127,11 @@ with st.container(border=True):
                         try:
                             parsed = yaml.safe_load(edit_yaml) or {}
                             if not isinstance(parsed, dict):
-                                raise ValueError("YAML root must be a mapping")
+                                raise TypeError("YAML root must be a mapping")
                             svc.save_recipe_override(recipe.name, parsed)
                             st.success("Saved")
                             st.rerun()
-                        except Exception as exc:
+                        except (yaml.YAMLError, ValidationError, OSError, TypeError) as exc:
                             st.error(f"Save failed: {exc}")
                 with col2:
                     if st.button("Delete override", key=f"del-{recipe.name}"):
@@ -138,5 +139,5 @@ with st.container(border=True):
                             svc.delete_recipe_override(recipe.name)
                             st.success("Override removed")
                             st.rerun()
-                        except Exception as exc:
+                        except (yaml.YAMLError, ValidationError, OSError) as exc:
                             st.error(f"Delete failed: {exc}")

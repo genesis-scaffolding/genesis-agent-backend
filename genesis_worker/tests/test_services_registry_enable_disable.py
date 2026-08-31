@@ -48,7 +48,7 @@ def test_bootstrap_auto_enables_installed_services(
 
 def test_bootstrap_persists_initial_state(tmp_path: Path) -> None:
     """After bootstrap, the state file exists with the resolved set."""
-    reg = ServiceRegistry(_settings(tmp_path))
+    ServiceRegistry(_settings(tmp_path))
     state_file = tmp_path / "state" / "enabled_services.yaml"
     assert state_file.is_file()
 
