@@ -6,6 +6,11 @@ vendor/prism-llama.cpp/
 __pycache__/
 *.pyc
 
+# coverage tool output
+.coverage
+.coverage.*
+htmlcov/
+
 # llama-swap runtime state
 llama-swap.log
 .cache/
