@@ -12,18 +12,27 @@ connection is refused.
 
 - ``whitelistDockerHosts`` is forced to ``false`` -- kills the doomed hostname
   lookups.
-- ``whitelist`` is guaranteed to contain ``127.0.0.1``, the detected bridge
-  gateway(s) (the health-check source), and every address this host itself can
-  present via its own interfaces -- so access from the docker host over its own
-  LAN/hostname IP reaches the container too. Any pre-existing entries are
-  preserved.
+- ``whitelist`` is guaranteed to contain:
+  - ``127.0.0.1`` (loopback)
+  - the detected Docker bridge gateway(s) (the health-check source)
+  - every IPv4 subnet this host is directly connected to (e.g. the LAN
+    subnet ``192.168.8.81/24``) so every peer on the host's physical network
+    can reach the container, not just the host itself
+  - the Tailscale CGNAT range ``100.64.0.0/10`` so every Tailnet peer --
+    phone, other machines on the mesh -- can reach the container without
+    per-peer whitelisting
+  - the host's own specific interface IPs (kept for log clarity; the CIDRs
+    above already include them)
+  Any pre-existing user entries are preserved.
 
 ``whitelistMode`` is left on (not disabled) so the SSRF
 ``privateAddressWhitelist`` stays intact -- the set we add is limited to
-localhost, the docker bridge gateway, and the host's own addresses, i.e. the
-host itself, never the wider LAN or the internet. The container entrypoint copies ``default/config.yaml`` only
-when the file is missing, and ``npm run init`` fills missing keys without
-overwriting existing ones, so these in-place edits survive.
+localhost, the docker bridge gateway, the host's LAN subnet(s), and the
+Tailscale overlay, i.e. the host itself plus the devices the user has
+explicitly brought into their Tailnet. The container entrypoint copies
+``default/config.yaml`` only when the file is missing, and ``npm run init``
+fills missing keys without overwriting existing ones, so these in-place
+edits survive.
 
 The fix is deliberately idempotent: a ``config.yaml`` that already exists with
 the defaults must still be corrected, otherwise the very default the user is
@@ -42,13 +51,58 @@ import yaml
 
 _GATEWAY_FALLBACK = "172.17.0.1"
 
+# Tailscale assigns every node an address in this CGNAT range; every
+# Tailnet peer (phone, another machine on the mesh) is somewhere in here.
+# Whitelisting the whole range covers direct WireGuard and DERP-relayed
+# paths alike, so the user doesn't have to re-seed every time they add a
+# new device to their tailnet.
+_TAILSCALE_CGNAT = "100.64.0.0/10"
+
+
+def _host_connected_subnets() -> list[str]:
+    """IPv4 subnets this host is directly connected to (LAN segments).
+
+    Each non-loopback, non-Docker interface contributes its full
+    ``addr/prefix_len`` (e.g. ``192.168.8.81/24``), whitelisting every
+    peer on the same physical network -- not just the host itself.
+    SillyTavern's whitelist supports CIDR notation; if a future version
+    drops that, the per-interface IPs still get listed by
+    :func:`_host_own_addresses`.
+    """
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    found: list[str] = []
+    for line in out.splitlines():
+        toks = line.split()
+        if "inet" not in toks:
+            continue
+        i = toks.index("inet")
+        ifname = toks[i - 1].rstrip(":")
+        addr_with_prefix = toks[i + 1]  # "192.168.8.81/24"
+        if ifname == "lo" or ifname.lower().startswith("docker"):
+            continue
+        if addr_with_prefix.split("/")[0].startswith("127."):
+            continue
+        if addr_with_prefix and addr_with_prefix not in found:
+            found.append(addr_with_prefix)
+    return found
+
 
 def _host_own_addresses() -> list[str]:
     """IPv4 addresses bound to this host's own interfaces (loopback + docker excluded).
 
-    Covers access from the docker host itself via its LAN interface -- e.g. the
-    machine's hostname -- which reaches the container with that raw source IP
-    rather than the docker0 gateway. ``localhost`` is handled separately.
+    Kept alongside :func:`_host_connected_subnets` for log clarity -- the
+    CIDR form already covers these IPs, but having the bare addresses
+    listed makes the whitelist easier to read and falls back gracefully if
+    a downstream consumer doesn't honour CIDR matching.
     """
     try:
         out = subprocess.run(
@@ -150,8 +204,9 @@ def seed_config(config_path: Path) -> bool:
             return True
         return False
 
-    # Build the allowed set: loopback + health-check gateway + every address
-    # this host itself can present. Order is cosmetic; membership is what matters.
+    # Build the allowed set: loopback + health-check gateway + host's LAN
+    # subnets + host's own addresses + Tailscale CGNAT. Order is cosmetic;
+    # membership is what matters.
     allowed: list[str] = []
     seen: set[str] = set()
     _accept(allowed, seen, "127.0.0.1")
@@ -159,8 +214,17 @@ def seed_config(config_path: Path) -> bool:
     # unavailable -- the health probe then still lands.
     for gw in _bridge_gateways() or [_GATEWAY_FALLBACK]:
         _accept(allowed, seen, gw)
+    # LAN subnets: covers every peer on the host's physical networks, not
+    # just the host's own interface IPs.
+    for subnet in _host_connected_subnets():
+        _accept(allowed, seen, subnet)
+    # Host's own interface IPs (for log clarity; the CIDRs above already
+    # include them).
     for own in _host_own_addresses():
         _accept(allowed, seen, own)
+    # Tailscale CGNAT: covers every Tailnet peer -- phone, other machines
+    # on the mesh -- without per-peer whitelisting.
+    _accept(allowed, seen, _TAILSCALE_CGNAT)
     # Preserve every entry the user has already put in the file.
     existing = config.get("whitelist")
     for entry in existing if isinstance(existing, list) else []:
