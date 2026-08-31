@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from genesis_worker import GenesisWorker
@@ -14,6 +15,18 @@ def test_framework_ui_dir_exists() -> None:
     assert (_FRAMEWORK_UI / "catalog.py").exists()
     assert (_FRAMEWORK_UI / "services_catalog.py").exists()
     assert (_FRAMEWORK_UI / "app.py").exists()
+
+
+def test_dashboard_references_services_catalog() -> None:
+    """The dashboard's 'Manage services' button must point at services_catalog.py.
+
+    Guards against future renames of the catalog page breaking the in-page
+    navigation silently (the sidebar would still link, but the dashboard
+    button would 404).
+    """
+    source = (_FRAMEWORK_UI / "dashboard.py").read_text()
+    assert "services_catalog.py" in source
+    assert "switch_page" in source
 
 
 def test_page_discovery_resolves_all_paths() -> None:

@@ -6,6 +6,8 @@ page stays focused on the host, live diagnostics, and services.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from genesis_worker.contracts import ServiceCategory
@@ -17,6 +19,12 @@ from genesis_worker.utils.ui._service_controls import (
 )
 
 worker = st.session_state["worker"]
+
+# Resolved once at module load: the framework's Service Catalog page.
+# Used by the "Manage services" button in the Services section to give
+# users a one-click path to enable/disable services (the dashboard and
+# sidebar only show enabled services — ADR-029).
+_SERVICES_CATALOG_PATH = Path(__file__).parent / "services_catalog.py"
 
 st.title("Genesis Worker")
 
@@ -190,8 +198,20 @@ def _render_service_card(col, info) -> None:
 
 
 with st.container(border=True):
-    st.header("Services")
-    st.caption("Disabled services are hidden. Enable them in **Service Catalog** (in the sidebar).")
+    head_cols = st.columns([4, 1])
+    with head_cols[0]:
+        st.header("Services")
+        st.caption("Disabled services are hidden.")
+    with head_cols[1]:
+        # Right-aligned action; vertical-aligns with the caption so it
+        # sits at the right edge of the section header row.
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        if st.button(
+            "Manage services",
+            key="dash-manage-services",
+            use_container_width=True,
+        ):
+            st.switch_page(_to_relative(_SERVICES_CATALOG_PATH))
 
     services_info = worker.list_enabled_services()
     if not services_info:
