@@ -22,7 +22,8 @@ with st.container(border=True):
     # fragment: ``render_service_controls`` may render the inline install
     # flow, which creates its own polling fragment. Nested fragments
     # confuse Streamlit's placeholder reservation during long docker
-    # pulls. Same trade-off as the comfyui status page.
+    # pulls. The Start/Stop button has its own internal polling fragment
+    # for the STARTING/STOPPING transitions (see ``render_action_button``).
     render_service_controls(
         svc, worker.service_status(SERVICE_NAME), key_prefix="status-sillytavern"
     )
