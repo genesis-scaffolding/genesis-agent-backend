@@ -94,6 +94,12 @@ Rules, both directions:
 - Types: pyright (`standard` mode)
 - Lint and format: ruff (`check` and `format`)
 
+## Host / environment gotchas
+
+These are recurring pain points on the host OS (Omarchy) or Tailscale layer. They are not bugs in this codebase, but they surface as if they were. When debugging a connection/service problem, check these first.
+
+- **Docker containers unreachable from Tailscale peers.** A container works from `127.0.0.1`, from the LAN IP, and from the host via its own Tailscale IP, but times out silently (no log line in the container) from any other Tailscale device. This is `ufw-docker`'s anti-spoofing rules dropping Tailscale's CGNAT range (`100.64.0.0/10`) into the Docker bridge. Fix: `sudo ./scripts/tailscale-docker-fix.sh install`. Full writeup: `docs/tailscale-docker.md`. Diagnosis: a non-zero packet count on the `ufw-docker-logging-deny` rule for `172.16.0.0/12` in `sudo iptables -L DOCKER-USER -n -v`.
+
 ## ADR structure and naming
 
 - Location: `docs/arch/adr-NNN-kebab-case-title.md`. NNN is sequential, zero-padded, never reused.

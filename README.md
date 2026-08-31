@@ -231,6 +231,10 @@ Recipes where one `match` is a strict substring of another are **shadowed** — 
 - Image-gen and adapter models are filtered out of the catalog (no GGUF, or no weights).
 - `make` reads `MODELS_ROOT` from `.env` (gitignored). Override per-call: `make ROOT=/path`.
 
+## Known issues
+
+- **Docker containers unreachable from Tailscale peers**: if you can reach a service from the host or LAN but it times out from another Tailscale device (phone, second machine), ufw-docker's anti-spoofing rules are blocking traffic. Run `sudo ./scripts/tailscale-docker-fix.sh install`. See [docs/tailscale-docker.md](docs/tailscale-docker.md) for the full story.
+
 ## Layout
 
 ```
