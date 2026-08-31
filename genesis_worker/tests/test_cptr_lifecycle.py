@@ -26,9 +26,7 @@ def _fake_run_factory(*, returncodes: list[int] | None = None, stdout: str = "")
     def _fake(args, **kw):  # type: ignore[no-untyped-def]
         rc = codes[idx["n"] % len(codes)]
         idx["n"] += 1
-        return subprocess.CompletedProcess(
-            args=args, returncode=rc, stdout=stdout, stderr=""
-        )
+        return subprocess.CompletedProcess(args=args, returncode=rc, stdout=stdout, stderr="")
 
     return _fake
 
@@ -123,17 +121,13 @@ def test_start_cptr_refuses_missing_binary(tmp_path: Path) -> None:
     assert "binary not found" in r.message
 
 
-def test_start_cptr_refuses_tmux_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_start_cptr_refuses_tmux_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = tmp_path / "cptr"
     binary.write_text("#!/bin/sh\nexit 0\n")
     binary.chmod(0o755)
     # First call: has-session (no prior session) → rc=1, kills nothing.
     # Second call: tmux new-session → rc=1, simulate failure.
-    monkeypatch.setattr(
-        subprocess, "run", _fake_run_factory(returncodes=[1, 1], stdout="boom")
-    )
+    monkeypatch.setattr(subprocess, "run", _fake_run_factory(returncodes=[1, 1], stdout="boom"))
     r = lifecycle.start_cptr(
         binary=binary,
         host="0.0.0.0",
@@ -146,16 +140,12 @@ def test_start_cptr_refuses_tmux_failure(
     assert "tmux new-session failed" in r.message
 
 
-def test_start_cptr_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_start_cptr_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = tmp_path / "cptr"
     binary.write_text("#!/bin/sh\nexit 0\n")
     binary.chmod(0o755)
     # has-session → rc=1 (no prior session); new-session → rc=0.
-    monkeypatch.setattr(
-        subprocess, "run", _fake_run_factory(returncodes=[1, 0])
-    )
+    monkeypatch.setattr(subprocess, "run", _fake_run_factory(returncodes=[1, 0]))
     with patch.object(lifecycle, "wait_ready", return_value=True):
         r = lifecycle.start_cptr(
             binary=binary,
@@ -174,9 +164,7 @@ def test_start_cptr_timeout_returns_failure(
     binary = tmp_path / "cptr"
     binary.write_text("#!/bin/sh\nexit 0\n")
     binary.chmod(0o755)
-    monkeypatch.setattr(
-        subprocess, "run", _fake_run_factory(returncodes=[1, 0])
-    )
+    monkeypatch.setattr(subprocess, "run", _fake_run_factory(returncodes=[1, 0]))
     with patch.object(lifecycle, "wait_ready", return_value=False):
         r = lifecycle.start_cptr(
             binary=binary,
@@ -190,9 +178,7 @@ def test_start_cptr_timeout_returns_failure(
     assert "did not become ready" in r.message
 
 
-def test_start_cptr_kills_prior_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_start_cptr_kills_prior_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A previous session of the same name is killed before we start."""
     binary = tmp_path / "cptr"
     binary.write_text("#!/bin/sh\nexit 0\n")
@@ -207,9 +193,7 @@ def test_start_cptr_kills_prior_session(
         calls.append(list(args))
         rc = rc_cycle[min(idx["n"], len(rc_cycle) - 1)]
         idx["n"] += 1
-        return subprocess.CompletedProcess(
-            args=args, returncode=rc, stdout="", stderr=""
-        )
+        return subprocess.CompletedProcess(args=args, returncode=rc, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     with patch.object(lifecycle, "wait_ready", return_value=True):

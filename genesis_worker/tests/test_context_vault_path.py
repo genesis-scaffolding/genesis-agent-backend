@@ -76,7 +76,9 @@ def test_source_registry_populates_vault_path_on_every_source(tmp_path: Path, mo
         )
 
 
-def test_service_registry_populates_vault_path_on_every_service(tmp_path: Path, monkeypatch) -> None:
+def test_service_registry_populates_vault_path_on_every_service(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Every service plugin's context has vault_path = settings.paths.resolved_vault_path."""
     from genesis_worker.settings import Settings
 

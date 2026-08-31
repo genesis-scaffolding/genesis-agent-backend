@@ -45,7 +45,9 @@ def _render_step(step: AcquireView) -> None:
     elif step.kind == "fetching" and step.progress is not None:
         total = step.progress.bytes_total or step.total_bytes or 1
         pct = step.progress.bytes_done / total if total else 0
-        st.progress(min(pct, 1.0), text=f"{step.title or 'fetching'} · {step.progress.bytes_done}/{total}")
+        st.progress(
+            min(pct, 1.0), text=f"{step.title or 'fetching'} · {step.progress.bytes_done}/{total}"
+        )
     else:
         st.info(step.title or step.kind)
 
@@ -66,7 +68,9 @@ for installable in svc.installs():
         if source_url := installable.source_url():
             st.caption(f"Source: [{source_url}]({source_url})")
         if service_running:
-            st.caption("Service is currently running — stop it from the Status page before uninstalling.")
+            st.caption(
+                "Service is currently running — stop it from the Status page before uninstalling."
+            )
 
         versions = installable.available_versions()
         st.session_state[_versions_key(name)] = versions
@@ -133,7 +137,11 @@ for installable in svc.installs():
             session = st.session_state[sess_key]
             current_step = session.view()
 
-            if current_step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
+            if current_step.kind in (
+                AcquireStateKind.COMPLETE,
+                AcquireStateKind.FAILED,
+                AcquireStateKind.CANCELLED,
+            ):
                 _render_step(current_step)
                 # Schedule drop on next parent rerun.
                 if st.session_state.get(drop_key):
@@ -147,15 +155,16 @@ for installable in svc.installs():
                         st.session_state.pop(drop_key, None)
                         st.rerun()
             else:
+
                 @st.fragment(run_every="2s")
-                def _progress(
-                    session=session, drop_key=drop_key
-                ) -> None:
+                def _progress(session=session, drop_key=drop_key) -> None:
                     step = session.view()
                     _render_step(step)
-                    if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
-                        drop_key
-                    ):
+                    if step.kind in (
+                        AcquireStateKind.COMPLETE,
+                        AcquireStateKind.FAILED,
+                        AcquireStateKind.CANCELLED,
+                    ) and not st.session_state.get(drop_key):
                         st.session_state[drop_key] = True
                         st.rerun(scope="app")
 

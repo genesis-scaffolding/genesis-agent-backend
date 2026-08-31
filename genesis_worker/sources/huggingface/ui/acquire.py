@@ -40,13 +40,9 @@ elif view.kind == AcquireStateKind.SELECTING and isinstance(view, HfAcquireView)
     # HfAcquireChoice are 1-based into view.targets.
     groups = view.targets
     main_groups = [
-        (i, g) for i, g in enumerate(groups, start=1)
-        if g.role in ("main", "safetensor")
+        (i, g) for i, g in enumerate(groups, start=1) if g.role in ("main", "safetensor")
     ]
-    aux_groups = [
-        (i, g) for i, g in enumerate(groups, start=1)
-        if g.role in ("mmproj", "mtp")
-    ]
+    aux_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role in ("mmproj", "mtp")]
 
     def _label(g) -> str:
         if g.paths:
@@ -88,7 +84,7 @@ elif view.kind == AcquireStateKind.SELECTING and isinstance(view, HfAcquireView)
             st.rerun()
 
 elif view.kind == AcquireStateKind.CONFIRMING:
-    total_gb = (view.total_bytes or 0) / (1024 ** 3)
+    total_gb = (view.total_bytes or 0) / (1024**3)
     st.warning(f"Will download {total_gb:.1f} GB")
     cols = st.columns([1, 1])
     with cols[0]:

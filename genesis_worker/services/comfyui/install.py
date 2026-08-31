@@ -34,9 +34,7 @@ _RELEASE_CACHE_TTL_S = 15 * 60  # 15 min — same as GithubReleaseTarball.
 # tags without an arch segment (``latest``, ``v0.34.0``, ...) are
 # arch-agnostic and pass through any filter.
 _ARCH_SUFFIXES = ("amd64", "arm64")
-_TAG_ARCH_RE = re.compile(
-    r"-(?P<arch>amd64|arm64)(?=$|[-+])", re.IGNORECASE
-)
+_TAG_ARCH_RE = re.compile(r"-(?P<arch>amd64|arm64)(?=$|[-+])", re.IGNORECASE)
 
 
 def _normalise_host_arch(raw: str | None) -> str | None:
@@ -152,7 +150,11 @@ class ComfyUiImage(ServiceInstall):
         return "https://github.com/genesis-scaffolding/comfyui-cuda/pkgs/container/comfyui-cuda"
 
     def state(self) -> InstallState:
-        return InstallState.INSTALLED if DockerContainer.image_present(self.image_ref) else InstallState.NOT_INSTALLED
+        return (
+            InstallState.INSTALLED
+            if DockerContainer.image_present(self.image_ref)
+            else InstallState.NOT_INSTALLED
+        )
 
     def installed_version(self) -> str | None:
         return self._selection_path.read_text().strip() if self._selection_path.is_file() else None
@@ -209,9 +211,7 @@ class ComfyUiImage(ServiceInstall):
     def _record_selection(self, tag: str) -> None:
         """Write the installed tag to the selection file on successful install."""
         self._state_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._selection_path.with_suffix(
-            f".tmp.{os.getpid()}.{secrets.token_hex(4)}"
-        )
+        tmp = self._selection_path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
         with tmp.open("w") as f:
             f.write(tag)
         os.replace(tmp, self._selection_path)

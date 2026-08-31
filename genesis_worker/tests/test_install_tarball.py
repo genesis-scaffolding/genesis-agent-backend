@@ -143,14 +143,16 @@ def _backend(
     )
 
 
-def test_install_completes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer) -> None:
-    archive = _make_tarball(
-        tmp_path, {"bin/test-tool": b"#!/bin/sh\necho ok\n"}
-    )
+def test_install_completes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
+) -> None:
+    archive = _make_tarball(tmp_path, {"bin/test-tool": b"#!/bin/sh\necho ok\n"})
     asset_url = f"http://127.0.0.1:{fake_github.port}/asset.tar.gz"
     fake_github.route(
         "/repos/o/r/releases/latest",
-        json.dumps(_release_json("v1.0.0", "asset.tar.gz", asset_url, archive.stat().st_size)).encode(),
+        json.dumps(
+            _release_json("v1.0.0", "asset.tar.gz", asset_url, archive.stat().st_size)
+        ).encode(),
     )
     fake_github.route(
         "/asset.tar.gz", archive.read_bytes(), content_type="application/octet-stream"
@@ -185,7 +187,9 @@ def test_install_fails_on_sha_mismatch(
     asset_url = f"http://127.0.0.1:{fake_github.port}/asset.tar.gz"
     fake_github.route(
         "/repos/o/r/releases/latest",
-        json.dumps(_release_json("v1.0.0", "asset.tar.gz", asset_url, archive.stat().st_size)).encode(),
+        json.dumps(
+            _release_json("v1.0.0", "asset.tar.gz", asset_url, archive.stat().st_size)
+        ).encode(),
     )
     fake_github.route(
         "/asset.tar.gz", archive.read_bytes(), content_type="application/octet-stream"
@@ -243,6 +247,7 @@ def test_install_cancel_mid_fetch(
 
 def _sha256_hex(path: Path) -> str:
     import hashlib
+
     h = hashlib.sha256()
     with path.open("rb") as f:
         for block in iter(lambda: f.read(64 * 1024), b""):
@@ -343,7 +348,11 @@ def test_available_versions_lists_multiple_releases(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -363,7 +372,9 @@ def test_install_with_specific_version_uses_tag_url(
     asset_url = f"http://127.0.0.1:{fake_github.port}/asset.tar.gz"
     fake_github.route(
         "/repos/o/r/releases/tags/v0.4.4",
-        json.dumps(_release_json("v0.4.4", "asset.tar.gz", asset_url, archive.stat().st_size)).encode(),
+        json.dumps(
+            _release_json("v0.4.4", "asset.tar.gz", asset_url, archive.stat().st_size)
+        ).encode(),
     )
     fake_github.route(
         "/asset.tar.gz", archive.read_bytes(), content_type="application/octet-stream"
@@ -405,7 +416,11 @@ def test_available_versions_caches_to_disk(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -461,7 +476,11 @@ def test_release_cache_hits_within_ttl(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -496,7 +515,11 @@ def test_release_cache_ttl_expiry_triggers_refetch(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -506,9 +529,7 @@ def test_release_cache_ttl_expiry_triggers_refetch(
     # Seed a stale cache.
     cache_path = backend._release_cache_path()  # noqa: SLF001
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        json.dumps({"version": 1, "fetched_at": 1.0, "releases": []})
-    )
+    cache_path.write_text(json.dumps({"version": 1, "fetched_at": 1.0, "releases": []}))
 
     versions = backend.available_versions()
     # The fresh fetch returned v0.5.0; the cache file should now reflect it.
@@ -537,7 +558,11 @@ def test_invalidate_release_cache_removes_cache_file(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -609,7 +634,11 @@ def test_backend_with_secrets_attaches_bearer(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -653,7 +682,11 @@ def test_backend_without_secrets_omits_authorization(
         layout=layout,
         cache_root=tmp_path / "cache",
         asset_for=lambda assets: next(
-            (a for a in assets if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")),
+            (
+                a
+                for a in assets
+                if a.get("browser_download_url", "").startswith(f"http://127.0.0.1:{port}/")
+            ),
             None,
         ),
         binary_rel="bin/test-tool",
@@ -678,9 +711,7 @@ def test_settings_secret_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.secret("github_token") == "env_token_xyz"
 
 
-def test_settings_secret_from_dotenv(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_settings_secret_from_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Settings falls back to the repo-root ``.env`` when env var is unset."""
     monkeypatch.delenv("GENESIS_SECRETS__GITHUB_TOKEN", raising=False)
     env_file = tmp_path / ".env"
@@ -701,9 +732,7 @@ def test_settings_accessor_returns_token(monkeypatch: pytest.MonkeyPatch) -> Non
     assert accessor.get("missing") is None
 
 
-def test_settings_no_secret_returns_none(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_settings_no_secret_returns_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("GENESIS_SECRETS__GITHUB_TOKEN", raising=False)
     # Move CWD to a directory with no ``.env`` so the dotenv fallback
     # doesn't pick up a token from the worktree.

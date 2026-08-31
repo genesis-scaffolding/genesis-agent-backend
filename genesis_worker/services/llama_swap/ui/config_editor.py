@@ -170,7 +170,11 @@ def _render_override_form(
         # --- Parallel ---
         par_val = st.text_input(
             "Parallel",
-            value=str(current_overrides.get("parallel", cfg.parallel) if current_overrides.get("parallel") is not None or cfg.parallel is not None else ""),
+            value=str(
+                current_overrides.get("parallel", cfg.parallel)
+                if current_overrides.get("parallel") is not None or cfg.parallel is not None
+                else ""
+            ),
             key=f"ov-{entry_id}-parallel",
         )
         if (par_val or "").strip():
@@ -182,7 +186,11 @@ def _render_override_form(
         # --- Fit Context ---
         ctx_val = st.text_input(
             "Fit context",
-            value=str(current_overrides.get("ctx_min", cfg.ctx_min) if current_overrides.get("ctx_min") is not None or cfg.ctx_min is not None else ""),
+            value=str(
+                current_overrides.get("ctx_min", cfg.ctx_min)
+                if current_overrides.get("ctx_min") is not None or cfg.ctx_min is not None
+                else ""
+            ),
             key=f"ov-{entry_id}-ctx",
         )
         if (ctx_val or "").strip():
@@ -194,7 +202,12 @@ def _render_override_form(
         # --- Reasoning Budget ---
         rb_val = st.text_input(
             "Reasoning budget",
-            value=str(current_overrides.get("reasoning_budget", cfg.reasoning_budget) if current_overrides.get("reasoning_budget") is not None or cfg.reasoning_budget is not None else ""),
+            value=str(
+                current_overrides.get("reasoning_budget", cfg.reasoning_budget)
+                if current_overrides.get("reasoning_budget") is not None
+                or cfg.reasoning_budget is not None
+                else ""
+            ),
             key=f"ov-{entry_id}-rb",
         )
         if (rb_val or "").strip():
@@ -206,7 +219,9 @@ def _render_override_form(
         # --- Reasoning Budget Message ---
         rbm_val = st.text_input(
             "Reasoning budget message",
-            value=current_overrides.get("reasoning_budget_message", cfg.reasoning_budget_message or ""),
+            value=current_overrides.get(
+                "reasoning_budget_message", cfg.reasoning_budget_message or ""
+            ),
             key=f"ov-{entry_id}-rbm",
         )
         if (rbm_val or "").strip():
@@ -250,7 +265,10 @@ def _render_override_form(
         # --- Chat Template Kwargs ---
         ctk_val = st.text_area(
             "Chat template kwargs (JSON)",
-            value=json.dumps(current_overrides.get("chat_template_kwargs", cfg.chat_template_kwargs) or {}, indent=2),
+            value=json.dumps(
+                current_overrides.get("chat_template_kwargs", cfg.chat_template_kwargs) or {},
+                indent=2,
+            ),
             key=f"ov-{entry_id}-ctk",
             height=100,
         )
@@ -263,16 +281,12 @@ def _render_override_form(
         # --- Extra flags ---
         ef_val = st.text_area(
             "Extra llama.cpp flags (one per line)",
-            value="\n".join(
-                current_overrides.get("extra_flags", cfg.extra_flags or [])
-            ),
+            value="\n".join(current_overrides.get("extra_flags", cfg.extra_flags or [])),
             key=f"ov-{entry_id}-ef",
             height=100,
         )
         if (ef_val or "").strip():
-            new_overrides["extra_flags"] = [
-                ln.strip() for ln in ef_val.splitlines() if ln.strip()
-            ]
+            new_overrides["extra_flags"] = [ln.strip() for ln in ef_val.splitlines() if ln.strip()]
 
         # --- Spec ---
         spec_val = st.text_area(

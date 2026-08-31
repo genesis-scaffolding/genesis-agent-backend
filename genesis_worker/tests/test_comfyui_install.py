@@ -68,12 +68,16 @@ def test_binary_path_is_none(tmp_path: Path) -> None:
 # --- state / installed_version --------------------------------------------
 
 
-def test_state_installed_when_image_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_state_installed_when_image_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: True))
     assert _make_installable(tmp_path).state().value == "installed"
 
 
-def test_state_not_installed_when_image_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_state_not_installed_when_image_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: False))
     assert _make_installable(tmp_path).state().value == "not_installed"
 
@@ -114,7 +118,9 @@ def test_available_versions_uses_cache(tmp_path: Path, monkeypatch: pytest.Monke
     assert called["count"] == 0
 
 
-def test_available_versions_fetches_when_cache_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_available_versions_fetches_when_cache_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cache = _cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
     payload = {"version": 1, "fetched_at": time.time() - 3600, "tags": ["old-tag"]}
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +136,9 @@ def test_available_versions_fetches_when_cache_stale(tmp_path: Path, monkeypatch
     assert [v.version for v in versions] == ["v0.34.0-cuda-13.0-amd64"]
 
 
-def test_available_versions_writes_cache_on_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_available_versions_writes_cache_on_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         DockerContainer,
         "list_remote_tags",
@@ -151,7 +159,9 @@ def test_invalidate_versions_cache_removes_file(tmp_path: Path) -> None:
     assert not cache.exists()
 
 
-def test_available_versions_returns_install_version_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_available_versions_returns_install_version_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         DockerContainer,
         "list_remote_tags",
@@ -211,6 +221,7 @@ def test_install_session_publishes_progress_from_json_lines(
     # the in-flight step had progress populated.
     # Use a deadline-based poll on view() to read an intermediate state.
     import time
+
     deadline = time.monotonic() + 2.0
     seen_with_progress = None
     while time.monotonic() < deadline:
@@ -225,7 +236,9 @@ def test_install_session_publishes_progress_from_json_lines(
     session.cancel()
     session.wait()
 
-    assert seen_with_progress is not None, "expected at least one fetching step with progress populated"
+    assert seen_with_progress is not None, (
+        "expected at least one fetching step with progress populated"
+    )
     assert seen_with_progress.progress is not None
     assert seen_with_progress.progress.bytes_total == 5000
     assert 0 < seen_with_progress.progress.bytes_done <= 5000
@@ -247,7 +260,9 @@ def test_install_session_uses_json_progress_format(
     assert seen_format == ["json"]
 
 
-def test_install_session_records_selection_on_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_session_records_selection_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
         pass
 
@@ -259,7 +274,9 @@ def test_install_session_records_selection_on_success(tmp_path: Path, monkeypatc
     assert inst.installed_version() == "v0.99.0-cuda-13.0-amd64"
 
 
-def test_install_session_failure_surfaces_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_session_failure_surfaces_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def _fake_pull(image, *, progress=None, cancel=None, timeout_s=1800.0, progress_format="json"):  # type: ignore[no-untyped-def]
         raise RuntimeError("manifest unknown")
 
@@ -318,11 +335,15 @@ def test_uninstall_runs_docker_rmi(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert captured[0][2] == "ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64"
 
 
-def test_uninstall_clears_selection_when_matching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_uninstall_clears_selection_when_matching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda args, **kw: subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr=""),
+        lambda args, **kw: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="", stderr=""
+        ),
     )
     inst = _make_installable(tmp_path)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
@@ -331,11 +352,15 @@ def test_uninstall_clears_selection_when_matching(tmp_path: Path, monkeypatch: p
     assert not inst._selection_path.exists()
 
 
-def test_uninstall_keeps_selection_when_different_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_uninstall_keeps_selection_when_different_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda args, **kw: subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr=""),
+        lambda args, **kw: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="", stderr=""
+        ),
     )
     inst = _make_installable(tmp_path)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)

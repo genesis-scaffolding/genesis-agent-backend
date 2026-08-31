@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 import yaml
+from pydantic import ValidationError
 
 from genesis_worker.services.llama_swap.recipes import Recipe
 
@@ -53,22 +54,22 @@ with st.container(border=True):
     new_name = st.text_input("Recipe name", key="new-recipe-name")
     template = (
         'match: ""\n'
-        'binary: null\n'
-        'sampling:\n'
-        '  temp: 0.8\n'
-        '  top_p: 0.95\n'
-        '  top_k: 40\n'
-        '  min_p: 0.0\n'
-        '  presence_penalty: 0.0\n'
-        '  repeat_penalty: 1.0\n'
-        'chat_template_file: null\n'
-        'chat_template_kwargs: {}\n'
-        'parallel: null\n'
-        'spec: null\n'
-        'kv_cache: null\n'
-        'mmproj_offload: false\n'
-        'ctx_min: null\n'
-        'reasoning_budget: 0\n'
+        "binary: null\n"
+        "sampling:\n"
+        "  temp: 0.8\n"
+        "  top_p: 0.95\n"
+        "  top_k: 40\n"
+        "  min_p: 0.0\n"
+        "  presence_penalty: 0.0\n"
+        "  repeat_penalty: 1.0\n"
+        "chat_template_file: null\n"
+        "chat_template_kwargs: {}\n"
+        "parallel: null\n"
+        "spec: null\n"
+        "kv_cache: null\n"
+        "mmproj_offload: false\n"
+        "ctx_min: null\n"
+        "reasoning_budget: 0\n"
         'reasoning_budget_message: ""\n'
     )
     new_yaml = st.text_area(
@@ -84,11 +85,11 @@ with st.container(border=True):
             try:
                 parsed = yaml.safe_load(new_yaml) or {}
                 if not isinstance(parsed, dict):
-                    raise ValueError("YAML root must be a mapping")
+                    raise TypeError("YAML root must be a mapping")
                 svc.save_recipe_override(new_name, parsed)
                 st.success(f"Recipe {new_name} added")
                 st.rerun()
-            except Exception as exc:
+            except (yaml.YAMLError, ValidationError, OSError, TypeError) as exc:
                 st.error(f"Add failed: {exc}")
 
 recipes = svc.list_recipes()
@@ -110,7 +111,9 @@ with st.container(border=True):
                 language="yaml",
             )
             with st.expander("Override / Edit"):
-                st.caption("Edit the recipe body. Saving writes the whole recipe to the overlay file, replacing the bundled version.")
+                st.caption(
+                    "Edit the recipe body. Saving writes the whole recipe to the overlay file, replacing the bundled version."
+                )
                 default_yaml = yaml.safe_dump(
                     recipe.model_dump(exclude={"source", "name"}), sort_keys=False
                 )
@@ -126,11 +129,11 @@ with st.container(border=True):
                         try:
                             parsed = yaml.safe_load(edit_yaml) or {}
                             if not isinstance(parsed, dict):
-                                raise ValueError("YAML root must be a mapping")
+                                raise TypeError("YAML root must be a mapping")
                             svc.save_recipe_override(recipe.name, parsed)
                             st.success("Saved")
                             st.rerun()
-                        except Exception as exc:
+                        except (yaml.YAMLError, ValidationError, OSError, TypeError) as exc:
                             st.error(f"Save failed: {exc}")
                 with col2:
                     if st.button("Delete override", key=f"del-{recipe.name}"):
@@ -138,5 +141,5 @@ with st.container(border=True):
                             svc.delete_recipe_override(recipe.name)
                             st.success("Override removed")
                             st.rerun()
-                        except Exception as exc:
+                        except (yaml.YAMLError, ValidationError, OSError) as exc:
                             st.error(f"Delete failed: {exc}")

@@ -205,9 +205,7 @@ def test_available_versions_auto_detects_arch(
     monkeypatch.setattr(
         install_mod.DockerContainer,
         "list_remote_tags",
-        staticmethod(
-            lambda repo: ["v0.34.0-cuda-13.0-amd64", "v0.34.0-cuda-13.0-arm64"]
-        ),
+        staticmethod(lambda repo: ["v0.34.0-cuda-13.0-amd64", "v0.34.0-cuda-13.0-arm64"]),
     )
     versions = inst.available_versions()
     assert [v.version for v in versions] == ["v0.34.0-cuda-13.0-arm64"]

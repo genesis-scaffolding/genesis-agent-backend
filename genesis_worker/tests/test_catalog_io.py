@@ -19,7 +19,9 @@ def _entry(name: str, source: str = "huggingface", n: int = 1024) -> ModelEntry:
     )
 
 
-def _catalog(entries: list[ModelEntry] | None = None, *, generated_at: str = "2026-01-01T00:00:00+00:00") -> Catalog:
+def _catalog(
+    entries: list[ModelEntry] | None = None, *, generated_at: str = "2026-01-01T00:00:00+00:00"
+) -> Catalog:
     entries = entries or [_entry("a/b")]
     return Catalog(
         root="/vault",
@@ -76,7 +78,10 @@ def test_load_catalog_round_trips(tmp_path: Path) -> None:
     assert loaded.generated_at == cat.generated_at
     assert loaded.content_hash == cat.content_hash
     assert len(loaded.entries) == 2
-    assert loaded.by_source() == {"huggingface": [_entry("a/b")], "lmstudio": [_entry("c/d", source="lmstudio")]}
+    assert loaded.by_source() == {
+        "huggingface": [_entry("a/b")],
+        "lmstudio": [_entry("c/d", source="lmstudio")],
+    }
 
 
 def test_load_catalog_returns_none_on_missing_file(tmp_path: Path) -> None:
@@ -92,7 +97,9 @@ def test_load_catalog_returns_none_on_malformed_json(tmp_path: Path) -> None:
 def test_load_catalog_returns_none_on_schema_version_mismatch(tmp_path: Path) -> None:
     """A future schema bump makes old files invalid; we rebuild from scratch."""
     path = tmp_path / "old.json"
-    path.write_text('{"schema_version": 99, "root": "/x", "generated_at": "2026", "content_hash": "x", "entries": []}')
+    path.write_text(
+        '{"schema_version": 99, "root": "/x", "generated_at": "2026", "content_hash": "x", "entries": []}'
+    )
     assert load_catalog(path) is None
 
 

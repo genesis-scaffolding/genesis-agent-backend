@@ -180,9 +180,7 @@ class GithubReleaseTarball:
         self.install_method = install_method
         self.max_releases = max_releases
         self.release_cache_ttl_s = release_cache_ttl_s
-        self._auth_token = (
-            secrets.get(_GITHUB_TOKEN_NAME) if secrets is not None else None
-        )
+        self._auth_token = secrets.get(_GITHUB_TOKEN_NAME) if secrets is not None else None
 
     def _release_cache_path(self) -> Path:
         safe = f"{self.repo_owner}__{self.repo_name}".replace("/", "_")
@@ -266,9 +264,7 @@ class GithubReleaseTarball:
         self._write_release_cache(releases)
         return self._project_to_versions(releases)
 
-    def _project_to_versions(
-        self, releases: list[dict[str, Any]]
-    ) -> list[InstallVersion]:
+    def _project_to_versions(self, releases: list[dict[str, Any]]) -> list[InstallVersion]:
         out: list[InstallVersion] = []
         for rel in releases:
             asset = self.asset_for(rel.get("assets", []))
@@ -398,9 +394,7 @@ class GithubReleaseAcquireSession(BackgroundSession):
 
         asset = backend.asset_for(rel.get("assets", []))
         if asset is None:
-            raise RuntimeError(
-                f"no matching asset in release {rel.get('tag_name', '?')}"
-            )
+            raise RuntimeError(f"no matching asset in release {rel.get('tag_name', '?')}")
         version = rel.get("tag_name", "")
         asset_name = asset.get("name", "")
         asset_url = asset.get("browser_download_url", "")
@@ -456,9 +450,7 @@ class GithubReleaseAcquireSession(BackgroundSession):
         self._state.kind = AcquireStateKind.VERIFYING
         actual_sha = _sha256(cache_file)
         if expected_sha is not None and actual_sha != expected_sha:
-            raise RuntimeError(
-                f"sha256 mismatch: expected {expected_sha}, got {actual_sha}"
-            )
+            raise RuntimeError(f"sha256 mismatch: expected {expected_sha}, got {actual_sha}")
 
         # --- extracting ------------------------------------------------------
         install_root = backend.layout.installs_root / version

@@ -211,10 +211,7 @@ else:
     # Per-row delete.
     st.divider()
     st.subheader("Remove")
-    delete_labels = [
-        f"{r.source}/{r.entry} → {r.target_subdir}/{Path(r.piece).name}"
-        for r in rows
-    ]
+    delete_labels = [f"{r.source}/{r.entry} → {r.target_subdir}/{Path(r.piece).name}" for r in rows]
     delete_idx = st.selectbox(
         "Select row to remove (yaml entry only; prune dangling to clean disk)",
         range(len(rows)),
@@ -246,8 +243,6 @@ with sync_cols[1]:
         _refresh()
 
 
-
-
 # --- prune action ---------------------------------------------------------
 
 st.divider()
@@ -271,6 +266,3 @@ if st.button(
         _refresh()
     else:
         st.info("Nothing to prune.")
-
-
-

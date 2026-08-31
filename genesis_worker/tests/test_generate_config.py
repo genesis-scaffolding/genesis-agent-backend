@@ -101,9 +101,7 @@ def test_evaluate_recipe_uses_recipe_values(options: BuildOptions) -> None:
 
 def test_evaluate_recipe_override_wins(options: BuildOptions) -> None:
     recipe = _recipe(parallel=2, kv_cache="q8_0")
-    evaluated = _evaluate(
-        recipe, options, overrides={"parallel": 5, "kv_cache": "q4_0"}
-    )
+    evaluated = _evaluate(recipe, options, overrides={"parallel": 5, "kv_cache": "q4_0"})
     assert evaluated.parallel == 5
     assert evaluated.kv_cache == "q4_0"
 
@@ -119,9 +117,7 @@ def test_evaluate_recipe_falls_back_to_default_recipe(options: BuildOptions) -> 
 def test_evaluate_recipe_override_blocks_default_fallback(options: BuildOptions) -> None:
     recipe = _recipe()
     default = _recipe(parallel=4)
-    evaluated = _evaluate(
-        recipe, options, default_recipe=default, overrides={"parallel": 7}
-    )
+    evaluated = _evaluate(recipe, options, default_recipe=default, overrides={"parallel": 7})
     assert evaluated.parallel == 7
     assert evaluated.provenance["parallel"] == FieldSource.OVERRIDE
 
@@ -143,9 +139,7 @@ def test_kv_cache_falls_back_to_q8_0_for_large_file(options: BuildOptions) -> No
         is_mtp=files.is_mtp,
         weight_bytes=30_000_000_000,  # > 25 GB
     )
-    evaluated = evaluate_recipe(
-        recipe, large_files, entry_id="test", name="Test", options=options
-    )
+    evaluated = evaluate_recipe(recipe, large_files, entry_id="test", name="Test", options=options)
     assert evaluated.kv_cache == "q8_0"
 
 
@@ -160,9 +154,7 @@ def test_mmproj_offload_falls_back_to_true_for_large_file(options: BuildOptions)
         is_mtp=files.is_mtp,
         weight_bytes=30_000_000_000,
     )
-    evaluated = evaluate_recipe(
-        recipe, large_files, entry_id="test", name="Test", options=options
-    )
+    evaluated = evaluate_recipe(recipe, large_files, entry_id="test", name="Test", options=options)
     assert evaluated.mmproj_offload is True
 
 
@@ -311,9 +303,7 @@ def test_evaluate_all_filters_out_image_models(tmp_path: Path) -> None:
         ],
     )
     recipes = Recipes(default=_recipe(parallel=1), matchable=[])
-    out = evaluate_all(
-        catalog, recipes, overrides={}, options=BuildOptions(repo_root=tmp_path)
-    )
+    out = evaluate_all(catalog, recipes, overrides={}, options=BuildOptions(repo_root=tmp_path))
     # Entry ID from piece filename: "llm-gguf.gguf" → strip .gguf → "llm-gguf"
     assert set(out) == {"llm-gguf"}
 
@@ -326,9 +316,7 @@ def test_evaluate_all_returns_empty_when_no_match(tmp_path: Path) -> None:
         entries=[_gguf_entry("foo/llm")],
     )
     recipes = Recipes(default=None, matchable=[])
-    out = evaluate_all(
-        catalog, recipes, overrides={}, options=BuildOptions(repo_root=tmp_path)
-    )
+    out = evaluate_all(catalog, recipes, overrides={}, options=BuildOptions(repo_root=tmp_path))
     assert out == {}
 
 
@@ -342,7 +330,9 @@ def test_evaluate_all_includes_overrides(tmp_path: Path) -> None:
     recipes = Recipes(default=_recipe(parallel=1), matchable=[])
     # Key is from piece filename: "llm.gguf" → "llm" after .gguf strip
     out = evaluate_all(
-        catalog, recipes, overrides={"llm": {"parallel": 99}},
+        catalog,
+        recipes,
+        overrides={"llm": {"parallel": 99}},
         options=BuildOptions(repo_root=tmp_path),
     )
     assert out["llm"].parallel == 99
@@ -441,8 +431,10 @@ def _gguf_entry(name: str) -> ModelEntry:
         source="huggingface",
         pieces=[
             ModelPiece(
-                role="main", filename=f"{bare}.gguf",
-                path=Path(f"/tmp/vault/{name}/{bare}.gguf"), bytes=1,
+                role="main",
+                filename=f"{bare}.gguf",
+                path=Path(f"/tmp/vault/{name}/{bare}.gguf"),
+                bytes=1,
             )
         ],
         total_bytes=1,
@@ -460,8 +452,10 @@ def _image_entry(name: str) -> ModelEntry:
         source="huggingface",
         pieces=[
             ModelPiece(
-                role="main", filename=f"{bare}.safetensors",
-                path=Path(f"/tmp/vault/{name}/{bare}.safetensors"), bytes=1,
+                role="main",
+                filename=f"{bare}.safetensors",
+                path=Path(f"/tmp/vault/{name}/{bare}.safetensors"),
+                bytes=1,
             )
         ],
         total_bytes=1,

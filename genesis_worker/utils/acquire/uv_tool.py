@@ -117,9 +117,7 @@ class UvToolAcquireSession(BackgroundSession):
         except (FileNotFoundError, OSError) as exc:
             raise RuntimeError(f"uv not found on PATH: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"uv tool install timed out after {self._timeout_s:.0f}s"
-            ) from exc
+            raise RuntimeError(f"uv tool install timed out after {self._timeout_s:.0f}s") from exc
 
         if self._cancel_event.is_set():
             raise _Canceled
@@ -132,8 +130,7 @@ class UvToolAcquireSession(BackgroundSession):
 
         if shutil.which(self._package_name) is None:
             raise RuntimeError(
-                f"{self._package_name} binary not on PATH after install — "
-                "is ~/.local/bin on PATH?"
+                f"{self._package_name} binary not on PATH after install — is ~/.local/bin on PATH?"
             )
 
         self._state.kind = AcquireStateKind.COMPLETE

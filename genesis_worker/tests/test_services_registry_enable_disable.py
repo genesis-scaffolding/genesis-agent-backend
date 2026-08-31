@@ -48,7 +48,7 @@ def test_bootstrap_auto_enables_installed_services(
 
 def test_bootstrap_persists_initial_state(tmp_path: Path) -> None:
     """After bootstrap, the state file exists with the resolved set."""
-    reg = ServiceRegistry(_settings(tmp_path))
+    ServiceRegistry(_settings(tmp_path))
     state_file = tmp_path / "state" / "enabled_services.yaml"
     assert state_file.is_file()
 
@@ -100,9 +100,7 @@ def test_disable_marks_disabled_and_persists(tmp_path: Path) -> None:
     assert not reg2.is_enabled("llama_swap")
 
 
-def test_disable_raises_when_running(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_disable_raises_when_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The framework-level running guard mirrors the UI's disabled toggle."""
     from genesis_worker.services.llama_swap import LlamaSwapService
 
@@ -154,9 +152,7 @@ def test_enabled_and_disabled_partition_registry(
     assert enabled_names | disabled_names == all_names
 
 
-def test_enabled_names_returns_a_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_enabled_names_returns_a_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The returned set must not let callers mutate the registry's state."""
     from genesis_worker.services.llama_swap import LlamaSwapService
 

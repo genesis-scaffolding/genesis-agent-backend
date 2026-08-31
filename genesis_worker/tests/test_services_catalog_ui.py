@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 _PAGE = Path(__file__).resolve().parents[1] / "ui" / "services_catalog.py"
 
 

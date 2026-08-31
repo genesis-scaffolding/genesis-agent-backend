@@ -155,12 +155,22 @@ def test_compute_content_hash_ignores_directory_notes_extra(tmp_path: Path) -> N
     """directory/notes/extra are not part of the hash."""
     p = _piece("main", "x.gguf", 100)
     base = ModelEntry(
-        name="a/b", source="huggingface", pieces=[p],
-        total_bytes=100, directory="/old/path", notes=[], extra={},
+        name="a/b",
+        source="huggingface",
+        pieces=[p],
+        total_bytes=100,
+        directory="/old/path",
+        notes=[],
+        extra={},
     )
     same = ModelEntry(
-        name="a/b", source="huggingface", pieces=[p],
-        total_bytes=100, directory="/totally/different", notes=["x"], extra={"k": "v"},
+        name="a/b",
+        source="huggingface",
+        pieces=[p],
+        total_bytes=100,
+        directory="/totally/different",
+        notes=["x"],
+        extra={"k": "v"},
     )
     assert compute_content_hash([base]) == compute_content_hash([same])
 

@@ -279,8 +279,10 @@ def test_evaluate_model_config_returns_empty_for_empty_catalog(tmp_path: Path) -
     from genesis_worker.contracts.catalog import Catalog
 
     catalog = Catalog(
-        root=str(tmp_path), generated_at="2026-01-01T00:00:00+00:00",
-        content_hash="x", entries=[],
+        root=str(tmp_path),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[],
     )
     assert svc.evaluate_model_config(catalog) == {}
 
@@ -470,7 +472,9 @@ def test_variant_resolution_auto_falls_back_to_cpu(tmp_path: Path, monkeypatch) 
     assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
 
 
-def test_variant_resolution_auto_returns_none_when_nothing_installed(tmp_path: Path, monkeypatch) -> None:
+def test_variant_resolution_auto_returns_none_when_nothing_installed(
+    tmp_path: Path, monkeypatch
+) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
     monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
     assert svc._default_llama_server_binary() is None  # noqa: SLF001
@@ -624,9 +628,7 @@ def test_upstream_llama_cpu_asset_matches_real_naming() -> None:
     """Upstream CPU assets use ``bin-ubuntu-x64.tar.gz``."""
     from genesis_worker.services.llama_swap.installs import _upstream_llama_cpu_asset
 
-    assert _upstream_llama_cpu_asset(
-        {"name": "llama-b10375-bin-ubuntu-x64.tar.gz"}
-    ) is True
+    assert _upstream_llama_cpu_asset({"name": "llama-b10375-bin-ubuntu-x64.tar.gz"}) is True
     for name in (
         "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz",
         "llama-b10375-bin-ubuntu-arm64.tar.gz",
@@ -641,9 +643,9 @@ def test_upstream_llama_vulkan_asset_matches_real_naming() -> None:
         _upstream_llama_vulkan_asset,
     )
 
-    assert _upstream_llama_vulkan_asset(
-        {"name": "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz"}
-    ) is True
+    assert (
+        _upstream_llama_vulkan_asset({"name": "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz"}) is True
+    )
     for name in (
         "llama-b10375-bin-ubuntu-x64.tar.gz",
         "llama-b10375-bin-ubuntu-arm64.tar.gz",

@@ -111,8 +111,18 @@ def test_add_appends_rows(tmp_path: Path) -> None:
     catalog = _make_catalog([])
     errors = applier.add(
         [
-            {"source": "huggingface", "entry": "Org/Repo1", "piece": "x.safetensors", "target_subdir": "checkpoints"},
-            {"source": "huggingface", "entry": "Org/Repo2", "piece": "y.safetensors", "target_subdir": "loras"},
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo1",
+                "piece": "x.safetensors",
+                "target_subdir": "checkpoints",
+            },
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo2",
+                "piece": "y.safetensors",
+                "target_subdir": "loras",
+            },
         ]
     )
     assert errors == []
@@ -124,10 +134,24 @@ def test_add_rejects_duplicate(tmp_path: Path) -> None:
     applier = _make_applier(tmp_path)
     catalog = _make_catalog([])
     applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo1", "piece": "x.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo1",
+                "piece": "x.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     errors = applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo1", "piece": "x.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo1",
+                "piece": "x.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     assert len(errors) == 1
     assert "duplicate" in errors[0]
@@ -140,7 +164,12 @@ def test_add_rejects_invalid_rows(tmp_path: Path) -> None:
     mixed_input: list[object] = [
         {"source": "huggingface"},
         "not a dict",
-        {"source": "huggingface", "entry": "a/b", "piece": "x.safetensors", "target_subdir": "checkpoints"},
+        {
+            "source": "huggingface",
+            "entry": "a/b",
+            "piece": "x.safetensors",
+            "target_subdir": "checkpoints",
+        },
     ]
     errors = applier.add(mixed_input)  # type: ignore[arg-type]
     assert len(errors) == 2
@@ -158,8 +187,18 @@ def test_remove_drops_rows(tmp_path: Path) -> None:
     )
     applier.add(
         [
-            {"source": "huggingface", "entry": "Org/Repo1", "piece": "x.safetensors", "target_subdir": "checkpoints"},
-            {"source": "huggingface", "entry": "Org/Repo2", "piece": "y.safetensors", "target_subdir": "loras"},
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo1",
+                "piece": "x.safetensors",
+                "target_subdir": "checkpoints",
+            },
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo2",
+                "piece": "y.safetensors",
+                "target_subdir": "loras",
+            },
         ]
     )
     rows = applier.list_current(catalog)
@@ -178,7 +217,14 @@ def test_apply_creates_symlinks_from_yaml(tmp_path: Path) -> None:
         [("huggingface", "Qwen/Qwen-Image", "qwen.safetensors", blobs["qwen.safetensors"])]
     )
     applier.add(
-        [{"source": "huggingface", "entry": "Qwen/Qwen-Image", "piece": "qwen.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Qwen/Qwen-Image",
+                "piece": "qwen.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     result = applier.apply(catalog)
     assert len(result.created) == 1
@@ -205,7 +251,14 @@ def test_apply_rewrites_existing_absolute_symlink_as_relative(tmp_path: Path) ->
     assert sym.readlink().is_absolute()
 
     applier.add(
-        [{"source": "huggingface", "entry": "Qwen/Qwen-Image", "piece": "qwen.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Qwen/Qwen-Image",
+                "piece": "qwen.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     catalog = _make_catalog(
         [("huggingface", "Qwen/Qwen-Image", "qwen.safetensors", blobs["qwen.safetensors"])]
@@ -221,9 +274,18 @@ def test_apply_rewrites_existing_absolute_symlink_as_relative(tmp_path: Path) ->
 def test_apply_handles_missing_catalog_entry(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
     applier = _make_applier(tmp_path)
-    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
+    catalog = _make_catalog(
+        [("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])]
+    )
     applier.add(
-        [{"source": "huggingface", "entry": "Org/NOT-THERE", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/NOT-THERE",
+                "piece": "foo.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     result = applier.apply(catalog)
     assert len(result.errors) == 1
@@ -234,9 +296,18 @@ def test_apply_handles_missing_catalog_entry(tmp_path: Path) -> None:
 def test_apply_refuses_to_clobber_regular_file(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
     applier = _make_applier(tmp_path)
-    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
+    catalog = _make_catalog(
+        [("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])]
+    )
     applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo",
+                "piece": "foo.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     target = tmp_path / "vault" / "comfyui" / "checkpoints" / "foo.safetensors"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -249,9 +320,18 @@ def test_apply_refuses_to_clobber_regular_file(tmp_path: Path) -> None:
 def test_apply_replaces_wrong_target_symlink(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors", "bar.safetensors"])
     applier = _make_applier(tmp_path)
-    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
+    catalog = _make_catalog(
+        [("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])]
+    )
     applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo",
+                "piece": "foo.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     target = tmp_path / "vault" / "comfyui" / "checkpoints" / "foo.safetensors"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -265,9 +345,18 @@ def test_apply_replaces_wrong_target_symlink(tmp_path: Path) -> None:
 def test_apply_is_idempotent(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
     applier = _make_applier(tmp_path)
-    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
+    catalog = _make_catalog(
+        [("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])]
+    )
     applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo",
+                "piece": "foo.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     first = applier.apply(catalog)
     second = applier.apply(catalog)
@@ -282,9 +371,18 @@ def test_apply_is_idempotent(tmp_path: Path) -> None:
 def test_prune_removes_dangling_symlinks(tmp_path: Path) -> None:
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
     applier = _make_applier(tmp_path)
-    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
+    catalog = _make_catalog(
+        [("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])]
+    )
     applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo",
+                "piece": "foo.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     applier.apply(catalog)
 
@@ -330,9 +428,18 @@ def test_list_current_reports_dangling_via_symlink(tmp_path: Path) -> None:
     """
     blobs = _make_blobs(tmp_path, ["foo.safetensors"])
     applier = _make_applier(tmp_path)
-    catalog = _make_catalog([("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])])
+    catalog = _make_catalog(
+        [("huggingface", "Org/Repo", "foo.safetensors", blobs["foo.safetensors"])]
+    )
     applier.add(
-        [{"source": "huggingface", "entry": "Org/Repo", "piece": "foo.safetensors", "target_subdir": "checkpoints"}]
+        [
+            {
+                "source": "huggingface",
+                "entry": "Org/Repo",
+                "piece": "foo.safetensors",
+                "target_subdir": "checkpoints",
+            }
+        ]
     )
     applier.apply(catalog)
     blobs["foo.safetensors"].unlink()

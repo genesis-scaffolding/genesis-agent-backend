@@ -12,9 +12,9 @@ from genesis_worker.contracts import ModelEntry
 
 
 def format_bytes(n: int) -> str:
-    if n < 1024 ** 3:
-        return f"{n / 1024 ** 2:.1f} MB"
-    return f"{n / 1024 ** 3:.1f} GB"
+    if n < 1024**3:
+        return f"{n / 1024**2:.1f} MB"
+    return f"{n / 1024**3:.1f} GB"
 
 
 def render_entry(entry: ModelEntry) -> None:
@@ -26,10 +26,7 @@ def render_entry(entry: ModelEntry) -> None:
     main files appear above config files.
     """
     st.markdown(f"**Source:** {entry.source}")
-    st.markdown(
-        f"**Total:** {format_bytes(entry.total_bytes)} "
-        f"({len(entry.pieces)} files)"
-    )
+    st.markdown(f"**Total:** {format_bytes(entry.total_bytes)} ({len(entry.pieces)} files)")
 
     if entry.pieces:
         rows = [

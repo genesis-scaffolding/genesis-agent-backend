@@ -48,15 +48,11 @@ class LlamaSwapService(InferenceService):
 
         self._config_path = opts.config_path or ctx.data_dir / "config.yaml"
         self._bundled_recipes_path = BUNDLED_RECIPES_PATH
-        self._override_recipes_path = (
-            opts.recipes_path or self._config_path.parent / "recipes.yaml"
-        )
+        self._override_recipes_path = opts.recipes_path or self._config_path.parent / "recipes.yaml"
         self._overrides_path = self._config_path.parent / "overrides.yaml"
         self._log_file = opts.log_file or ctx.log_dir / "llama-swap.log"
 
-        self._recipes = RecipesStore(
-            [self._bundled_recipes_path, self._override_recipes_path]
-        )
+        self._recipes = RecipesStore([self._bundled_recipes_path, self._override_recipes_path])
         self._recipes_overlay = RecipesOverlayStore(self._override_recipes_path)
         self._overrides = OverridesStore(self._overrides_path)
 
@@ -156,9 +152,7 @@ class LlamaSwapService(InferenceService):
     def set_llama_server_variant(self, variant: str | None) -> None:
         """UI write path. ``None`` reverts to legacy fallback."""
         if variant not in ("auto", "cuda", "cpu", "vulkan", None):
-            raise ValueError(
-                f"unknown variant {variant!r}; expected auto/cuda/cpu/vulkan or None"
-            )
+            raise ValueError(f"unknown variant {variant!r}; expected auto/cuda/cpu/vulkan or None")
         self._options.llama_server_variant = variant  # type: ignore[assignment]
 
     def _default_llama_server_binary(self) -> str | None:
@@ -448,11 +442,11 @@ class LlamaSwapService(InferenceService):
     def ui_pages(self) -> list[UiPage]:
         ui_dir = Path(__file__).parent / "ui"
         return [
-            UiPage("Status",        ":material/monitor:",   ui_dir / "status.py"),
-            UiPage("Binaries",      ":material/inventory_2:", ui_dir / "binaries.py"),
-            UiPage("Config editor", ":material/tune:",      ui_dir / "config_editor.py"),
-            UiPage("Recipes view",  ":material/menu_book:", ui_dir / "recipes_view.py"),
-            UiPage("Pi export",     ":material/download:",  ui_dir / "pi_export.py"),
+            UiPage("Status", ":material/monitor:", ui_dir / "status.py"),
+            UiPage("Binaries", ":material/inventory_2:", ui_dir / "binaries.py"),
+            UiPage("Config editor", ":material/tune:", ui_dir / "config_editor.py"),
+            UiPage("Recipes view", ":material/menu_book:", ui_dir / "recipes_view.py"),
+            UiPage("Pi export", ":material/download:", ui_dir / "pi_export.py"),
         ]
 
 

@@ -175,8 +175,12 @@ def test_start_then_status_running_then_stop(fake_swap_env) -> None:
     _serve_in_background(port, body)
 
     result = lifecycle.start_swap(
-        binary=binary, config=config, listen_addr=listen, session_name=session,
-        log_file=log, health_timeout_s=5.0,
+        binary=binary,
+        config=config,
+        listen_addr=listen,
+        session_name=session,
+        log_file=log,
+        health_timeout_s=5.0,
     )
     assert result.ok, f"start_swap failed: {result.message}"
     assert result.message == f"started {session}"
@@ -215,9 +219,7 @@ def test_stop_swap_waits_for_children_before_tearing_down_tmux(
         pytest.skip("tmux not available")
 
     session = "swap-graceful-test"
-    subprocess.run(
-        ["tmux", "kill-session", "-t", session], check=False, capture_output=True
-    )
+    subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
 
     # Write the fixture via Path.write_text (not a shell heredoc) so the
     # test runner's own bash command line doesn't contain the substring
@@ -225,9 +227,7 @@ def test_stop_swap_waits_for_children_before_tearing_down_tmux(
     # the real process under test.
     server = tmp_path / "llama-server"
     server.write_text(
-        "#!/usr/bin/env bash\n"
-        "trap 'sleep 1; exit 0' INT\n"
-        "while true; do sleep 60; done\n"
+        "#!/usr/bin/env bash\ntrap 'sleep 1; exit 0' INT\nwhile true; do sleep 60; done\n"
     )
     server.chmod(0o755)
 
@@ -235,7 +235,11 @@ def test_stop_swap_waits_for_children_before_tearing_down_tmux(
     # its argv. ``send-keys C-c`` later delivers SIGINT to that process.
     subprocess.run(
         [
-            "tmux", "new-session", "-d", "-s", session,
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            session,
             f"exec {server}",
         ],
         check=False,
@@ -265,21 +269,19 @@ def test_stop_swap_falls_back_to_hard_cleanup_on_timeout(
         pytest.skip("tmux not available")
 
     session = "swap-hardcleanup-test"
-    subprocess.run(
-        ["tmux", "kill-session", "-t", session], check=False, capture_output=True
-    )
+    subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
 
     server = tmp_path / "llama-server"
-    server.write_text(
-        "#!/usr/bin/env bash\n"
-        "trap '' INT\n"
-        "while true; do sleep 60; done\n"
-    )
+    server.write_text("#!/usr/bin/env bash\ntrap '' INT\nwhile true; do sleep 60; done\n")
     server.chmod(0o755)
 
     subprocess.run(
         [
-            "tmux", "new-session", "-d", "-s", session,
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            session,
             f"exec {server}",
         ],
         check=False,

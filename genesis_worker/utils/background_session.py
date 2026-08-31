@@ -30,11 +30,13 @@ class _Canceled(Exception):
     """
 
 
-_INTERACTIVE_KINDS = frozenset({
-    AcquireStateKind.INSPECTING,
-    AcquireStateKind.SELECTING,
-    AcquireStateKind.CONFIRMING,
-})
+_INTERACTIVE_KINDS = frozenset(
+    {
+        AcquireStateKind.INSPECTING,
+        AcquireStateKind.SELECTING,
+        AcquireStateKind.CONFIRMING,
+    }
+)
 
 
 class BackgroundSession(AcquireSession):
@@ -107,7 +109,7 @@ class BackgroundSession(AcquireSession):
         with self._log_lock:
             self._state.log_tail.append(line)
             if len(self._state.log_tail) > 200:
-                del self._state.log_tail[:len(self._state.log_tail) - 200]
+                del self._state.log_tail[: len(self._state.log_tail) - 200]
 
     @abstractmethod
     def view(self) -> AcquireView: ...

@@ -145,9 +145,7 @@ class TmuxProcess:
             return StopResult(ok=True, message="no session")
 
         wait_for_children = getattr(self, "_wait_for_children", None)
-        child_wait_timeout_s = getattr(
-            self, "_child_wait_timeout_s", _DEFAULT_CHILD_WAIT_TIMEOUT_S
-        )
+        child_wait_timeout_s = getattr(self, "_child_wait_timeout_s", _DEFAULT_CHILD_WAIT_TIMEOUT_S)
 
         graceful = True
         if wait_for_children is not None:
