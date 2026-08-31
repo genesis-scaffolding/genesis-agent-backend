@@ -64,11 +64,11 @@ def _config_with(entries: list[tuple[str, dict]]) -> str:
     ]
     for entry_id, body in entries:
         lines.append(f"  {entry_id}:")
-        lines.append(f"    name: \"{body['name']}\"")
+        lines.append(f'    name: "{body["name"]}"')
         lines.append("    cmd: |")
         for cl in body["cmd"].split("\n"):
             lines.append("      " + cl)
-        lines.append(f"    proxy: \"{body['proxy']}\"")
+        lines.append(f'    proxy: "{body["proxy"]}"')
         lines.append(f"    ttl: {body['ttl']}")
     return "\n".join(lines) + "\n"
 
@@ -184,7 +184,10 @@ def test_model_context_window_from_fit_ctx(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(_config_with([_entry("m", fit_ctx=65536)]))
     provider = build_provider(cfg)
-    assert provider["providers"][next(iter(provider["providers"]))]["models"][0]["contextWindow"] == 65536
+    assert (
+        provider["providers"][next(iter(provider["providers"]))]["models"][0]["contextWindow"]
+        == 65536
+    )
 
 
 def test_model_context_window_default_when_missing(tmp_path: Path) -> None:
@@ -261,7 +264,10 @@ def test_model_cost_zeros(tmp_path: Path) -> None:
     provider = build_provider(cfg)
     inner = next(iter(provider["providers"].values()))
     assert inner["models"][0]["cost"] == {
-        "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
     }
 
 
@@ -293,6 +299,7 @@ def test_write_models_json_preserves_mtime_when_unchanged(tmp_path: Path) -> Non
     mtime_before = target.stat().st_mtime_ns
 
     import time
+
     time.sleep(0.01)
     wrote = write_models_json(target, provider)
     assert wrote is False

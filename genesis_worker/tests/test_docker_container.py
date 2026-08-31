@@ -23,7 +23,9 @@ def _completed(
     stderr: str = "",
 ) -> subprocess.CompletedProcess:
     """Build a CompletedProcess as if subprocess.run returned it."""
-    return subprocess.CompletedProcess(args=args, returncode=returncode, stdout=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(
+        args=args, returncode=returncode, stdout=stdout, stderr=stderr
+    )
 
 
 def _patch_subprocess(monkeypatch: pytest.MonkeyPatch, *, respond: Any) -> None:
@@ -116,7 +118,10 @@ def test_run_calls_remove_first_then_docker_run(monkeypatch: pytest.MonkeyPatch)
     assert "c1" in run_call
     assert "--restart" in run_call
     assert "unless-stopped" in run_call
-    assert run_call[-2:] == ["ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64", "--verbose"]
+    assert run_call[-2:] == [
+        "ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64",
+        "--verbose",
+    ]
 
 
 def test_run_passes_ports_volumes_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,7 +339,9 @@ def test_list_local_tags_parses_lines(monkeypatch: pytest.MonkeyPatch) -> None:
         "ghcr.io/genesis-scaffolding/comfyui-cuda:v0.33.0-cuda-12.8-amd64\n"
         "ghcr.io/genesis-scaffolding/comfyui-cuda:latest\n"
     )
-    monkeypatch.setattr(subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body))
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body)
+    )
     tags = DockerContainer.list_local_tags("ghcr.io/genesis-scaffolding/comfyui-cuda")
     assert tags == [
         "v0.34.0-cuda-13.0-amd64",
@@ -349,11 +356,10 @@ def test_list_local_tags_empty_on_nonzero(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_list_local_tags_filters_unrelated_repo(monkeypatch: pytest.MonkeyPatch) -> None:
-    body = (
-        "ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64\n"
-        "other/repo:latest\n"
+    body = "ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64\nother/repo:latest\n"
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body)
     )
-    monkeypatch.setattr(subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body))
     tags = DockerContainer.list_local_tags("ghcr.io/genesis-scaffolding/comfyui-cuda")
     assert tags == ["v0.34.0-cuda-13.0-amd64"]
 
@@ -592,13 +598,17 @@ def test_docker_available_false(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_nvidia_runtime_available_true(monkeypatch: pytest.MonkeyPatch) -> None:
     body = "Runtimes: io.containerd.runc.v2 nvidia runc\n"
-    monkeypatch.setattr(subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body))
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body)
+    )
     assert DockerContainer.nvidia_runtime_available() is True
 
 
 def test_nvidia_runtime_available_false(monkeypatch: pytest.MonkeyPatch) -> None:
     body = "Runtimes: io.containerd.runc.v2 runc\n"
-    monkeypatch.setattr(subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body))
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body)
+    )
     assert DockerContainer.nvidia_runtime_available() is False
 
 

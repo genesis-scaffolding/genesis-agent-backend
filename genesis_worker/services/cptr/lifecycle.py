@@ -35,10 +35,7 @@ def start_cptr(
 
     tmux = TmuxProcess(session_name)
 
-    cmd = (
-        f"{shlex.quote(str(binary))} run "
-        f"--host {shlex.quote(host)} --port {port}"
-    )
+    cmd = f"{shlex.quote(str(binary))} run --host {shlex.quote(host)} --port {port}"
     result = tmux.start(cmd, log_file)
     if not result.ok:
         return result

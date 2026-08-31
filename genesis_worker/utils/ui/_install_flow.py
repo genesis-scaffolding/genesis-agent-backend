@@ -18,7 +18,9 @@ import streamlit as st
 from ...contracts import AcquireSession, AcquireStateKind, AcquireView, ServiceInstall
 
 
-def render_inline_install(installable: ServiceInstall, *, key_prefix: str, use_container_width: bool = False) -> None:
+def render_inline_install(
+    installable: ServiceInstall, *, key_prefix: str, use_container_width: bool = False
+) -> None:
     """Render an Install button; on click, run the install and stream progress.
 
     ``key_prefix`` namespaces the Streamlit widget keys. Two prefixes on
@@ -34,18 +36,31 @@ def render_inline_install(installable: ServiceInstall, *, key_prefix: str, use_c
     drop_key = f"{key_prefix}/drop_pending"
 
     if sess_key in st.session_state:
-        _render_inflight(sess_key=sess_key, drop_key=drop_key, key_prefix=key_prefix, use_container_width=use_container_width)
+        _render_inflight(
+            sess_key=sess_key,
+            drop_key=drop_key,
+            key_prefix=key_prefix,
+            use_container_width=use_container_width,
+        )
     else:
-        if st.button("Install", key=f"{key_prefix}-install", use_container_width=use_container_width):
+        if st.button(
+            "Install", key=f"{key_prefix}-install", use_container_width=use_container_width
+        ):
             st.session_state[sess_key] = installable.install()
             st.rerun()
 
 
-def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str, use_container_width: bool = False) -> None:
+def _render_inflight(
+    *, sess_key: str, drop_key: str, key_prefix: str, use_container_width: bool = False
+) -> None:
     session: AcquireSession = st.session_state[sess_key]
     step = session.view()
 
-    if step.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED):
+    if step.kind in (
+        AcquireStateKind.COMPLETE,
+        AcquireStateKind.FAILED,
+        AcquireStateKind.CANCELLED,
+    ):
         _render_step(step)
         if st.session_state.get(drop_key):
             st.session_state.pop(sess_key, None)
@@ -53,7 +68,9 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str, use_conta
             st.rerun()
         else:
             st.session_state[drop_key] = True
-            if st.button("Dismiss", key=f"{key_prefix}-dismiss", use_container_width=use_container_width):
+            if st.button(
+                "Dismiss", key=f"{key_prefix}-dismiss", use_container_width=use_container_width
+            ):
                 st.session_state.pop(sess_key, None)
                 st.session_state.pop(drop_key, None)
                 st.rerun()
@@ -68,9 +85,11 @@ def _render_inflight(*, sess_key: str, drop_key: str, key_prefix: str, use_conta
         session: AcquireSession = st.session_state[sess_key]
         current = session.view()
         _render_step(current)
-        if current.kind in (AcquireStateKind.COMPLETE, AcquireStateKind.FAILED, AcquireStateKind.CANCELLED) and not st.session_state.get(
-            drop_key
-        ):
+        if current.kind in (
+            AcquireStateKind.COMPLETE,
+            AcquireStateKind.FAILED,
+            AcquireStateKind.CANCELLED,
+        ) and not st.session_state.get(drop_key):
             st.session_state[drop_key] = True
             st.rerun(scope="app")
 

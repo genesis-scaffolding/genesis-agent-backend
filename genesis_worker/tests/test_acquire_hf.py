@@ -48,9 +48,7 @@ def _make_api(files: list[tuple[str, int]]) -> MagicMock:
     return api
 
 
-def _wait_for_terminal(
-    session: HfAcquireSession, *, timeout: float = 2.0
-) -> None:
+def _wait_for_terminal(session: HfAcquireSession, *, timeout: float = 2.0) -> None:
     """Block until the session reaches COMPLETE/FAILED/CANCELLED.
 
     The download runs in a background thread; tests that need the
@@ -121,8 +119,10 @@ def test_mmproj_only_passes_inspection_but_rejected_on_submit(tmp_path: Path) ->
 def test_safetensor_repo_passes_inspection_and_submit(tmp_path: Path) -> None:
     """A safetensor-only repo surfaces in SELECTING and can be submitted."""
     api = _make_api(
-        [("diffusion_model.safetensors", 5_000_000_000),
-         ("text_encoder.safetensors", 3_000_000_000)]
+        [
+            ("diffusion_model.safetensors", 5_000_000_000),
+            ("text_encoder.safetensors", 3_000_000_000),
+        ]
     )
     state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="acme/comfy-model")
     session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
@@ -142,9 +142,7 @@ def test_safetensor_repo_passes_inspection_and_submit(tmp_path: Path) -> None:
 
 def test_safetensor_multi_select_downloads_all(tmp_path: Path) -> None:
     """Multi-select safetensors are all downloaded."""
-    api = _make_api(
-        [("a.safetensors", 1_000_000_000), ("b.safetensors", 2_000_000_000)]
-    )
+    api = _make_api([("a.safetensors", 1_000_000_000), ("b.safetensors", 2_000_000_000)])
     state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="acme/multi")
     recorded: list[dict[str, Any]] = []
 
@@ -153,7 +151,10 @@ def test_safetensor_multi_select_downloads_all(tmp_path: Path) -> None:
         return "/tmp/fake"
 
     session = HfAcquireSession(
-        api=api, hf_state=state, cache_dir=tmp_path, hf_hub_download=fake_download,
+        api=api,
+        hf_state=state,
+        cache_dir=tmp_path,
+        hf_hub_download=fake_download,
     )
     session.view()
     session.submit(HfAcquireChoice(main_indexes=[1, 2]))
@@ -264,8 +265,10 @@ def test_full_happy_path_records_hf_hub_download_calls(tmp_path: Path) -> None:
         return "/tmp/fake-blob"
 
     session = HfAcquireSession(
-        api=api, hf_state=state,
-        cache_dir=tmp_path, hf_hub_download=fake_download,
+        api=api,
+        hf_state=state,
+        cache_dir=tmp_path,
+        hf_hub_download=fake_download,
     )
     session.submit(HfAcquireChoice(confirm=True))
     view = session.view()
@@ -400,8 +403,10 @@ def test_cancel_mid_download_aborts_thread(tmp_path: Path) -> None:
         return "/tmp/fake"
 
     session = HfAcquireSession(
-        api=api, hf_state=state,
-        cache_dir=tmp_path, hf_hub_download=slow_download,
+        api=api,
+        hf_state=state,
+        cache_dir=tmp_path,
+        hf_hub_download=slow_download,
     )
     session.submit(HfAcquireChoice(confirm=True))
     download_started.wait(timeout=2.0)
@@ -433,7 +438,9 @@ def test_progress_lines_visible_in_view(tmp_path: Path) -> None:
         return "/tmp/fake"
 
     state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="acme/demo")
-    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path, hf_hub_download=fake_download)
+    session = HfAcquireSession(
+        api=api, hf_state=state, cache_dir=tmp_path, hf_hub_download=fake_download
+    )
     session.view()  # inspect
     session.submit(HfAcquireChoice(main_indexes=[1]))
     session.submit(HfAcquireChoice(confirm=True))

@@ -37,8 +37,9 @@ def _run(args: list[str], *, timeout: float) -> subprocess.CompletedProcess:
     return subprocess.run(args, check=False, capture_output=True, text=True, timeout=timeout)
 
 
-def _http_get_json(url: str, *, headers: dict[str, str] | None = None,
-                   timeout: float = 30.0) -> Any:
+def _http_get_json(
+    url: str, *, headers: dict[str, str] | None = None, timeout: float = 30.0
+) -> Any:
     """Fetch ``url`` and parse JSON. Headers default to UA."""
     h = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
     if headers:
@@ -252,7 +253,7 @@ class DockerContainer:
             line = line.strip()
             if not line or not line.startswith(prefix):
                 continue
-            out.append(line[len(prefix):])
+            out.append(line[len(prefix) :])
         return out
 
     @staticmethod

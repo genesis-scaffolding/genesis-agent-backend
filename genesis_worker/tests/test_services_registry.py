@@ -18,6 +18,7 @@ def _llama_swap(registry: ServiceRegistry) -> LlamaSwapService:
     assert isinstance(svc, LlamaSwapService)
     return svc
 
+
 # ---------------------------------------------------------------------------
 # Auto-discovery contract
 # ---------------------------------------------------------------------------
@@ -45,7 +46,11 @@ def test_registry_unknown_service_raises() -> None:
 
 def test_registry_all_returns_every_service() -> None:
     assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {
-        "llama_swap", "cptr", "comfyui", "sillytavern", "crawl4ai"
+        "llama_swap",
+        "cptr",
+        "comfyui",
+        "sillytavern",
+        "crawl4ai",
     }
 
 

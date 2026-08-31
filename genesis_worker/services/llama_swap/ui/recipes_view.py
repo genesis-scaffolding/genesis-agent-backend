@@ -54,22 +54,22 @@ with st.container(border=True):
     new_name = st.text_input("Recipe name", key="new-recipe-name")
     template = (
         'match: ""\n'
-        'binary: null\n'
-        'sampling:\n'
-        '  temp: 0.8\n'
-        '  top_p: 0.95\n'
-        '  top_k: 40\n'
-        '  min_p: 0.0\n'
-        '  presence_penalty: 0.0\n'
-        '  repeat_penalty: 1.0\n'
-        'chat_template_file: null\n'
-        'chat_template_kwargs: {}\n'
-        'parallel: null\n'
-        'spec: null\n'
-        'kv_cache: null\n'
-        'mmproj_offload: false\n'
-        'ctx_min: null\n'
-        'reasoning_budget: 0\n'
+        "binary: null\n"
+        "sampling:\n"
+        "  temp: 0.8\n"
+        "  top_p: 0.95\n"
+        "  top_k: 40\n"
+        "  min_p: 0.0\n"
+        "  presence_penalty: 0.0\n"
+        "  repeat_penalty: 1.0\n"
+        "chat_template_file: null\n"
+        "chat_template_kwargs: {}\n"
+        "parallel: null\n"
+        "spec: null\n"
+        "kv_cache: null\n"
+        "mmproj_offload: false\n"
+        "ctx_min: null\n"
+        "reasoning_budget: 0\n"
         'reasoning_budget_message: ""\n'
     )
     new_yaml = st.text_area(
@@ -111,7 +111,9 @@ with st.container(border=True):
                 language="yaml",
             )
             with st.expander("Override / Edit"):
-                st.caption("Edit the recipe body. Saving writes the whole recipe to the overlay file, replacing the bundled version.")
+                st.caption(
+                    "Edit the recipe body. Saving writes the whole recipe to the overlay file, replacing the bundled version."
+                )
                 default_yaml = yaml.safe_dump(
                     recipe.model_dump(exclude={"source", "name"}), sort_keys=False
                 )

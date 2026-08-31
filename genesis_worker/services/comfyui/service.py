@@ -208,8 +208,7 @@ class ComfyUiService(InferenceService):
                 # (e.g. ``../../huggingface/hub/...``) resolve correctly.
                 "/vault": str(self._vault_models_dir.parent),
             },
-            extra_args=["--models-directory", "/vault/comfyui",
-                         *self._options.extra_args],
+            extra_args=["--models-directory", "/vault/comfyui", *self._options.extra_args],
             env={"PUID": str(self._puid), "PGID": str(self._pgid)},
             runtime=runtime,
             gpu_flags=gpu_flags,
@@ -262,7 +261,9 @@ class ComfyUiService(InferenceService):
         ui_dir = Path(__file__).parent / "ui"
         return [
             UiPage("Status", ":material/monitor:", ui_dir / "status.py", url_path="comfyui_status"),
-            UiPage("Image", ":material/inventory_2:", ui_dir / "image.py", url_path="comfyui_image"),
+            UiPage(
+                "Image", ":material/inventory_2:", ui_dir / "image.py", url_path="comfyui_image"
+            ),
             UiPage("Models", ":material/link:", ui_dir / "models.py", url_path="comfyui_models"),
         ]
 

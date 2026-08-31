@@ -77,8 +77,10 @@ def test_start_calls_docker_run() -> None:
 def test_stop_calls_docker_stop_then_remove() -> None:
     """``stop_comfyui`` invokes ``DockerContainer.stop`` then ``remove``."""
     sentinel_stop = StopResult(ok=True, message="stopped")
-    with patch.object(lifecycle.DockerContainer, "stop", return_value=sentinel_stop) as mock_stop, \
-         patch.object(lifecycle.DockerContainer, "remove") as mock_remove:
+    with (
+        patch.object(lifecycle.DockerContainer, "stop", return_value=sentinel_stop) as mock_stop,
+        patch.object(lifecycle.DockerContainer, "remove") as mock_remove,
+    ):
         result = lifecycle.stop_comfyui("comfyui")
     assert result is sentinel_stop
     assert mock_stop.called
@@ -107,15 +109,19 @@ def test_status_returns_stopped_when_container_absent() -> None:
 
 
 def test_status_returns_running_when_probe_succeeds() -> None:
-    with patch.object(lifecycle.DockerContainer, "is_running", return_value=True), \
-         patch.object(lifecycle.HealthProbe, "probe", return_value=True):
+    with (
+        patch.object(lifecycle.DockerContainer, "is_running", return_value=True),
+        patch.object(lifecycle.HealthProbe, "probe", return_value=True),
+    ):
         status = lifecycle.status_comfyui("comfyui", "0.0.0.0", 8188)
     assert status.state == ServiceState.RUNNING
 
 
 def test_status_returns_starting_when_running_but_probe_fails() -> None:
-    with patch.object(lifecycle.DockerContainer, "is_running", return_value=True), \
-         patch.object(lifecycle.HealthProbe, "probe", return_value=False):
+    with (
+        patch.object(lifecycle.DockerContainer, "is_running", return_value=True),
+        patch.object(lifecycle.HealthProbe, "probe", return_value=False),
+    ):
         status = lifecycle.status_comfyui("comfyui", "0.0.0.0", 8188)
     assert status.state == ServiceState.STARTING
 

@@ -20,9 +20,9 @@ class UiPage:
     both llama_swap and cptr would both infer ``status`` and collide).
     """
 
-    label: str          # sidebar text
-    icon: str           # streamlit icon identifier (e.g. ":material/tune:")
-    path: Path          # absolute path to the .py file
+    label: str  # sidebar text
+    icon: str  # streamlit icon identifier (e.g. ":material/tune:")
+    path: Path  # absolute path to the .py file
     url_path: str | None = None  # inferred from filename when None
 
 

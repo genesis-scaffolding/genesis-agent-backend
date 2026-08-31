@@ -44,7 +44,10 @@ def collect_host_info() -> HostInfo:
         try:
             out = subprocess.run(
                 ["tailscale", "ip", "-1"],
-                capture_output=True, text=True, timeout=2, check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
             )
             if out.returncode == 0:
                 tailscale_ip = out.stdout.strip() or None

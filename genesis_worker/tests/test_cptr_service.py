@@ -39,11 +39,7 @@ def test_construction_defaults_log_file_to_log_dir(tmp_path: Path) -> None:
 
 def test_construction_respects_log_file_option(tmp_path: Path) -> None:
     custom = tmp_path / "my.log"
-    svc = CptrService(
-        service_ctx(
-            tmp_path, name="cptr", options={"log_file": str(custom)}
-        )
-    )
+    svc = CptrService(service_ctx(tmp_path, name="cptr", options={"log_file": str(custom)}))
     assert svc._log_file == custom  # noqa: SLF001
 
 
@@ -86,17 +82,13 @@ def test_installs_returns_cptr_installable(tmp_path: Path) -> None:
 # --- endpoints -------------------------------------------------------------
 
 
-def test_web_ui_endpoint_none_when_stopped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_web_ui_endpoint_none_when_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc = CptrService(service_ctx(tmp_path, name="cptr"))
     monkeypatch.setattr(svc, "is_running", lambda: False)
     assert svc.web_ui_endpoint() is None
 
 
-def test_web_ui_endpoint_uses_public_host_and_listen_port(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_web_ui_endpoint_uses_public_host_and_listen_port(tmp_path: Path, monkeypatch) -> None:
     svc = CptrService(
         service_ctx(
             tmp_path,
@@ -108,9 +100,7 @@ def test_web_ui_endpoint_uses_public_host_and_listen_port(
     assert svc.web_ui_endpoint() == "http://my-host:7777/"
 
 
-def test_web_ui_endpoint_falls_back_to_socket_gethostname(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_web_ui_endpoint_falls_back_to_socket_gethostname(tmp_path: Path, monkeypatch) -> None:
     svc = CptrService(service_ctx(tmp_path, name="cptr"))
     monkeypatch.setattr(svc, "is_running", lambda: True)
 
@@ -167,18 +157,14 @@ def test_stop_dispatches_to_lifecycle(tmp_path: Path) -> None:
 # --- uninstall guard ------------------------------------------------------
 
 
-def test_uninstall_installable_refuses_while_running(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_uninstall_installable_refuses_while_running(tmp_path: Path, monkeypatch) -> None:
     svc = CptrService(service_ctx(tmp_path, name="cptr"))
     monkeypatch.setattr(svc, "is_running", lambda: True)
     with pytest.raises(RuntimeError, match="cannot uninstall"):
         svc.uninstall_installable("cptr")
 
 
-def test_uninstall_installable_unknown_name_raises_keyerror(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_uninstall_installable_unknown_name_raises_keyerror(tmp_path: Path, monkeypatch) -> None:
     svc = CptrService(service_ctx(tmp_path, name="cptr"))
     monkeypatch.setattr(svc, "is_running", lambda: False)
     with pytest.raises(KeyError, match="unknown installable"):

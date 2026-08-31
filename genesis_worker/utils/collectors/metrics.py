@@ -11,8 +11,8 @@ def collect_metrics() -> MachineMetrics:
 
     cpu = psutil.cpu_percent(interval=None)
     vm = psutil.virtual_memory()
-    ram_used = float(vm.used) / (1024 ** 3)
-    ram_total = float(vm.total) / (1024 ** 3)
+    ram_used = float(vm.used) / (1024**3)
+    ram_total = float(vm.total) / (1024**3)
 
     gpu_percent: float | None = None
     vram_used: float | None = None
@@ -27,8 +27,8 @@ def collect_metrics() -> MachineMetrics:
             util = pynvml.nvmlDeviceGetUtilizationRates(handle)
             gpu_percent = float(util.gpu)
             mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            vram_used = float(mem.used) / (1024 ** 3)
-            vram_total = float(mem.total) / (1024 ** 3)
+            vram_used = float(mem.used) / (1024**3)
+            vram_total = float(mem.total) / (1024**3)
         finally:
             pynvml.nvmlShutdown()
     except Exception:  # noqa: BLE001, S110 — no NVIDIA driver is a graceful degradation

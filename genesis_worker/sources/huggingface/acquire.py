@@ -370,8 +370,7 @@ class HfAcquireSession(BackgroundSession):
 
         main_roles = {g.role for g in selected_groups}
         if not (
-            "safetensor" in main_roles
-            or (main_roles == {"main"} and len(selected_groups) == 1)
+            "safetensor" in main_roles or (main_roles == {"main"} and len(selected_groups) == 1)
         ):
             roles_seen = "/".join(sorted(main_roles)) or "(none)"
             self._last_select_error = (
@@ -416,7 +415,8 @@ class HfAcquireSession(BackgroundSession):
 
     def _compute_total_bytes(self) -> int | None:
         sizes = [
-            g.size for g in (*self._state.selected_main, *self._state.selected_aux)  # type: ignore[attr-defined]
+            g.size
+            for g in (*self._state.selected_main, *self._state.selected_aux)  # type: ignore[attr-defined]
         ]
         if all(s is not None for s in sizes):
             return sum(s for s in sizes if s is not None)
@@ -459,8 +459,7 @@ class HfAcquireSession(BackgroundSession):
                 done += group.size or 0
                 file_index = min(done, total_files)
                 self._append_log(
-                    f"Progress: {done}/{total} bytes "
-                    f"({file_index}/{total_files} files)"
+                    f"Progress: {done}/{total} bytes ({file_index}/{total_files} files)"
                 )
                 self._state.bytes_done = done
                 self._state.bytes_total = total

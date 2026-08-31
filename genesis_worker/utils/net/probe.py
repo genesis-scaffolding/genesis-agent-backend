@@ -55,9 +55,7 @@ class HealthProbe:
     def probe(self) -> bool:
         """Single synchronous probe. Returns True iff the response is HTTP 200."""
         try:
-            with urllib.request.urlopen(
-                self._url(), timeout=_DEFAULT_PROBE_TIMEOUT_S
-            ) as resp:
+            with urllib.request.urlopen(self._url(), timeout=_DEFAULT_PROBE_TIMEOUT_S) as resp:
                 return resp.status == 200
         except (
             urllib.error.URLError,

@@ -153,9 +153,7 @@ def status(session_name: str, listen_addr: str) -> ServiceStatus:
 def wait_ready(listen_addr: str, timeout_s: float) -> bool:
     """Poll ``/v1/models`` until it returns 200 or the timeout elapses."""
     host, port_str = listen_addr.rsplit(":", 1)
-    return HealthProbe(host, int(port_str), probe_path="/v1/models").wait_ready(
-        timeout_s
-    )
+    return HealthProbe(host, int(port_str), probe_path="/v1/models").wait_ready(timeout_s)
 
 
 __all__ = [

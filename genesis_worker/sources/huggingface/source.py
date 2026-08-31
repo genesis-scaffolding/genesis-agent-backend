@@ -46,8 +46,8 @@ class HuggingFaceSource(ModelSource):
     def ui_pages(self) -> list[UiPage]:
         ui_dir = Path(__file__).parent / "ui"
         return [
-            UiPage("Acquire model",   ":material/cloud_download:", ui_dir / "acquire.py"),
-            UiPage("Active sessions", ":material/schedule:",       ui_dir / "session_list.py"),
+            UiPage("Acquire model", ":material/cloud_download:", ui_dir / "acquire.py"),
+            UiPage("Active sessions", ":material/schedule:", ui_dir / "session_list.py"),
         ]
 
     def is_available(self) -> bool:

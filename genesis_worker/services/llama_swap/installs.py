@@ -37,9 +37,7 @@ def _find_asset_by_suffix(assets: list[dict[str, Any]], suffix: str) -> dict[str
     return None
 
 
-def _resolve_binary(
-    install_root: Path, name: str, *, legacy_rel: str | None = None
-) -> Path | None:
+def _resolve_binary(install_root: Path, name: str, *, legacy_rel: str | None = None) -> Path | None:
     """Locate a binary file inside the extracted install tree.
 
     Order:
@@ -90,9 +88,7 @@ def _ai_dock_llama_cpp_cuda_asset(asset: dict[str, Any]) -> bool:
     return bool(_LLAMA_CPP_CUDA_AMD64_TARBALL_RE.match(asset.get("name", "")))
 
 
-_UPSTREAM_LLAMA_CPU_TARBALL_RE = re.compile(
-    r"^llama-.+-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE
-)
+_UPSTREAM_LLAMA_CPU_TARBALL_RE = re.compile(r"^llama-.+-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE)
 _UPSTREAM_LLAMA_VULKAN_TARBALL_RE = re.compile(
     r"^llama-.+-bin-ubuntu-vulkan-x64\.tar\.gz$", re.IGNORECASE
 )
@@ -139,8 +135,7 @@ class LlamaSwapBinary(ServiceInstall):
             ),
             binary_rel="llama-swap",
             checksums_url=lambda rel: (
-                _find_asset_by_suffix(rel.get("assets", []), "_checksums.txt")
-                or {}
+                _find_asset_by_suffix(rel.get("assets", []), "_checksums.txt") or {}
             ).get("browser_download_url"),
             secrets=secrets,
         )

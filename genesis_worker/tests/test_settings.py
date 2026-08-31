@@ -51,9 +51,7 @@ def test_settings_xdg_env_var_overrides_default(monkeypatch: pytest.MonkeyPatch)
 def test_settings_resolved_vault_path_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GENESIS_PATHS__VAULT_PATH", raising=False)
     monkeypatch.delenv("MODELS_ROOT", raising=False)
-    monkeypatch.setattr(
-        "genesis_worker.settings._read_models_root", lambda: None
-    )
+    monkeypatch.setattr("genesis_worker.settings._read_models_root", lambda: None)
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.paths.resolved_vault_path == s.paths.data_dir / "vault"
 
@@ -70,9 +68,7 @@ def test_settings_resolved_vault_path_models_root_fallback(
     """MODELS_ROOT from os.environ is a backward-compat synonym for vault_path."""
     monkeypatch.delenv("GENESIS_PATHS__VAULT_PATH", raising=False)
     monkeypatch.delenv("MODELS_ROOT", raising=False)
-    monkeypatch.setattr(
-        "genesis_worker.settings._read_models_root", lambda: "/srv/models"
-    )
+    monkeypatch.setattr("genesis_worker.settings._read_models_root", lambda: "/srv/models")
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.paths.resolved_vault_path == Path("/srv/models")
 
@@ -81,9 +77,7 @@ def test_settings_explicit_vault_path_wins_over_models_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GENESIS_PATHS__VAULT_PATH", "/srv/vault")
-    monkeypatch.setattr(
-        "genesis_worker.settings._read_models_root", lambda: "/srv/models"
-    )
+    monkeypatch.setattr("genesis_worker.settings._read_models_root", lambda: "/srv/models")
     s = Settings()  # type: ignore[call-arg]
     assert s.paths.resolved_vault_path == Path("/srv/vault")
 
@@ -104,8 +98,10 @@ def test_xdg_base_drives_every_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The constant is load-bearing: change it and every directory follows."""
     monkeypatch.setattr(settings_module, "XDG_BASE", "renamed")
     paths = PathsSettings()
-    assert {p.name for p in (paths.data_dir, paths.config_dir, paths.cache_dir,
-                             paths.state_dir, paths.log_dir)} == {"renamed"}
+    assert {
+        p.name
+        for p in (paths.data_dir, paths.config_dir, paths.cache_dir, paths.state_dir, paths.log_dir)
+    } == {"renamed"}
 
 
 def test_plugin_option_slices_are_opaque_to_the_framework() -> None:

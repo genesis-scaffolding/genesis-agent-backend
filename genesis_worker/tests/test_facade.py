@@ -22,9 +22,7 @@ def test_facade_lists_services(tmp_path: Path) -> None:
     assert any(s.name == "llama_swap" for s in services)
 
 
-def test_list_enabled_services_filters_by_registry_state(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_list_enabled_services_filters_by_registry_state(tmp_path: Path, monkeypatch) -> None:
     """list_enabled_services() must only return services the registry has enabled.
 
     Hermetic: uses a tmp state_dir so we don't pollute user state, and
@@ -68,9 +66,7 @@ def test_service_info_carries_category_and_description(tmp_path: Path) -> None:
     from genesis_worker.contracts import ServiceCategory
     from genesis_worker.settings import PathsSettings, Settings
 
-    settings = Settings(
-        paths=PathsSettings(state_dir=tmp_path / "state")
-    )
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
     w = _GW(settings=settings)
 
     llama = next(s for s in w.list_services() if s.name == "llama_swap")
@@ -166,7 +162,9 @@ def test_delete_model_removes_entry_and_directory(tmp_path: Path) -> None:
     entry = ModelEntry(
         name="org/repo",
         source="huggingface",
-        pieces=[ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=7)],
+        pieces=[
+            ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=7)
+        ],
         total_bytes=7,
         directory=str(model_dir),
     )
@@ -177,6 +175,7 @@ def test_delete_model_removes_entry_and_directory(tmp_path: Path) -> None:
         entries=[entry],
     )
     import json
+
     (state_dir / "catalog.json").write_text(catalog.model_dump_json())
 
     w = _GW(settings=settings)
@@ -210,7 +209,9 @@ def test_delete_model_removes_entry_when_directory_already_gone(tmp_path: Path) 
     entry = ModelEntry(
         name="org/repo",
         source="huggingface",
-        pieces=[ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=0)],
+        pieces=[
+            ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=0)
+        ],
         total_bytes=0,
         directory=str(model_dir),
     )
@@ -249,7 +250,9 @@ def test_delete_model_raises_for_unknown_entry(tmp_path: Path) -> None:
     entry = ModelEntry(
         name="other/repo",
         source="huggingface",
-        pieces=[ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=0)],
+        pieces=[
+            ModelPiece(role="main", filename="model.gguf", path=model_dir / "model.gguf", bytes=0)
+        ],
         total_bytes=0,
         directory=str(model_dir),
     )
@@ -265,5 +268,6 @@ def test_delete_model_raises_for_unknown_entry(tmp_path: Path) -> None:
     _ = w.catalog()
 
     import pytest
+
     with pytest.raises(ValueError, match="No entry found"):
         w.delete_model("huggingface", "nonexistent/repo")

@@ -56,9 +56,7 @@ def test_load_ignores_non_dict_payload(tmp_path: Path) -> None:
 
 def test_load_drops_non_string_entries(tmp_path: Path) -> None:
     """Type-tagged YAML that bypasses strict parsing shouldn't blow up the loader."""
-    (tmp_path / "enabled_services.yaml").write_text(
-        "enabled:\n  - llama_swap\n  - 123\n  - null\n"
-    )
+    (tmp_path / "enabled_services.yaml").write_text("enabled:\n  - llama_swap\n  - 123\n  - null\n")
     assert load_enabled_set(tmp_path) == {"llama_swap"}
 
 

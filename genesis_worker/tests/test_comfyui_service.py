@@ -47,9 +47,7 @@ def test_construction_defaults_log_file_to_log_dir(tmp_path: Path) -> None:
 
 def test_construction_respects_log_file_option(tmp_path: Path) -> None:
     custom = tmp_path / "my.log"
-    svc = ComfyUiService(
-        service_ctx(tmp_path, name="comfyui", options={"log_file": str(custom)})
-    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui", options={"log_file": str(custom)}))
     assert svc.log_file == custom
 
 
@@ -92,7 +90,9 @@ def test_construction_puid_pgid_overrides(tmp_path: Path) -> None:
     assert svc._pgid == 5678
 
 
-def test_construction_has_nvidia_gpu_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_construction_has_nvidia_gpu_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The GPU probe runs once at construction and is cached."""
     monkeypatch.setattr(
         "genesis_worker.services.comfyui.service._has_nvidia_gpu",
@@ -171,9 +171,7 @@ def test_runtime_endpoint_is_none(tmp_path: Path) -> None:
     assert svc.runtime_endpoint() is None
 
 
-def test_web_ui_endpoint_none_when_stopped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_web_ui_endpoint_none_when_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     monkeypatch.setattr(svc, "is_running", lambda: False)
     assert svc.web_ui_endpoint() is None
@@ -235,9 +233,7 @@ def test_start_refuses_when_image_not_pulled(
     assert "image not pulled" in r.message
 
 
-def test_start_dispatches_to_lifecycle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_start_dispatches_to_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "genesis_worker.services.comfyui.service._has_nvidia_gpu",
         lambda: True,

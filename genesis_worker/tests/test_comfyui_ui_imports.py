@@ -27,10 +27,8 @@ def test_status_page_parses() -> None:
     page = PAGES[0]
     tree = _parse(page)
     assert any(
-        isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "SERVICE_NAME"
-            for t in node.targets
-        )
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "SERVICE_NAME" for t in node.targets)
         for node in tree.body
     ), f"{page.name} must define SERVICE_NAME"
 
@@ -39,10 +37,8 @@ def test_image_page_parses() -> None:
     page = PAGES[1]
     tree = _parse(page)
     assert any(
-        isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "SERVICE_NAME"
-            for t in node.targets
-        )
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "SERVICE_NAME" for t in node.targets)
         for node in tree.body
     ), f"{page.name} must define SERVICE_NAME"
 
@@ -51,9 +47,7 @@ def test_models_page_parses() -> None:
     page = PAGES[2]
     tree = _parse(page)
     assert any(
-        isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "SERVICE_NAME"
-            for t in node.targets
-        )
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "SERVICE_NAME" for t in node.targets)
         for node in tree.body
     ), f"{page.name} must define SERVICE_NAME"

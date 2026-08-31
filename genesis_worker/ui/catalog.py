@@ -15,9 +15,7 @@ worker = st.session_state["worker"]
 # the catalog so the user sees their newly downloaded model without having to
 # click "Rescan catalog". The set is updated after the comparison so a session
 # that completes mid-render triggers exactly one toast.
-last_seen_complete: set[str] = st.session_state.setdefault(
-    "catalog_last_seen_complete", set()
-)
+last_seen_complete: set[str] = st.session_state.setdefault("catalog_last_seen_complete", set())
 current_sessions = worker.list_acquire_sessions()
 newly_complete = {s["id"] for s in current_sessions if s["state"] == "complete"}
 if newly_complete - last_seen_complete:
@@ -35,11 +33,13 @@ if "delete_confirm" in st.session_state:
 
     @st.dialog("Delete model?")
     def confirm_delete():
-        st.warning(f"**{target['name']}** and all its files will be permanently deleted. This cannot be undone.")
+        st.warning(
+            f"**{target['name']}** and all its files will be permanently deleted. This cannot be undone."
+        )
         col1, col2 = st.columns(2)
         if col1.button("Delete", key="confirm-delete-btn", type="primary"):
-            worker.delete_model(target['source'], target['name'])
-            st.session_state['delete_done'] = target['name']
+            worker.delete_model(target["source"], target["name"])
+            st.session_state["delete_done"] = target["name"]
             st.rerun()
         if col2.button("Cancel", key="cancel-delete-btn"):
             st.rerun()

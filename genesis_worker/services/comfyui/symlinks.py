@@ -82,7 +82,9 @@ class SymlinkApplier:
         for r in rows:
             if not isinstance(r, dict):
                 continue
-            if not all(isinstance(r.get(k), str) for k in ("source", "entry", "piece", "target_subdir")):
+            if not all(
+                isinstance(r.get(k), str) for k in ("source", "entry", "piece", "target_subdir")
+            ):
                 continue
             out.append(
                 {
@@ -97,9 +99,7 @@ class SymlinkApplier:
     def _write_yaml_rows(self, rows: list[dict[str, str]]) -> None:
         self._symlinks_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": _YAML_VERSION, "symlinks": rows}
-        tmp = self._symlinks_file.with_suffix(
-            f".tmp.{os.getpid()}.{os.urandom(4).hex()}"
-        )
+        tmp = self._symlinks_file.with_suffix(f".tmp.{os.getpid()}.{os.urandom(4).hex()}")
         with tmp.open("w") as f:
             yaml.safe_dump(payload, f, sort_keys=False)
         os.replace(tmp, self._symlinks_file)
@@ -162,7 +162,10 @@ class SymlinkApplier:
             if not isinstance(row, dict):
                 errors.append(f"invalid row (not a dict): {row!r}")
                 continue
-            if not all(isinstance(row.get(k), str) and row[k] for k in ("source", "entry", "piece", "target_subdir")):
+            if not all(
+                isinstance(row.get(k), str) and row[k]
+                for k in ("source", "entry", "piece", "target_subdir")
+            ):
                 errors.append(f"invalid row: {row!r}")
                 continue
             key = (row["source"], row["entry"], row["piece"])
@@ -218,9 +221,7 @@ class SymlinkApplier:
                     existing_target = None
             elif symlink_path.exists():
                 # A regular file lives at the symlink path; refuse to clobber.
-                result.errors.append(
-                    (row, f"path exists and is not a symlink: {symlink_path}")
-                )
+                result.errors.append((row, f"path exists and is not a symlink: {symlink_path}"))
                 continue
 
             # Skip only when the existing symlink is correct AND uses a

@@ -18,7 +18,9 @@ st.title(svc.display_name)
 # --- Service info + Configuration ------------------------------------------
 with st.container(border=True):
     st.header("Service info")
-    render_service_controls(svc, worker.service_status(SERVICE_NAME), key_prefix="status-llama_swap")
+    render_service_controls(
+        svc, worker.service_status(SERVICE_NAME), key_prefix="status-llama_swap"
+    )
 
     st.divider()
 
@@ -67,6 +69,7 @@ def _on_variant_change() -> None:
     new = st.session_state["status-variant"]
     svc.set_llama_server_variant(None if new == "(legacy)" else new)
 
+
 with st.container(border=True):
     st.subheader("Variant")
     option_labels = ["(legacy)", "auto", "cuda", "cpu", "vulkan"]
@@ -84,14 +87,9 @@ with st.container(border=True):
     else:
         legacy = svc._options.default_binary_rel
         if legacy:
-            st.warning(
-                f"No variant matched. Falling back to legacy: `{legacy}`"
-            )
+            st.warning(f"No variant matched. Falling back to legacy: `{legacy}`")
         else:
-            st.error(
-                "No llama-server binary available. Install a variant via the "
-                "Binaries page."
-            )
+            st.error("No llama-server binary available. Install a variant via the Binaries page.")
 
 
 # --- Binaries --------------------------------------------------------------

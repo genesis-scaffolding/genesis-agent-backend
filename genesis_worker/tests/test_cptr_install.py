@@ -109,9 +109,7 @@ def test_available_versions_handles_missing_wheel() -> None:
     payload = _fake_pypi_payload()
     payload["urls"] = []
     inst = CptrInstall()
-    with patch(
-        "genesis_worker.services.cptr.install._http_get_json", return_value=payload
-    ):
+    with patch("genesis_worker.services.cptr.install._http_get_json", return_value=payload):
         versions = inst.available_versions()
     assert len(versions) == 1
     assert versions[0].version == "0.9.21"
@@ -180,9 +178,7 @@ def test_install_session_runs_uv_tool_install(monkeypatch: pytest.MonkeyPatch) -
 
     def _fake_run(args, **kw):  # type: ignore[no-untyped-def]
         calls.append(list(args))
-        return subprocess.CompletedProcess(
-            args=args, returncode=0, stdout="", stderr=""
-        )
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/cptr")
@@ -202,9 +198,7 @@ def test_install_session_default_uses_latest(monkeypatch: pytest.MonkeyPatch) ->
 
     def _fake_run(args, **kw):  # type: ignore[no-untyped-def]
         captured.append(list(args))
-        return subprocess.CompletedProcess(
-            args=args, returncode=0, stdout="", stderr=""
-        )
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/cptr")
@@ -289,9 +283,7 @@ def test_uninstall_runs_uv_tool_uninstall(monkeypatch: pytest.MonkeyPatch) -> No
 
     def _fake_run(args, **kw):  # type: ignore[no-untyped-def]
         captured.append(list(args))
-        return subprocess.CompletedProcess(
-            args=args, returncode=0, stdout="", stderr=""
-        )
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     inst = CptrInstall()

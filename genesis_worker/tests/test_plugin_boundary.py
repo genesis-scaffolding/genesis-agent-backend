@@ -85,10 +85,7 @@ def test_the_boundary_check_detects_a_violation(tmp_path: Path) -> None:
 def test_the_boundary_check_allows_utils(tmp_path: Path) -> None:
     """A plugin may import from genesis_worker.utils — the walker must not flag it."""
     leaky = PACKAGE_ROOT / "services" / "llama_swap" / "_boundary_probe.py"
-    leaky.write_text(
-        "from ...utils.ui._nav import to_relative\n"
-        "from ...contracts import Catalog\n"
-    )
+    leaky.write_text("from ...utils.ui._nav import to_relative\nfrom ...contracts import Catalog\n")
     try:
         assert _violations(leaky) == []
     finally:
