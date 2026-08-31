@@ -10,6 +10,7 @@ from ...contracts import (
     InferenceService,
     InstallState,
     ServiceCapabilities,
+    ServiceCategory,
     ServiceContext,
     ServiceInstall,
     ServiceResourceEstimate,
@@ -92,6 +93,14 @@ class SillyTavernService(InferenceService):
             has_web_ui=True,
             can_install=True,
         )
+
+    @property
+    def category(self) -> ServiceCategory:
+        return ServiceCategory.CHAT
+
+    @property
+    def description(self) -> str:
+        return "LLM chat front-end"
 
     def resource_estimate(self) -> ServiceResourceEstimate:
         # No GPU; SillyTavern is a Node.js chat UI, light on resources.

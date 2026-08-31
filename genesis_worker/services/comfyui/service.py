@@ -11,6 +11,7 @@ from ...contracts import (
     InferenceService,
     InstallState,
     ServiceCapabilities,
+    ServiceCategory,
     ServiceContext,
     ServiceInstall,
     ServiceResourceEstimate,
@@ -135,6 +136,14 @@ class ComfyUiService(InferenceService):
             has_web_ui=True,
             can_install=True,
         )
+
+    @property
+    def category(self) -> ServiceCategory:
+        return ServiceCategory.IMAGE
+
+    @property
+    def description(self) -> str:
+        return "Node-based image generation"
 
     def resource_estimate(self) -> ServiceResourceEstimate:
         return ServiceResourceEstimate(
