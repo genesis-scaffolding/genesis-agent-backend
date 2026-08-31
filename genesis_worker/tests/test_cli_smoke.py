@@ -15,6 +15,7 @@ CLI_MODULES = [
 ]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("module", CLI_MODULES)
 def test_cli_help_exits_zero(module: str) -> None:
     result = subprocess.run(

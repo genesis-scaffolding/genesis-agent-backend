@@ -28,9 +28,16 @@ def test_dashboard_references_services_catalog() -> None:
     assert "switch_page" in source
 
 
-def test_page_discovery_resolves_all_paths() -> None:
-    """Walk every registered plugin and confirm the page paths exist."""
-    w = GenesisWorker()
+def test_page_discovery_resolves_all_paths(tmp_path: Path) -> None:
+    """Walk every registered plugin and confirm the page paths exist.
+
+    Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
+    services on the real install.
+    """
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
     framework_pages = [
         _FRAMEWORK_UI / "dashboard.py",
         _FRAMEWORK_UI / "catalog.py",

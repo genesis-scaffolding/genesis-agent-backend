@@ -48,20 +48,25 @@ def start_cptr(
     )
 
 
-def stop_cptr(session_name: str) -> StopResult:
+def stop_cptr(
+    session_name: str, graceful_timeout_s: float = _GRACEFUL_STOP_TIMEOUT_S
+) -> StopResult:
     """Stop the cptr tmux session.
 
     Sends Ctrl-C to the foreground process (the bash pipeline running
     cptr), waits briefly, then hard-kills the session if it's still
     around. cptr has no children to drain, so this is faster than the
     llama-swap equivalent.
+
+    ``graceful_timeout_s`` lets callers (notably tests) shorten the
+    graceful wait window without changing production behavior.
     """
     tmux = TmuxProcess(session_name)
     if not tmux.exists():
         return StopResult(ok=True, message="no session")
 
     tmux.send_interrupt()
-    deadline = time.monotonic() + _GRACEFUL_STOP_TIMEOUT_S
+    deadline = time.monotonic() + graceful_timeout_s
     while time.monotonic() < deadline:
         if not tmux.exists():
             return StopResult(ok=True, message=f"killed {session_name}")

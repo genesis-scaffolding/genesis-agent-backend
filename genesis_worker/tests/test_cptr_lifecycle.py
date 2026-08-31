@@ -245,6 +245,8 @@ def test_stop_cptr_force_kill_when_graceful_stalls(
     """Session still present after the wait window → hard kill."""
     # All has-session calls return 0 (always present); kill-session at the end.
     monkeypatch.setattr(subprocess, "run", _fake_run_factory(returncodes=[0]))
-    r = lifecycle.stop_cptr("cptr")
+    # Use a short graceful window so the test exercises the forced path
+    # without waiting the full production timeout (10s).
+    r = lifecycle.stop_cptr("cptr", graceful_timeout_s=0.1)
     assert r.ok is True
     assert "forced" in r.message

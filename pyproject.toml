@@ -35,6 +35,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["genesis_worker/tests"]
+markers = [
+    "integration: touches real subprocesses, sockets, or system resources. Run with `pytest -m integration`. Exclude from fast unit runs with `pytest -m 'not integration'`.",
+]
 
 [tool.ruff]
 line-length = 100

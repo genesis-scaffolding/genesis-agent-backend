@@ -91,7 +91,7 @@ Rules, both directions:
 - Python: 3.11
 - Config: pydantic-settings (`BaseSettings`)
 - UI: Streamlit
-- Tests: pytest
+- Tests: pytest (see `docs/test-architecture.md` for layers, hermeticity rules, and naming)
 - Types: pyright (`standard` mode)
 - Lint and format: ruff (`check` and `format`)
 
