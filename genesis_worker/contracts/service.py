@@ -174,10 +174,12 @@ class InferenceService(Plugin):
 
     # can_export_for_agent
 
-    def export_for_agent(self, *, base_url: str | None = None) -> dict:
+    def export_for_agent(self, *, catalog: Catalog, base_url: str | None = None) -> dict:
         raise NotImplementedError(f"{self.name} does not export agent config")
 
-    def write_agent_config(self, target: Path, *, base_url: str | None = None) -> bool:
+    def write_agent_config(
+        self, target: Path, *, catalog: Catalog, base_url: str | None = None
+    ) -> bool:
         raise NotImplementedError(f"{self.name} does not export agent config")
 
     def agent_config_target(self) -> Path:

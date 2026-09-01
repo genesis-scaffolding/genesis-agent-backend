@@ -1,160 +1,143 @@
 """Tests for the pi-agent ``models.json`` emitter.
 
-Field-by-field equivalence against the on-disk ``pi-models.json`` is
-the gate: every emitted entry's parsed shape must equal the entry's
-shape in the live artifact. Byte-level YAML/JSON ordering differences
-are accepted; semantic differences are not.
+The exporter reads straight off :class:`EvaluatedConfig`; tests
+construct synthetic configs and exercise the structured-pipeline path.
+No on-disk ``config.yaml`` is involved.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from genesis_worker.services.llama_swap.export_pi_config import (
+    DEFAULT_CONTEXT_WINDOW,
     FALLBACK_PROVIDER_NAME,
-    build_provider,
+    build_provider_from_configs,
     write_models_json,
 )
-from genesis_worker.utils.paths import repo_root
+from genesis_worker.services.llama_swap.generate_config import EvaluatedConfig
 
 # ---------------------------------------------------------------------------
-# Synthetic fixtures (no real config.yaml needed)
+# Synthetic fixtures
 # ---------------------------------------------------------------------------
 
 
-def _entry(
-    entry_id: str,
+def _cfg(
+    entry_id: str = "m",
     *,
     name: str | None = None,
-    cmd: str = "",
-    fit_ctx: int | None = None,
+    ctx_min: int | None = None,
+    ctx_size: int | None = None,
     mmproj: bool = False,
     chat_template_kwargs: dict | None = None,
-) -> tuple[str, dict]:
-    """Build a (entry_id, body) tuple in the shape of one models: entry."""
-    parts = ["--model /tmp/m"]
-    if fit_ctx is not None:
-        parts.append(f"--fit-ctx {fit_ctx}")
-    if mmproj:
-        parts.append("--mmproj /tmp/p")
-    if chat_template_kwargs is not None:
-        parts.append(
-            f"--chat-template-kwargs '{json.dumps(chat_template_kwargs, separators=(',', ':'))}'"
-        )
-    parts.append("--port ${PORT}")
-    cmd_str = " \\\n  ".join(parts)
-    body = {
-        "name": name or entry_id,
-        "cmd": cmd_str,
-        "proxy": "http://127.0.0.1:${PORT}",
-        "ttl": 0,
-    }
-    return entry_id, body
+) -> EvaluatedConfig:
+    """Build a synthetic EvaluatedConfig for pi-export tests.
 
-
-def _config_with(entries: list[tuple[str, dict]]) -> str:
-    """Render a minimal config.yaml string from a list of entries."""
-    lines = [
-        "healthCheckTimeout: 60",
-        "logLevel: info",
-        "models:",
-    ]
-    for entry_id, body in entries:
-        lines.append(f"  {entry_id}:")
-        lines.append(f'    name: "{body["name"]}"')
-        lines.append("    cmd: |")
-        for cl in body["cmd"].split("\n"):
-            lines.append("      " + cl)
-        lines.append(f'    proxy: "{body["proxy"]}"')
-        lines.append(f"    ttl: {body['ttl']}")
-    return "\n".join(lines) + "\n"
-
-
-# ---------------------------------------------------------------------------
-# build_provider() shape
-# ---------------------------------------------------------------------------
-
-
-def test_build_provider_returns_providers_dict(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1", fit_ctx=131072)]))
-    provider = build_provider(cfg)
-    assert "providers" in provider
-    assert len(provider["providers"]) == 1
-    # Provider name falls back to the local hostname.
-    pname = next(iter(provider["providers"]))
-    assert pname  # non-empty
-
-
-def test_build_provider_explicit_hostname(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg, hostname="My Box 2")
-    pname = next(iter(provider["providers"]))
-    assert pname == "my-box-2"
-
-
-def test_build_provider_hostname_falls_back_when_empty(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg, hostname="---")
-    pname = next(iter(provider["providers"]))
-    # _slug("---") is empty -> FALLBACK_PROVIDER_NAME
-    assert pname == FALLBACK_PROVIDER_NAME
-
-
-def test_build_provider_default_base_url(tmp_path: Path) -> None:
-    """When no base_url is provided, the framework falls back to the
-    worker's hostname (not 127.0.0.1) so pi-agent on another machine can
-    reach llama-swap. The exact hostname depends on the test runner, so
-    we only assert the structural shape.
+    The fields exercised here are the ones the pi exporter reads.
+    Everything else is left at sensible defaults.
     """
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
+    from genesis_worker.services.llama_swap.generate_config import DetectedFileSet
+
+    return EvaluatedConfig(
+        chat_template_kwargs=chat_template_kwargs if chat_template_kwargs is not None else {},  # type: ignore[arg-type]
+        name=name or entry_id,
+        entry_id=entry_id,
+        matched_recipe=None,
+        binary="ignored",
+        files=DetectedFileSet(
+            main=Path("/tmp/m.gguf"),
+            filename=f"{entry_id}.gguf",
+            mmproj=Path("/tmp/p.gguf") if mmproj else None,
+            draft=None,
+            is_mtp=False,
+            weight_bytes=0,
+        ),
+        kv_cache=None,
+        mmproj_offload=None,
+        spec=None,
+        ctx_min=ctx_min,
+        parallel=None,
+        reasoning_budget=None,
+        reasoning_budget_message=None,
+        chat_template_file=None,
+        sampling={},
+        provenance={},
+        cmd="",
+        ctx_size=ctx_size,
+    )
+
+
+def _provider(configs: dict) -> dict:
+    """Wrap ``build_provider_from_configs`` and pick out the inner provider dict."""
+    out = build_provider_from_configs(configs)
+    assert "providers" in out
+    assert len(out["providers"]) == 1
+    return next(iter(out["providers"].values()))
+
+
+# ---------------------------------------------------------------------------
+# build_provider_from_configs() shape
+# ---------------------------------------------------------------------------
+
+
+def test_build_provider_returns_providers_dict() -> None:
+    inner = _provider({"m1": _cfg("m1")})
+    assert inner["api"] == "openai-completions"
+    assert inner["apiKey"] == "local"
+    assert inner["compat"]["supportsDeveloperRole"] is False
+    assert inner["compat"]["supportsReasoningEffort"] is False
+    assert inner["compat"]["maxTokensField"] == "max_tokens"
+
+
+def test_build_provider_explicit_hostname() -> None:
+    out = build_provider_from_configs({}, hostname="My Box 2")
+    assert next(iter(out["providers"])) == "my-box-2"
+
+
+def test_build_provider_hostname_falls_back_when_empty() -> None:
+    out = build_provider_from_configs({}, hostname="---")
+    # _slug("---") is empty -> FALLBACK_PROVIDER_NAME
+    assert next(iter(out["providers"])) == FALLBACK_PROVIDER_NAME
+
+
+def test_build_provider_default_base_url() -> None:
+    """Default base_url falls back to the worker's hostname (not 127.0.0.1),
+    so pi-agent on another machine reaches llama-swap."""
+    inner = _provider({"m": _cfg("m")})
     assert inner["baseUrl"].endswith("/v1")
     assert "127.0.0.1" not in inner["baseUrl"]
 
 
-def test_build_provider_explicit_base_url(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg, base_url="http://example.com:9000")
-    inner = next(iter(provider["providers"].values()))
+def test_build_provider_explicit_base_url() -> None:
+    out = build_provider_from_configs({}, base_url="http://example.com:9000")
+    inner = next(iter(out["providers"].values()))
     assert inner["baseUrl"] == "http://example.com:9000/v1"
 
 
-def test_build_provider_base_url_strips_and_appends_v1(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg, base_url="http://example.com:9000/")
-    inner = next(iter(provider["providers"].values()))
+def test_build_provider_base_url_strips_and_appends_v1() -> None:
+    out = build_provider_from_configs({}, base_url="http://example.com:9000/")
+    inner = next(iter(out["providers"].values()))
     assert inner["baseUrl"] == "http://example.com:9000/v1"
 
 
-def test_build_provider_env_base_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_provider_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PI_BASE_URL", "http://envhost:1234")
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
+    inner = _provider({"m": _cfg("m")})
     assert inner["baseUrl"] == "http://envhost:1234/v1"
 
 
-def test_build_provider_env_base_url_with_v1_suffix(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_build_provider_env_base_url_with_v1_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
     """If the env var already ends with /v1, don't double-append."""
     monkeypatch.setenv("PI_BASE_URL", "http://envhost:1234/v1")
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m1")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
+    inner = _provider({"m": _cfg("m")})
     assert inner["baseUrl"] == "http://envhost:1234/v1"
+
+
+def test_build_provider_empty_configs_emits_empty_models_list() -> None:
+    inner = _provider({})
+    assert inner["models"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -162,121 +145,83 @@ def test_build_provider_env_base_url_with_v1_suffix(
 # ---------------------------------------------------------------------------
 
 
-def test_model_id_and_name(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("alpha-1", name="Alpha One")]))
-    provider = build_provider(cfg)
-    models = next(iter(provider["providers"].values()))["models"]
+def test_model_id_and_name() -> None:
+    inner = _provider({"alpha-1": _cfg("alpha-1", name="Alpha One")})
+    models = inner["models"]
     assert len(models) == 1
     assert models[0]["id"] == "alpha-1"
     assert models[0]["name"] == "Alpha One"
 
 
-def test_model_defaults_name_to_id_when_missing(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([("naked", {"name": "naked", "cmd": "", "proxy": "", "ttl": 0})]))
-    provider = build_provider(cfg)
-    models = next(iter(provider["providers"].values()))["models"]
-    assert models[0]["name"] == "naked"
+def test_model_defaults_name_to_id_when_missing() -> None:
+    inner = _provider({"naked": _cfg("naked", name="naked")})
+    assert inner["models"][0]["name"] == "naked"
 
 
-def test_model_context_window_from_fit_ctx(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m", fit_ctx=65536)]))
-    provider = build_provider(cfg)
-    assert (
-        provider["providers"][next(iter(provider["providers"]))]["models"][0]["contextWindow"]
-        == 65536
-    )
+def test_model_context_window_from_ctx_size() -> None:
+    """When ctx_size is set, it wins (the user-set cap)."""
+    inner = _provider({"m": _cfg("m", ctx_size=40960)})
+    assert inner["models"][0]["contextWindow"] == 40960
 
 
-def test_model_context_window_default_when_missing(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["contextWindow"] == 131072
+def test_model_context_window_from_ctx_min_when_no_ctx_size() -> None:
+    inner = _provider({"m": _cfg("m", ctx_min=65536)})
+    assert inner["models"][0]["contextWindow"] == 65536
 
 
-def test_model_context_window_picks_last_fit_ctx(tmp_path: Path) -> None:
-    """Some recipes repeat --fit-ctx; we pick the last occurrence."""
-    eid, body = _entry("m", fit_ctx=4096)
-    body["cmd"] += " --fit-ctx 32768"
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([(eid, body)]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["contextWindow"] == 32768
+def test_model_context_window_prefers_ctx_size_over_ctx_min() -> None:
+    """The cap (-c) beats the floor (--fit-ctx) when both are set."""
+    inner = _provider({"m": _cfg("m", ctx_min=131072, ctx_size=40960)})
+    assert inner["models"][0]["contextWindow"] == 40960
 
 
-def test_model_input_image_when_mmproj(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m", mmproj=True)]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
+def test_model_context_window_falls_back_to_default() -> None:
+    """Neither set: DEFAULT_CONTEXT_WINDOW (84k)."""
+    inner = _provider({"m": _cfg("m")})
+    assert inner["models"][0]["contextWindow"] == DEFAULT_CONTEXT_WINDOW
+    assert DEFAULT_CONTEXT_WINDOW == 84000
+
+
+def test_model_input_image_when_mmproj() -> None:
+    inner = _provider({"m": _cfg("m", mmproj=True)})
     assert inner["models"][0]["input"] == ["text", "image"]
 
 
-def test_model_input_text_only_when_no_mmproj(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m", mmproj=False)]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
+def test_model_input_text_only_when_no_mmproj() -> None:
+    inner = _provider({"m": _cfg("m", mmproj=False)})
     assert inner["models"][0]["input"] == ["text"]
 
 
-def test_model_reasoning_default_true(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m-thinking")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["reasoning"] is True
-
-
-def test_model_reasoning_false_when_enable_thinking_false(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m", chat_template_kwargs={"enable_thinking": False})]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["reasoning"] is False
-
-
-def test_model_reasoning_false_when_instruct_in_id(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("qwen3-instruct-q4")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["reasoning"] is False
-
-
-def test_model_reasoning_true_with_heretic_guardrail(tmp_path: Path) -> None:
-    """``heretic`` is a guardrail, not an instruction override."""
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("gemma-4-heretic-gguf")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["reasoning"] is True
-
-
-def test_model_cost_zeros(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
-    assert inner["models"][0]["cost"] == {
-        "input": 0,
-        "output": 0,
-        "cacheRead": 0,
-        "cacheWrite": 0,
-    }
-
-
-def test_model_max_tokens_default(tmp_path: Path) -> None:
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(_config_with([_entry("m")]))
-    provider = build_provider(cfg)
-    inner = next(iter(provider["providers"].values()))
+def test_model_max_tokens_constant() -> None:
+    inner = _provider({"m": _cfg("m")})
     assert inner["models"][0]["maxTokens"] == 16384
+
+
+def test_model_cost_zeros() -> None:
+    inner = _provider({"m": _cfg("m")})
+    cost = inner["models"][0]["cost"]
+    assert cost == {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+
+
+def test_model_reasoning_default_true() -> None:
+    inner = _provider({"m": _cfg("m")})
+    assert inner["models"][0]["reasoning"] is True
+
+
+def test_model_reasoning_false_when_enable_thinking_false() -> None:
+    inner = _provider({"m": _cfg("m", chat_template_kwargs={"enable_thinking": False})})
+    assert inner["models"][0]["reasoning"] is False
+
+
+def test_model_reasoning_false_when_instruct_in_id() -> None:
+    inner = _provider({"qwen-instruct": _cfg("qwen-instruct")})
+    assert inner["models"][0]["reasoning"] is False
+
+
+def test_model_reasoning_true_with_heretic_guardrail() -> None:
+    """An unrelated chat_template_kwargs value doesn't disable reasoning."""
+    inner = _provider({"m": _cfg("m", chat_template_kwargs={"preserve_thinking": True})})
+    assert inner["models"][0]["reasoning"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -285,87 +230,33 @@ def test_model_max_tokens_default(tmp_path: Path) -> None:
 
 
 def test_write_models_json_creates_new_file(tmp_path: Path) -> None:
-    target = tmp_path / "out.json"
-    provider = {"providers": {"x": {"baseUrl": "http://x/v1", "models": []}}}
+    target = tmp_path / "models.json"
+    provider = {"providers": {"x": {"baseUrl": "http://h/v1", "models": []}}}
     assert write_models_json(target, provider) is True
     assert target.is_file()
-    assert json.loads(target.read_text()) == provider
+    assert json_loads(target) == provider
 
 
 def test_write_models_json_preserves_mtime_when_unchanged(tmp_path: Path) -> None:
-    target = tmp_path / "out.json"
-    provider = {"providers": {"x": {"baseUrl": "http://x/v1", "models": []}}}
+    target = tmp_path / "models.json"
+    provider = {"providers": {}}
+    # Initial write primes the file with the emitter's exact format.
     write_models_json(target, provider)
     mtime_before = target.stat().st_mtime_ns
-
-    import time
-
-    time.sleep(0.01)
-    wrote = write_models_json(target, provider)
-    assert wrote is False
-    assert target.stat().st_mtime_ns == mtime_before
+    assert write_models_json(target, provider) is False
+    mtime_after = target.stat().st_mtime_ns
+    assert mtime_after == mtime_before
 
 
 def test_write_models_json_overwrites_when_changed(tmp_path: Path) -> None:
-    target = tmp_path / "out.json"
-    target.write_text('{"old": true}\n')
-    provider = {"providers": {"x": {"baseUrl": "http://x/v1", "models": []}}}
+    target = tmp_path / "models.json"
+    target.write_text('{"providers": {}}\n')
+    provider = {"providers": {"x": {"baseUrl": "http://h/v1", "models": []}}}
     assert write_models_json(target, provider) is True
-    assert json.loads(target.read_text()) == provider
+    assert json_loads(target) == provider
 
 
-# ---------------------------------------------------------------------------
-# Live-fixture field-by-field equivalence (the spec's gate)
-# ---------------------------------------------------------------------------
+def json_loads(path: Path) -> dict:
+    import json
 
-
-def test_live_config_yields_field_equivalent_pi_models(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Build provider from on-disk ``config.yaml`` and confirm structural soundness.
-
-    Asserts:
-    - The on-disk ``config.yaml`` (if present) parses via the new
-      :func:`build_provider` without errors.
-    - The emitted provider has the right shape (``baseUrl`` ends in
-      ``/v1``, ``api == openai-completions``, ``compat`` keys all
-      present, ``models`` list populated).
-    - Per-model fields match the schema the old ``bin/pi-models.py``
-      emitted (id/name/input/contextWindow/maxTokens/reasoning/cost).
-
-    This is the spec-002 verification step 4 gate (semantic
-    equivalence with the old emitter), but rewritten as an
-    environmental invariant: the artifacts can drift if the user
-    hasn't regenerated; the test gates on schema, not on whether the
-    user kept both files in sync.
-    """
-    config_yaml = repo_root() / "config.yaml"
-    if not config_yaml.is_file():
-        pytest.skip("live config.yaml already retired")
-
-    new = build_provider(config_yaml)
-    assert "providers" in new
-    assert len(new["providers"]) == 1
-    inner = next(iter(new["providers"].values()))
-
-    # Provider shape.
-    assert inner["baseUrl"].endswith("/v1")
-    assert inner["api"] == "openai-completions"
-    assert inner["apiKey"] == "local"
-    compat = inner["compat"]
-    assert compat["supportsDeveloperRole"] is False
-    assert compat["supportsReasoningEffort"] is False
-    assert compat["maxTokensField"] == "max_tokens"
-
-    # Per-model shape.
-    for m in inner["models"]:
-        assert isinstance(m["id"], str) and m["id"]
-        assert isinstance(m["name"], str) and m["name"]
-        assert m["input"] in (["text"], ["text", "image"])
-        assert isinstance(m["contextWindow"], int) and m["contextWindow"] > 0
-        assert isinstance(m["maxTokens"], int) and m["maxTokens"] > 0
-        assert isinstance(m["reasoning"], bool)
-        assert m["cost"] == {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
-
-    # At least one model emitted (sanity: the catalog isn't empty).
-    assert len(inner["models"]) >= 1
+    return json.loads(path.read_text())

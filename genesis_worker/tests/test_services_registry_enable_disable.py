@@ -90,7 +90,13 @@ def test_enable_unknown_service_raises_keyerror(tmp_path: Path) -> None:
         reg.enable("does_not_exist")
 
 
-def test_disable_marks_disabled_and_persists(tmp_path: Path) -> None:
+def test_disable_marks_disabled_and_persists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+
     reg = ServiceRegistry(_settings(tmp_path))
     reg.enable("llama_swap")
     reg.disable("llama_swap")
@@ -120,7 +126,13 @@ def test_disable_unknown_service_raises_keyerror(tmp_path: Path) -> None:
         reg.disable("does_not_exist")
 
 
-def test_disable_when_already_disabled_is_noop(tmp_path: Path) -> None:
+def test_disable_when_already_disabled_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+
     reg = ServiceRegistry(_settings(tmp_path))
     reg.disable("llama_swap")  # never enabled — must not raise
     assert not reg.is_enabled("llama_swap")
@@ -140,6 +152,8 @@ def test_enabled_and_disabled_partition_registry(
     # auto-enabled. We then explicitly enable one and disable it.
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
     monkeypatch.setattr(SillyTavernService, "is_available", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+    monkeypatch.setattr(SillyTavernService, "is_running", lambda self: False)
 
     reg = ServiceRegistry(_settings(tmp_path))
     reg.enable("llama_swap")

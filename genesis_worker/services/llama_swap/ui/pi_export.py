@@ -13,7 +13,7 @@ st.title("Pi export")
 st.caption("Export the pi-agent config (models.json) for llama-swap.")
 
 if st.button("Preview", key="pi-preview"):
-    data = svc.export_for_agent()
+    data = svc.export_for_agent(catalog=worker.catalog())
     st.session_state["pi_preview"] = data
 
 preview = st.session_state.get("pi_preview")
@@ -33,7 +33,7 @@ target = svc.agent_config_target()
 st.write(f"Target: `{target}`")
 
 if st.button(f"Install to {target}", key="pi-install"):
-    ok = svc.write_agent_config(target)
+    ok = svc.write_agent_config(target, catalog=worker.catalog())
     if ok:
         st.success(f"written to {target}")
     else:

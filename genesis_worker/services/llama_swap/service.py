@@ -20,7 +20,7 @@ from ...contracts import (
     UiPage,
 )
 from . import lifecycle
-from .export_pi_config import build_provider, write_models_json
+from .export_pi_config import build_provider_from_configs, write_models_json
 from .generate_config import (
     BuildOptions,
     EvaluatedConfig,
@@ -428,11 +428,23 @@ class LlamaSwapService(InferenceService):
 
     # --- pi-agent export ---------------------------------------------------
 
-    def export_for_agent(self, *, base_url: str | None = None) -> dict:
-        return build_provider(self._config_path, base_url=base_url)
+    def export_for_agent(self, *, catalog: Catalog, base_url: str | None = None) -> dict:
+        """Build the pi-agent ``models.json`` payload from structured configs.
 
-    def write_agent_config(self, target: Path, *, base_url: str | None = None) -> bool:
-        return write_models_json(target, self.export_for_agent(base_url=base_url))
+        Runs the same evaluation pipeline that produces ``config.yaml``;
+        the export reads ``ctx_size``, ``ctx_min``, mmproj presence, and
+        chat-template-kwargs straight off the ``EvaluatedConfig`` rather
+        than regexing the rendered cmd.
+        """
+        return build_provider_from_configs(
+            self.evaluate_model_config(catalog),
+            base_url=base_url,
+        )
+
+    def write_agent_config(
+        self, target: Path, *, catalog: Catalog, base_url: str | None = None
+    ) -> bool:
+        return write_models_json(target, self.export_for_agent(catalog=catalog, base_url=base_url))
 
     def agent_config_target(self) -> Path:
         base = os.environ.get("PI_INSTALL_DIR")
