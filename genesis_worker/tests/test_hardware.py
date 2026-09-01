@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
+from genesis_worker.contracts.host import Hardware
 from genesis_worker.utils.collectors import hardware
 from genesis_worker.utils.collectors.hardware import collect_hardware_info
-from genesis_worker.utils.models import Hardware
 
 
 @pytest.fixture(autouse=True)

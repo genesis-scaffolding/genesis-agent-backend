@@ -11,6 +11,7 @@ from genesis_worker.contracts import (
     ServiceContext,
     SourceContext,
 )
+from genesis_worker.contracts.host import HostInfo
 
 
 def _dirs(root: Path) -> dict[str, Path]:
@@ -31,6 +32,7 @@ def source_ctx(
     vault_path: Path | None = None,
     options: dict[str, Any] | None = None,
     secrets: SecretsAccessor | None = None,
+    host_info: HostInfo | None = None,
 ) -> SourceContext:
     root = root if root is not None else (local_path or Path("."))
     resolved_local = local_path if local_path is not None else root / "vault"
@@ -41,6 +43,7 @@ def source_ctx(
         options=options or {},
         local_path=resolved_local,
         vault_path=resolved_vault,
+        host_info=host_info if host_info is not None else HostInfo.empty(),
         secrets=secrets if secrets is not None else NoSecretsAccessor(),
         **_dirs(root),
     )
@@ -53,12 +56,14 @@ def service_ctx(
     vault_path: Path | None = None,
     options: dict[str, Any] | None = None,
     secrets: SecretsAccessor | None = None,
+    host_info: HostInfo | None = None,
 ) -> ServiceContext:
     return ServiceContext(
         name=name,
         repo_root=root,
         vault_path=vault_path if vault_path is not None else root / "vault",
         options=options or {},
+        host_info=host_info if host_info is not None else HostInfo.empty(),
         secrets=secrets if secrets is not None else NoSecretsAccessor(),
         **_dirs(root),
     )

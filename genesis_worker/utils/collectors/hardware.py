@@ -32,7 +32,7 @@ import glob
 import os
 import subprocess
 
-from ..models import Hardware
+from ...contracts.host import Hardware
 
 _VENDOR_NVIDIA = 0x10DE
 _VENDOR_AMD = 0x1002

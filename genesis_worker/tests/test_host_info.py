@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from genesis_worker.contracts.host import HostInfo
 from genesis_worker.utils.collectors.host_info import collect_host_info
-from genesis_worker.utils.models import HostInfo
 
 
 def test_collect_returns_dataclass() -> None:

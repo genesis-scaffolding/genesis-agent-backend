@@ -41,17 +41,22 @@ def test_source_context_vault_path_defaults_when_unset(tmp_path: Path) -> None:
 
 
 def test_plugin_context_field_order_has_vault_path_after_repo_root() -> None:
-    """vault_path is declared on PluginContext, between repo_root and secrets.
+    """vault_path is declared on PluginContext, between repo_root and host_info.
 
     Locks the field order so an accidental reordering in the future
     surfaces as a test failure rather than as a positional-caller
     breakage. The order matches ADR-023 Decision: Contract change.
+    ``host_info`` sits after ``vault_path`` because it's another
+    framework-resolved field with a sentinel default; secrets stays
+    last so plugin code reading ``self._ctx.secrets`` finds the
+    same field index it always has.
     """
     from genesis_worker.contracts.context import PluginContext
 
     fields = list(PluginContext.__dataclass_fields__.keys())
     assert fields.index("vault_path") == fields.index("repo_root") + 1
-    assert fields.index("secrets") == fields.index("vault_path") + 1
+    assert fields.index("host_info") == fields.index("vault_path") + 1
+    assert fields.index("secrets") == fields.index("host_info") + 1
 
 
 # --- Registry population --------------------------------------------------
