@@ -13,6 +13,9 @@ def test_collect_returns_dataclass() -> None:
     assert isinstance(info.os, str) and info.os
     assert isinstance(info.arch, str) and info.arch
     assert isinstance(info.python, str) and info.python
+    # Hardware is a Hardware instance (always populated; may be all-False
+    # on a host with no detectable GPUs).
+    assert isinstance(info.hardware.vendor_summary(), str)
     # These are best-effort: a None is acceptable on systems without
     # psutil, network, or tailscale.
     if info.uptime_s is not None:

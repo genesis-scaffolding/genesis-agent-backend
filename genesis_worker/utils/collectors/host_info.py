@@ -54,6 +54,10 @@ def collect_host_info() -> HostInfo:
         except Exception:  # noqa: BLE001, S110 — tailscale may be installed but not running
             pass
 
+    # Hardware is cached at the collector; one probe per process even
+    # when the dashboard calls us on every render.
+    from .hardware import collect_hardware_info
+
     return HostInfo(
         hostname=hostname,
         os=os_str,
@@ -62,6 +66,7 @@ def collect_host_info() -> HostInfo:
         uptime_s=uptime_s,
         public_ip=public_ip,
         tailscale_ip=tailscale_ip,
+        hardware=collect_hardware_info(),
     )
 
 
