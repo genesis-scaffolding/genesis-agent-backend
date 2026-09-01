@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from genesis_worker import GenesisWorker
 from genesis_worker.ui.app import _FRAMEWORK_UI
 
@@ -14,6 +16,36 @@ def test_framework_ui_dir_exists() -> None:
     assert (_FRAMEWORK_UI / "catalog.py").exists()
     assert (_FRAMEWORK_UI / "services_catalog.py").exists()
     assert (_FRAMEWORK_UI / "app.py").exists()
+
+
+def test_page_title_returns_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Browser tab title defaults to the worker's hostname so multiple
+    instances are distinguishable in the tab bar."""
+    from genesis_worker.ui.app import _page_title
+
+    monkeypatch.setattr("genesis_worker.ui.app.socket.gethostname", lambda: "my-box")
+    assert _page_title() == "my-box"
+
+
+def test_page_title_falls_back_when_hostname_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from genesis_worker.ui.app import _page_title
+
+    def _raise() -> str:
+        raise OSError("nope")
+
+    monkeypatch.setattr("genesis_worker.ui.app.socket.gethostname", _raise)
+    assert _page_title() == "Genesis Worker"
+
+
+def test_page_title_falls_back_when_hostname_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from genesis_worker.ui.app import _page_title
+
+    monkeypatch.setattr("genesis_worker.ui.app.socket.gethostname", lambda: "")
+    assert _page_title() == "Genesis Worker"
 
 
 def test_dashboard_references_services_catalog() -> None:
