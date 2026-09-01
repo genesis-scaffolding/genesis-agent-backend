@@ -53,7 +53,7 @@ def test_settings_resolved_vault_path_default(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.delenv("MODELS_ROOT", raising=False)
     monkeypatch.setattr("genesis_worker.settings._read_models_root", lambda: None)
     s = Settings(_env_file=None)  # type: ignore[call-arg]
-    assert s.paths.resolved_vault_path == s.paths.data_dir / "vault"
+    assert s.paths.resolved_vault_path == Path.home() / "models"
 
 
 def test_settings_resolved_vault_path_explicit(monkeypatch: pytest.MonkeyPatch) -> None:

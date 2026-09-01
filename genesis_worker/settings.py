@@ -107,7 +107,7 @@ class PathsSettings(BaseModel):
         legacy = _read_models_root()
         if legacy is not None:
             return Path(legacy)
-        return self.data_dir / "vault"
+        return Path.home() / "models"
 
     @property
     def resolved_repo_root(self) -> Path:
