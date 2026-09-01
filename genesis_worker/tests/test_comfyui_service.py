@@ -14,9 +14,16 @@ from genesis_worker.contracts import (
     StartResult,
     StopResult,
 )
+from genesis_worker.contracts.host import Hardware
 from genesis_worker.services.comfyui.service import ComfyUiService
 from genesis_worker.services.comfyui.symlinks import SymlinkApplier
 from genesis_worker.tests._factories import service_ctx
+
+
+def _hw(*, nvidia: bool = False, runtime: bool = False) -> Hardware:
+    """Build a Hardware snapshot with the GPU fields tests care about."""
+    return Hardware(nvidia=nvidia, nvidia_count=1 if nvidia else 0, nvidia_runtime=runtime)
+
 
 # --- construction ----------------------------------------------------------
 
@@ -93,12 +100,9 @@ def test_construction_puid_pgid_overrides(tmp_path: Path) -> None:
 def test_construction_has_nvidia_gpu_cached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The GPU probe runs once at construction and is cached."""
-    monkeypatch.setattr(
-        "genesis_worker.services.comfyui.service._has_nvidia_gpu",
-        lambda: True,
-    )
+    """The hardware snapshot is read from ctx at construction."""
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True))
     assert svc.has_nvidia_gpu is True
 
 
@@ -206,11 +210,8 @@ def test_web_ui_endpoint_falls_back_to_socket_gethostname(
 def test_start_refuses_when_no_gpu_and_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "genesis_worker.services.comfyui.service._has_nvidia_gpu",
-        lambda: False,
-    )
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=False))
     r = svc.start()
     assert r.ok is False
     assert "no NVIDIA GPU" in r.message
@@ -220,14 +221,11 @@ def test_start_refuses_when_image_not_pulled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "genesis_worker.services.comfyui.service._has_nvidia_gpu",
-        lambda: True,
-    )
-    monkeypatch.setattr(
         "genesis_worker.services.comfyui.install.DockerContainer.image_present",
         staticmethod(lambda image: False),
     )
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
     r = svc.start()
     assert r.ok is False
     assert "image not pulled" in r.message
@@ -235,18 +233,11 @@ def test_start_refuses_when_image_not_pulled(
 
 def test_start_dispatches_to_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "genesis_worker.services.comfyui.service._has_nvidia_gpu",
-        lambda: True,
-    )
-    monkeypatch.setattr(
         "genesis_worker.services.comfyui.install.DockerContainer.image_present",
         staticmethod(lambda image: True),
     )
-    monkeypatch.setattr(
-        "genesis_worker.utils.process.docker.DockerContainer.nvidia_runtime_available",
-        staticmethod(lambda: True),
-    )
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
     sentinel = StartResult(ok=True, message="ok")
     with patch(
         "genesis_worker.services.comfyui.lifecycle.start_comfyui",
@@ -266,18 +257,11 @@ def test_start_skips_gpu_args_when_runtime_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "genesis_worker.services.comfyui.service._has_nvidia_gpu",
-        lambda: True,
-    )
-    monkeypatch.setattr(
         "genesis_worker.services.comfyui.install.DockerContainer.image_present",
         staticmethod(lambda image: True),
     )
-    monkeypatch.setattr(
-        "genesis_worker.utils.process.docker.DockerContainer.nvidia_runtime_available",
-        staticmethod(lambda: False),
-    )
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=False))
     with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
         svc.start()
     kwargs = mock_start.call_args.kwargs
