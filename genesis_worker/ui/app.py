@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import streamlit as st
@@ -9,6 +10,14 @@ import streamlit as st
 from genesis_worker import GenesisWorker
 
 _FRAMEWORK_UI = Path(__file__).parent
+
+
+def _page_title() -> str:
+    try:
+        name = socket.gethostname()
+    except OSError:
+        return "Genesis Worker"
+    return name or "Genesis Worker"
 
 
 @st.cache_resource
@@ -20,7 +29,7 @@ worker = get_worker()
 st.session_state["worker"] = worker
 
 st.set_page_config(
-    page_title="Genesis Worker",
+    page_title=_page_title(),
     layout="wide",
     page_icon=":material/settings:",
 )
