@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 from ...contracts import (
@@ -165,8 +164,15 @@ class LlamaSwapService(InferenceService):
         return self._variant_binary(f"llama-server-{variant}")
 
     def _auto_resolve(self) -> str | None:
-        """Priority: NVIDIA + cuda installed → cuda; else vulkan; else cpu."""
-        if self._has_nvidia_gpu():
+        """Priority: NVIDIA + cuda installed → cuda; else vulkan; else cpu.
+
+        Hardware presence comes from the framework-level snapshot
+        (``ctx.host_info.hardware``); no per-service nvidia-smi probe
+        needed. AMD-only hosts naturally land on vulkan because ROCm
+        surfaces through Vulkan — that's the right answer for both
+        AMD APUs and discrete Radeon cards.
+        """
+        if self._ctx.host_info.hardware.nvidia:
             binary = self._variant_binary("llama-server-cuda")
             if binary is not None:
                 return binary
@@ -174,20 +180,6 @@ class LlamaSwapService(InferenceService):
         if binary is not None:
             return binary
         return self._variant_binary("llama-server-cpu")
-
-    def _has_nvidia_gpu(self) -> bool:
-        """Probe ``nvidia-smi -L``. Robust against missing binary and hangs."""
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "-L"],
-                capture_output=True,
-                timeout=5,
-                text=True,
-                check=False,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            return False
-        return result.returncode == 0 and "GPU" in result.stdout
 
     def _variant_binary(self, name: str) -> str | None:
         """Look up an installed variant by its installable name."""

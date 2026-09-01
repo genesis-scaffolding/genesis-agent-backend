@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from genesis_worker import GenesisWorker
+from genesis_worker.contracts.host import Hardware, HostInfo
 from genesis_worker.services.llama_swap import LlamaSwapService
 from genesis_worker.services.llama_swap.generate_config import (
     is_config_stale,
@@ -450,34 +451,40 @@ def test_variant_resolution_unset_returns_none(tmp_path: Path) -> None:
     assert svc._default_llama_server_binary() is None  # noqa: SLF001
 
 
-def test_variant_resolution_auto_picks_cuda_when_nvidia(tmp_path: Path, monkeypatch) -> None:
-    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
-    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: True)
+def test_variant_resolution_auto_picks_cuda_when_nvidia(tmp_path: Path) -> None:
+    svc = LlamaSwapService(_auto_ctx(tmp_path, nvidia=True))
     binary = _install_variant(svc, "llama-server-cuda")
     assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
 
 
-def test_variant_resolution_auto_picks_vulkan_when_no_nvidia(tmp_path: Path, monkeypatch) -> None:
-    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
-    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
+def test_variant_resolution_auto_picks_vulkan_when_no_nvidia(tmp_path: Path) -> None:
+    svc = LlamaSwapService(_auto_ctx(tmp_path, nvidia=False))
     binary = _install_variant(svc, "llama-server-vulkan")
     assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
 
 
-def test_variant_resolution_auto_falls_back_to_cpu(tmp_path: Path, monkeypatch) -> None:
+def test_variant_resolution_auto_falls_back_to_cpu(tmp_path: Path) -> None:
     """No NVIDIA, no Vulkan installed — CPU is the last resort."""
-    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
-    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
+    svc = LlamaSwapService(_auto_ctx(tmp_path, nvidia=False))
     binary = _install_variant(svc, "llama-server-cpu")
     assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
 
 
-def test_variant_resolution_auto_returns_none_when_nothing_installed(
-    tmp_path: Path, monkeypatch
-) -> None:
-    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": "auto"}))
-    monkeypatch.setattr(svc, "_has_nvidia_gpu", lambda: False)
+def test_variant_resolution_auto_returns_none_when_nothing_installed(tmp_path: Path) -> None:
+    svc = LlamaSwapService(_auto_ctx(tmp_path, nvidia=False))
     assert svc._default_llama_server_binary() is None  # noqa: SLF001
+
+
+def _auto_ctx(tmp_path: Path, *, nvidia: bool):
+    """ServiceContext with the hardware pre-set for variant-auto tests."""
+    from dataclasses import replace
+
+    hw = Hardware(nvidia=nvidia, nvidia_count=1 if nvidia else 0)
+    return service_ctx(
+        tmp_path,
+        options={"llama_server_variant": "auto"},
+        host_info=replace(HostInfo.empty(), hardware=hw),
+    )
 
 
 def test_is_ready_to_serve_true_with_variant_installed(tmp_path: Path) -> None:

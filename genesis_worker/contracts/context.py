@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .host import HostInfo
 from .secret import NoSecretsAccessor, SecretsAccessor
 
 
@@ -28,6 +29,11 @@ class PluginContext:
 
     ``vault_path`` is the model vault root; lifted from SourceContext so service
     plugins can also see it (ADR-023).
+
+    ``host_info`` is the framework-level snapshot of the host (hostname, OS,
+    GPU vendors, NVIDIA driver/runtime). Defaults to :meth:`HostInfo.empty`
+    so plugin authors who don't care about hardware see no churn; the
+    framework populates the real snapshot at registry construction.
     """
 
     name: str
@@ -38,6 +44,7 @@ class PluginContext:
     log_dir: Path
     repo_root: Path
     vault_path: Path
+    host_info: HostInfo = field(default_factory=HostInfo.empty)
     secrets: SecretsAccessor = field(default_factory=NoSecretsAccessor)
     options: Mapping[str, Any] = field(default_factory=dict)
 

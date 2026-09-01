@@ -6,10 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "huggingface-hub>=1.27.0",
+    "nvidia-ml-py>=13.610.43",
     "psutil>=5",
     "pydantic>=2",
     "pydantic-settings>=2",
-    "pynvml>=11",
     "pyyaml>=6",
     "streamlit>=1.61.1",
 ]

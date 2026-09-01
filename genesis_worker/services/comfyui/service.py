@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import socket
-import subprocess
 from pathlib import Path
 
 from ...contracts import (
@@ -20,31 +19,10 @@ from ...contracts import (
     StopResult,
     UiPage,
 )
-from ...utils.process import DockerContainer
 from . import lifecycle
 from .install import ComfyUiImage
 from .options import ComfyUiOptions
 from .symlinks import SymlinkApplier
-
-
-def _has_nvidia_gpu() -> bool:
-    """Probe ``nvidia-smi -L``. Robust against missing binary and hangs.
-
-    Cached at service construction; re-probing is unnecessary on a
-    typical session. The future framework-level host-info work
-    replaces this with a single probe shared across services (ADR-025).
-    """
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "-L"],
-            capture_output=True,
-            timeout=5,
-            text=True,
-            check=False,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False
-    return result.returncode == 0 and "GPU" in result.stdout
 
 
 class ComfyUiService(InferenceService):
@@ -58,8 +36,9 @@ class ComfyUiService(InferenceService):
         opts = ComfyUiOptions(**ctx.options)
         self._options = opts
 
-        # Cached GPU probe.
-        self._has_nvidia_gpu = _has_nvidia_gpu()
+        # GPU state comes from the framework-level host snapshot
+        # (``ctx.host_info.hardware``); no per-service probe needed.
+        self._hardware = ctx.host_info.hardware
 
         # Path defaults derived from ctx (ADR-025).
         # ctx.*_dir are already scoped to this service by the framework;
@@ -101,7 +80,7 @@ class ComfyUiService(InferenceService):
 
     @property
     def has_nvidia_gpu(self) -> bool:
-        return self._has_nvidia_gpu
+        return self._hardware.nvidia
 
     @property
     def image_ref(self) -> str:
@@ -178,14 +157,14 @@ class ComfyUiService(InferenceService):
             return "localhost"
 
     def start(self) -> StartResult:
-        if self._options.gpu_required and not self._has_nvidia_gpu:
+        if self._options.gpu_required and not self._hardware.nvidia:
             return StartResult(
                 ok=False,
                 message="no NVIDIA GPU detected; set gpu_required=false to skip",
             )
         runtime: str | None = None
         gpu_flags: list[str] | None = None
-        if self._options.gpu_required and DockerContainer.nvidia_runtime_available():
+        if self._options.gpu_required and self._hardware.nvidia_runtime:
             runtime = self._options.runtime
             gpu_flags = [
                 f"driver={self._options.gpu_driver}",

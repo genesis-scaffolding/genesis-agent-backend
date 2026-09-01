@@ -21,6 +21,7 @@ from .classify import (
     role_sort_key,
 )
 from .context import PluginContext, ServiceContext, SourceContext
+from .host import Hardware, HostInfo
 from .install import InstallState, InstallVersion, ServiceInstall
 from .plugin import Plugin
 from .secret import NoSecretsAccessor, SecretsAccessor, StaticSecretsAccessor
@@ -49,6 +50,8 @@ __all__ = [
     "AcquireView",
     "Catalog",
     "DiscoveredModel",
+    "Hardware",
+    "HostInfo",
     "InferenceService",
     "InstallState",
     "InstallVersion",

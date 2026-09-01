@@ -70,12 +70,19 @@ class _Registry:
         Both SourceRegistry and ServiceRegistry use this so the
         source-side ``_resolve_local_path`` and the service-side
         options lookup remain the only per-axis differences (ADR-023).
+
+        ``host_info`` is shared across every plugin so a single
+        snapshot — including hardware probes that are best done
+        once per worker startup — covers all consumers.
         """
+        from .utils.collectors.host_info import collect_host_info
+
         return {
             "name": cls.name,
             "repo_root": self._settings.paths.resolved_repo_root,
             "secrets": self._settings.secrets.accessor(),
             "vault_path": self._settings.paths.resolved_vault_path,
+            "host_info": collect_host_info(),
             **self._dirs(cls),
         }
 

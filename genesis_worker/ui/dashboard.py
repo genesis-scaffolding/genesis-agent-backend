@@ -104,6 +104,10 @@ with st.container(border=True):
         st.markdown(f"**OS:** {info.os}")
         st.markdown(f"**Arch:** {info.arch}")
         st.markdown(f"**Python:** {info.python}")
+        gpu_summary = info.hardware.vendor_summary()
+        if info.hardware.nvidia and info.hardware.nvidia_driver_loaded:
+            gpu_summary += " · driver loaded"
+        st.markdown(f"**GPU:** {gpu_summary}")
     with c2:
         st.markdown(f"**Uptime:** {_format_uptime(info.uptime_s)}")
         if info.public_ip:

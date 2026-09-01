@@ -1,10 +1,16 @@
-"""Framework-level view types returned by the facade to UI and CLI consumers."""
+"""Framework-level view types returned by the facade to UI and CLI consumers.
+
+``HostInfo`` and ``Hardware`` live in :mod:`genesis_worker.contracts.host`
+because they cross the framework/plugin boundary via
+:class:`PluginContext`; this module holds the framework-internal
+view types only.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..contracts import ServiceCapabilities, ServiceCategory
+from ..contracts.service import ServiceCapabilities, ServiceCategory
 
 
 @dataclass(frozen=True)
@@ -29,19 +35,6 @@ class ServiceInfo:
 
 
 @dataclass(frozen=True)
-class HostInfo:
-    """Display view of the host this worker is running on."""
-
-    hostname: str
-    os: str  # e.g., "Linux 6.5.0-arch1-1"
-    arch: str  # e.g., "x86_64"
-    python: str  # e.g., "3.11.7"
-    uptime_s: int | None
-    public_ip: str | None
-    tailscale_ip: str | None
-
-
-@dataclass(frozen=True)
 class MachineMetrics:
     """Snapshot of system resource usage at one moment in time."""
 
@@ -54,7 +47,6 @@ class MachineMetrics:
 
 
 __all__ = [
-    "HostInfo",
     "MachineMetrics",
     "ServiceInfo",
     "SourceInfo",

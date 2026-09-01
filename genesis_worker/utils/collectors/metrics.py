@@ -19,7 +19,7 @@ def collect_metrics() -> MachineMetrics:
     vram_total: float | None = None
 
     try:
-        import pynvml  # type: ignore[import-not-found]
+        import pynvml  # provided by the nvidia-ml-py package now
 
         pynvml.nvmlInit()
         try:
