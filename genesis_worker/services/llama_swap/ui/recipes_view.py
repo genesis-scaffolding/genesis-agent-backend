@@ -69,6 +69,7 @@ with st.container(border=True):
         "kv_cache: null\n"
         "mmproj_offload: false\n"
         "ctx_min: null\n"
+        "ctx_size: null\n"
         "reasoning_budget: 0\n"
         'reasoning_budget_message: ""\n'
     )

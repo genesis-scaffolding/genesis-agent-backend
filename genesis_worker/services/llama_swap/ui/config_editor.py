@@ -45,6 +45,8 @@ def _render_effective(cfg: EvaluatedConfig) -> None:
         rows.append(("Parallel", str(cfg.parallel), _badge(cfg.provenance["parallel"])))
     if cfg.ctx_min is not None:
         rows.append(("Fit context", str(cfg.ctx_min), _badge(cfg.provenance["ctx_min"])))
+    if cfg.ctx_size is not None:
+        rows.append(("Context size", str(cfg.ctx_size), _badge(cfg.provenance["ctx_size"])))
     if cfg.mmproj_offload is not None:
         rows.append(
             (
@@ -198,6 +200,22 @@ def _render_override_form(
                 new_overrides["ctx_min"] = int(ctx_val)
             except ValueError:
                 st.error("Fit context must be an integer")
+
+        # --- Context Size (cap) ---
+        cs_val = st.text_input(
+            "Context size (cap)",
+            value=str(
+                current_overrides.get("ctx_size", cfg.ctx_size)
+                if current_overrides.get("ctx_size") is not None or cfg.ctx_size is not None
+                else ""
+            ),
+            key=f"ov-{entry_id}-ctx-size",
+        )
+        if (cs_val or "").strip():
+            try:
+                new_overrides["ctx_size"] = int(cs_val)
+            except ValueError:
+                st.error("Context size must be an integer")
 
         # --- Reasoning Budget ---
         rb_val = st.text_input(

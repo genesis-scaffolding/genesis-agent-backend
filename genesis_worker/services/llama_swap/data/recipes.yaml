@@ -64,6 +64,13 @@
 #   ctx_min lower than default doesn't override the default; the floor is
 #   always at least the default unless you also change the default.
 #
+# ctx_size:                  (optional; cascades from default; unset by default)
+#   Hard cap for llama.cpp's -c (context size). Set this after fitting the
+#   model to available VRAM — the actual ctx the model can hold, not a
+#   floor. When both --fit-ctx (min) and -c (cap) are present on the
+#   resolved cmd, -c wins for the pi-agent contextWindow export. Omit to
+#   let llama-server auto-size.
+#
 # reasoning_budget:          (optional; cascades from default)
 #   Token cap on a single reasoning/thinking block. -1 is unrestricted
 #   (llama.cpp default), 0 forces the model to skip thinking entirely,

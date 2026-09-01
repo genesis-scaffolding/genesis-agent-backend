@@ -106,6 +106,7 @@ class Recipe(BaseModel):
     kv_cache: str | None = None
     mmproj_offload: bool | None = None
     ctx_min: int | None = None
+    ctx_size: int | None = None
     reasoning_budget: int | None = None
     reasoning_budget_message: str | None = None
 

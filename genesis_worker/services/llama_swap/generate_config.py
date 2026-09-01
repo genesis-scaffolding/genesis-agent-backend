@@ -126,6 +126,7 @@ class EvaluatedConfig:
     cmd: str
 
     extra_flags: tuple[str, ...] = ()
+    ctx_size: int | None = None
     hardcoded_flags: tuple[str, ...] = (
         "--kv-unified",
         "--jinja",
@@ -424,6 +425,10 @@ def evaluate_recipe(
     if ctx_min is None and default_recipe:
         ctx_min = default_recipe.ctx_min
 
+    ctx_size = ovr.get("ctx_size", recipe.ctx_size)
+    if ctx_size is None and default_recipe:
+        ctx_size = default_recipe.ctx_size
+
     reasoning_budget = ovr.get("reasoning_budget", recipe.reasoning_budget)
     if reasoning_budget is None and default_recipe:
         reasoning_budget = default_recipe.reasoning_budget
@@ -466,6 +471,7 @@ def evaluate_recipe(
         "mmproj_offload": _source_simple(ovr, recipe, default_recipe, "mmproj_offload"),
         "spec": _source_simple(ovr, recipe, default_recipe, "spec"),
         "ctx_min": _source_simple(ovr, recipe, default_recipe, "ctx_min"),
+        "ctx_size": _source_simple(ovr, recipe, default_recipe, "ctx_size"),
         "parallel": _source_simple(ovr, recipe, default_recipe, "parallel"),
         "reasoning_budget": _source_simple(ovr, recipe, default_recipe, "reasoning_budget"),
         "reasoning_budget_message": _source_simple(
@@ -484,6 +490,7 @@ def evaluate_recipe(
         mmproj_offload=mmproj_offload,
         spec=spec,
         ctx_min=ctx_min,
+        ctx_size=ctx_size,
         parallel=parallel,
         reasoning_budget=reasoning_budget,
         reasoning_budget_message=reasoning_budget_message,
@@ -504,6 +511,7 @@ def evaluate_recipe(
         mmproj_offload=mmproj_offload,
         spec=spec,
         ctx_min=ctx_min,
+        ctx_size=ctx_size,
         parallel=parallel,
         reasoning_budget=reasoning_budget,
         reasoning_budget_message=reasoning_budget_message,
@@ -524,6 +532,7 @@ def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
         mmproj_offload=evaluated.mmproj_offload,
         spec=evaluated.spec,
         ctx_min=evaluated.ctx_min,
+        ctx_size=evaluated.ctx_size,
         parallel=evaluated.parallel,
         reasoning_budget=evaluated.reasoning_budget,
         reasoning_budget_message=evaluated.reasoning_budget_message,
@@ -542,6 +551,7 @@ def cmd_from_evaluated_dict(
     mmproj_offload: bool | None,
     spec: dict[str, Any] | None,
     ctx_min: int | None,
+    ctx_size: int | None,
     parallel: int | None,
     reasoning_budget: int | None,
     reasoning_budget_message: str | None,
@@ -592,6 +602,9 @@ def cmd_from_evaluated_dict(
 
     if ctx_min is not None:
         runtime.extend(["--fit-ctx", str(ctx_min)])
+
+    if ctx_size is not None:
+        runtime.extend(["-c", str(ctx_size)])
 
     if parallel is not None:
         runtime.extend(["--parallel", str(parallel)])

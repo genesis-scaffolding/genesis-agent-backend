@@ -45,6 +45,7 @@ def _recipe(
     kv_cache: str | None = None,
     mmproj_offload: bool | None = None,
     ctx_min: int | None = None,
+    ctx_size: int | None = None,
     reasoning_budget: int | None = None,
     reasoning_budget_message: str | None = None,
 ) -> Recipe:
@@ -59,6 +60,7 @@ def _recipe(
         kv_cache=kv_cache,
         mmproj_offload=mmproj_offload,
         ctx_min=ctx_min,
+        ctx_size=ctx_size,
         reasoning_budget=reasoning_budget,
         reasoning_budget_message=reasoning_budget_message,
     )
@@ -463,3 +465,77 @@ def _image_entry(name: str) -> ModelEntry:
         notes=[],
         extra={},
     )
+
+
+# ---------------------------------------------------------------------------
+# ctx_size — built-in -c cap
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_recipe_uses_ctx_size_when_set(options: BuildOptions) -> None:
+    recipe = _recipe(ctx_size=40960)
+    evaluated = _evaluate(recipe, options)
+    assert evaluated.ctx_size == 40960
+    assert evaluated.provenance["ctx_size"] == FieldSource.RECIPE
+
+
+def test_evaluate_recipe_ctx_size_none_when_unset(options: BuildOptions) -> None:
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, options)
+    assert evaluated.ctx_size is None
+    assert evaluated.provenance["ctx_size"] == FieldSource.COMPUTED
+
+
+def test_evaluate_recipe_ctx_size_override_wins(options: BuildOptions) -> None:
+    recipe = _recipe(ctx_size=40960)
+    evaluated = _evaluate(recipe, options, overrides={"ctx_size": 8192})
+    assert evaluated.ctx_size == 8192
+    assert evaluated.provenance["ctx_size"] == FieldSource.OVERRIDE
+
+
+def test_evaluate_recipe_ctx_size_falls_back_to_default_recipe(
+    options: BuildOptions,
+) -> None:
+    recipe = _recipe()
+    default = _recipe(ctx_size=65536)
+    evaluated = _evaluate(recipe, options, default_recipe=default)
+    assert evaluated.ctx_size == 65536
+    assert evaluated.provenance["ctx_size"] == FieldSource.DEFAULT
+
+
+def test_cmd_emits_c_flag_when_ctx_size_set(options: BuildOptions) -> None:
+    recipe = _recipe(ctx_size=40960)
+    evaluated = _evaluate(recipe, options)
+    assert "-c 40960" in evaluated.cmd
+
+
+def test_cmd_omits_c_flag_when_ctx_size_none(options: BuildOptions) -> None:
+    recipe = _recipe(ctx_min=131072)
+    evaluated = _evaluate(recipe, options)
+    # -c is absent; --fit-ctx is still emitted.
+    assert " -c " not in evaluated.cmd
+    assert "--fit-ctx 131072" in evaluated.cmd
+    assert " -c 0" not in evaluated.cmd
+    assert " -c 1" not in evaluated.cmd
+
+
+def test_cmd_emits_c_after_fit_ctx_in_runtime_section(options: BuildOptions) -> None:
+    """``-c`` sits between ``--fit-ctx`` and ``--parallel`` in the cmd."""
+    recipe = _recipe(ctx_min=131072, ctx_size=40960, parallel=2)
+    evaluated = _evaluate(recipe, options)
+    cmd = evaluated.cmd
+    pos_fit = cmd.find("--fit-ctx")
+    pos_c = cmd.find(" -c ")
+    pos_par = cmd.find("--parallel")
+    assert pos_fit != -1 and pos_c != -1 and pos_par != -1
+    assert pos_fit < pos_c < pos_par
+
+
+def test_cmd_c_flag_only_when_both_fit_ctx_and_ctx_size_set(
+    options: BuildOptions,
+) -> None:
+    """When both min and cap are present, both flags appear; the cap can clamp the floor."""
+    recipe = _recipe(ctx_min=131072, ctx_size=40960)
+    evaluated = _evaluate(recipe, options)
+    assert "--fit-ctx 131072" in evaluated.cmd
+    assert "-c 40960" in evaluated.cmd
