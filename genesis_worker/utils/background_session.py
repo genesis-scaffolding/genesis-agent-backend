@@ -92,6 +92,7 @@ class BackgroundSession(AcquireSession):
 
     def _run(self) -> None:
         """Thread supervisor. Translates exceptions to terminal kinds."""
+        self._pre_run_hook()
         try:
             self._run_inner()
         except _Canceled:
@@ -99,6 +100,7 @@ class BackgroundSession(AcquireSession):
         except Exception as exc:  # noqa: BLE001 — surface any failure
             self._state.kind = AcquireStateKind.FAILED
             self._state.failure = f"{type(exc).__name__}: {exc}"
+        self._post_run_hook()
 
     def _append_log(self, line: str) -> None:
         """Append a line to the session's log tail (thread-safe, last 200).
@@ -126,6 +128,12 @@ class BackgroundSession(AcquireSession):
         On failure: raise any exception (caught by the supervisor).
         On cancellation: raise ``_Canceled``.
         """
+
+    def _pre_run_hook(self) -> None:
+        """Run before _run_inner. Override in subclass. No-op by default."""
+
+    def _post_run_hook(self) -> None:
+        """Run after _run_inner. Override in subclass. No-op by default."""
 
 
 __all__ = ["BackgroundSession", "_Canceled"]

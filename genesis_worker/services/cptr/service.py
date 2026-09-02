@@ -137,6 +137,7 @@ class CptrService(InferenceService):
             session_name=self._options.session_name,
             log_file=self._log_file,
             health_timeout_s=self._options.health_timeout_s,
+            stream_timeout_s=lifecycle._STREAM_READ_TIMEOUT_S,
         )
 
     def stop(self) -> StopResult:

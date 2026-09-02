@@ -27,7 +27,7 @@ from ...contracts import (
     InstallVersion,
     ServiceInstall,
 )
-from ...utils.acquire import UvToolAcquireSession
+from .acquire import CptrAcquireSession
 
 _PYPI_URL = "https://pypi.org/pypi/cptr/json"
 _PACKAGE_NAME = "cptr"
@@ -125,7 +125,7 @@ class CptrInstall(ServiceInstall):
         return Path(found) if found else None
 
     def install(self, *, version: str | None = None) -> AcquireSession:
-        return UvToolAcquireSession(
+        return CptrAcquireSession(
             package_name=_PACKAGE_NAME,
             version=version,
             timeout_s=_UV_TIMEOUT_S,
