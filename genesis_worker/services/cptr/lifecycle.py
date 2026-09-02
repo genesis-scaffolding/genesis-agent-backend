@@ -9,10 +9,13 @@ from pathlib import Path
 from ...contracts import ServiceStatus, StartResult, StopResult
 from ...utils.net import HealthProbe
 from ...utils.process import TmuxProcess
+from .acquire import patch_pi_timeout
 
 _DEFAULT_HEALTH_POLL_S = 1.0
 _DEFAULT_HEALTH_TIMEOUT_S = 60.0
 _GRACEFUL_STOP_TIMEOUT_S = 10.0
+_STREAM_READ_TIMEOUT_S = 1200
+_STREAM_WRITE_TIMEOUT_S = 1200
 
 
 def start_cptr(
@@ -23,19 +26,38 @@ def start_cptr(
     session_name: str,
     log_file: Path,
     health_timeout_s: float = _DEFAULT_HEALTH_TIMEOUT_S,
+    stream_timeout_s: int | None = None,
 ) -> StartResult:
     """Start cptr in a tmux session and wait for HTTP readiness.
 
     Returns ``StartResult`` with ``ok=False`` and a human-readable
     message on any failure mode (binary missing, tmux new-session
     failed, did not become ready in time).
+
+    ``stream_timeout_s`` sets CPTR_STREAM_READ_TIMEOUT and
+    CPTR_STREAM_WRITE_TIMEOUT for the cptr process. Defaults to 1200s.
+    Set to 0 to disable (use cptr's built-in defaults).
     """
     if not binary.is_file():
         return StartResult(ok=False, message=f"binary not found: {binary}")
 
     tmux = TmuxProcess(session_name)
 
-    cmd = f"{shlex.quote(str(binary))} run --host {shlex.quote(host)} --port {port}"
+    base_cmd = f"{shlex.quote(str(binary))} run --host {shlex.quote(host)} --port {port}"
+    if stream_timeout_s is None:
+        stream_timeout_s = _STREAM_READ_TIMEOUT_S
+    # Set stream-level timeouts so cptr's own HTTP/event transport doesn't
+    # bail out before the pi-agent timeout (900s) fires.
+    # See docs/cptr-timeout-patch.md.
+    if stream_timeout_s > 0:
+        env_prefix = (
+            f"export CPTR_STREAM_READ_TIMEOUT={stream_timeout_s}"
+            f" CPTR_STREAM_WRITE_TIMEOUT={stream_timeout_s} && "
+        )
+        cmd = f"{env_prefix}{base_cmd}"
+    else:
+        cmd = base_cmd
+    patch_pi_timeout()  # runtime guard for pre-existing cptr installs
     result = tmux.start(cmd, log_file)
     if not result.ok:
         return result
