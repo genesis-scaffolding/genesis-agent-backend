@@ -45,8 +45,9 @@ api:
 	uv run genesis-worker-api
 
 serve:
-	@echo "Starting UI on $${GENESIS_UI_PORT:-8501} and API on $${GENESIS_API_PORT:-9090} (Ctrl+C to stop both)..."
-	@trap 'kill 0' EXIT INT TERM; \
+	@echo "Starting UI on $${GENESIS_UI_PORT:-8501} and API on $${GENESIS_API_PORT:-20985} (Ctrl+C to stop both)..."
+	@trap 'kill 0' EXIT; \
+	trap 'kill 0; exit 130' INT; \
 	uv run genesis-worker-ui & \
 	uv run genesis-worker-api & \
 	wait
