@@ -90,14 +90,20 @@ api:
 \tuv run genesis-worker-api
 
 serve:
-\t@echo "Starting UI on $${GENESIS_UI_PORT:-8501} and API on $${GENESIS_API_PORT:-9090}..."
-\t@trap 'kill 0' EXIT INT TERM; \\
+\t@echo "Starting UI on $${GENESIS_UI_PORT:-8501} and API on $${GENESIS_API_PORT:-20985}..."
+\t@trap 'kill 0' EXIT; \\
+\ttrap 'kill 0; exit 130' INT; \\
 \tuv run genesis-worker-ui & \\
 \tuv run genesis-worker-api & \\
 \twait
 ```
 
-The `kill 0` trap fires on Ctrl+C and cleans up both child processes. No new dep — `make` is the orchestrator.
+The `kill 0` trap fires on Ctrl+C and cleans up both child processes. The
+trap is split across `EXIT` and `INT` only — bundling `TERM` in with
+`kill 0` re-enters the trap handler in bash 5.3.x (the `kill 0` from
+the INT trap sends SIGTERM to the shell itself, which re-fires the
+TERM trap), segmenting the parser stack. No new dep — `make` is the
+orchestrator.
 
 ## Gate
 
