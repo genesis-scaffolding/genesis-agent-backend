@@ -22,6 +22,9 @@ def _load(config_path: Path) -> dict:
 def test_seed_config_writes_when_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """First seed writes config.yaml and reports it did."""
     monkeypatch.setattr(
+        "genesis_worker.services.sillytavern.config._bridge_gateways", lambda: ["172.17.0.1"]
+    )
+    monkeypatch.setattr(
         "genesis_worker.services.sillytavern.config._host_connected_subnets",
         list,
     )
@@ -40,6 +43,9 @@ def test_seed_config_writes_when_absent(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 def test_seed_config_preserves_other_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A pre-existing config keeps every unrelated key; only whitelist keys are fixed."""
+    monkeypatch.setattr(
+        "genesis_worker.services.sillytavern.config._bridge_gateways", lambda: ["172.17.0.1"]
+    )
     monkeypatch.setattr(
         "genesis_worker.services.sillytavern.config._host_connected_subnets",
         list,
