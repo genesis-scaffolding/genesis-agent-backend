@@ -5,7 +5,7 @@ be imported, unlike streamlit which only really runs as
 ``streamlit run``.
 
 ``GENESIS_API_HOST`` and ``GENESIS_API_PORT`` override the defaults
-(``0.0.0.0`` and ``9090``) so the API can run beside the Streamlit UI
+(``0.0.0.0`` and ``20985``) so the API can run beside the Streamlit UI
 on the standard Tailscale-reachable addresses without colliding with
 llama-swap's ``8080`` or Streamlit's ``8501``.
 """
@@ -17,7 +17,7 @@ import uvicorn
 
 def main() -> int:
     host = os.environ.get("GENESIS_API_HOST", "0.0.0.0")
-    port = int(os.environ.get("GENESIS_API_PORT", "9090"))
+    port = int(os.environ.get("GENESIS_API_PORT", "20985"))
     from ..api.app import app
 
     uvicorn.run(app, host=host, port=port, log_level="info")
