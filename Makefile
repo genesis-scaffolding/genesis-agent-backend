@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install test test-fast lint typecheck ui env-init build clean setup-models-vault
+.PHONY: help install test test-fast lint typecheck ui api serve env-init build clean setup-models-vault
 
 help:
 	@echo "Targets:"
@@ -14,6 +14,8 @@ help:
 	@echo "  make lint         ruff check genesis_worker"
 	@echo "  make typecheck    pyright"
 	@echo "  make ui           launch the Streamlit UI (genesis-worker-ui)"
+	@echo "  make api          launch the FastAPI server (genesis-worker-api)"
+	@echo "  make serve        launch the UI and the API together (Ctrl+C to stop both)"
 	@echo "  make env-init     create .env from .env.example if absent"
 	@echo "  make build        uv build (wheel + sdist under dist/)"
 	@echo "  make clean        remove build and cache artifacts"
@@ -38,6 +40,16 @@ typecheck:
 
 ui:
 	uv run genesis-worker-ui
+
+api:
+	uv run genesis-worker-api
+
+serve:
+	@echo "Starting UI on $${GENESIS_UI_PORT:-8501} and API on $${GENESIS_API_PORT:-9090} (Ctrl+C to stop both)..."
+	@trap 'kill 0' EXIT INT TERM; \
+	uv run genesis-worker-ui & \
+	uv run genesis-worker-api & \
+	wait
 
 env-init:
 	@if [ -f .env ]; then \
