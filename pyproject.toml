@@ -5,6 +5,7 @@ description = "Local AI infrastructure worker (llama-swap + Streamlit UI)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.141.1",
     "huggingface-hub>=1.27.0",
     "nvidia-ml-py>=13.610.43",
     "psutil>=5",
@@ -12,9 +13,11 @@ dependencies = [
     "pydantic-settings>=2",
     "pyyaml>=6",
     "streamlit>=1.61.1",
+    "uvicorn>=0.52.1",
 ]
 
 [project.scripts]
+genesis-worker-api = "genesis_worker.cli.api:main"
 genesis-worker-ui = "genesis_worker.cli.ui:main"
 
 [build-system]
