@@ -23,7 +23,8 @@ class Hardware:
     nvidia: bool = False
     nvidia_count: int = 0
     nvidia_driver_loaded: bool = False
-    nvidia_runtime: bool = False  # `docker info` reports nvidia runtime
+    nvidia_runtime: bool = False  # legacy `--runtime nvidia` registered with the daemon
+    nvidia_cdi: bool = False  # modern `--gpus all` via NVIDIA CDI specs
 
     amd: bool = False
     amd_count: int = 0

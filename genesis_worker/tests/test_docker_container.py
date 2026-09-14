@@ -612,6 +612,24 @@ def test_nvidia_runtime_available_false(monkeypatch: pytest.MonkeyPatch) -> None
     assert DockerContainer.nvidia_runtime_available() is False
 
 
+def test_nvidia_runtime_available_false_on_docker_29_cdi_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CDI specs without a legacy runtime registration must not be reported.
+
+    The legacy substring probe would have misidentified this host as having
+    the ``nvidia`` runtime available — see test_hardware.py for the matching
+    collector test.
+    """
+    body = (
+        "Runtimes: runc io.containerd.runc.v2\n  cdi: nvidia.com/gpu=0\n  cdi: nvidia.com/gpu=all\n"
+    )
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: _completed(args, returncode=0, stdout=body)
+    )
+    assert DockerContainer.nvidia_runtime_available() is False
+
+
 def test_nvidia_runtime_available_false_on_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", lambda args, **kw: _completed(args, returncode=1))
     assert DockerContainer.nvidia_runtime_available() is False
