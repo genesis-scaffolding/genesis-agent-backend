@@ -20,9 +20,19 @@ from genesis_worker.services.comfyui.symlinks import SymlinkApplier
 from genesis_worker.tests._factories import service_ctx
 
 
-def _hw(*, nvidia: bool = False, runtime: bool = False) -> Hardware:
+def _hw(
+    *,
+    nvidia: bool = False,
+    runtime: bool = False,
+    cdi: bool = False,
+) -> Hardware:
     """Build a Hardware snapshot with the GPU fields tests care about."""
-    return Hardware(nvidia=nvidia, nvidia_count=1 if nvidia else 0, nvidia_runtime=runtime)
+    return Hardware(
+        nvidia=nvidia,
+        nvidia_count=1 if nvidia else 0,
+        nvidia_runtime=runtime,
+        nvidia_cdi=cdi,
+    )
 
 
 # --- construction ----------------------------------------------------------
@@ -267,6 +277,64 @@ def test_start_skips_gpu_args_when_runtime_missing(
     kwargs = mock_start.call_args.kwargs
     assert kwargs["runtime"] is None
     assert kwargs["gpu_flags"] is None
+
+
+def test_start_uses_cdi_gpus_all_when_runtime_missing_but_cdi_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docker 29+ path: no legacy runtime, but NVIDIA CDI specs are exposed.
+
+    The container should be created without ``--runtime nvidia`` (the
+    legacy runtime isn't registered) but with ``--gpus all`` so the
+    daemon injects devices via CDI.
+    """
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=False, cdi=True))
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    kwargs = mock_start.call_args.kwargs
+    assert kwargs["runtime"] is None
+    assert kwargs["gpu_flags"] == ["all"]
+
+
+def test_start_skips_gpu_args_when_nvidia_present_but_no_runtime_or_cdi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Worst case: NVIDIA hardware but no Docker-side plumbing at all.
+
+    The container should start without GPU passthrough; the user
+    sees the PyTorch failure and knows to install nvidia-container-toolkit.
+    """
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=False, cdi=False))
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    kwargs = mock_start.call_args.kwargs
+    assert kwargs["runtime"] is None
+    assert kwargs["gpu_flags"] is None
+
+
+def test_start_passes_vault_models_dir_to_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lifecycle needs the vault models dir to mkdir before the bind mount."""
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    assert mock_start.call_args.kwargs["vault_models_dir"] == svc._vault_models_dir
 
 
 def test_stop_dispatches_to_lifecycle(tmp_path: Path) -> None:

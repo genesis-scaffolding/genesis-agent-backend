@@ -7,6 +7,8 @@ constructs them from options + ctx.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ...contracts import ServiceState, ServiceStatus, StartResult, StopResult
 from ...utils.net import HealthProbe
 from ...utils.process import DockerContainer
@@ -28,15 +30,24 @@ def start_comfyui(
     extra_args: list[str] | None,
     restart_policy: str,
     hostname: str,
+    vault_models_dir: Path,
 ) -> StartResult:
     """Create and start the ComfyUI container.
 
     ``image_present`` gates the run: callers should pre-check via
     :meth:`DockerContainer.image_present` so the user gets a clear
     "image not pulled" message rather than a docker-side error.
+    ``vault_models_dir`` is the host directory ComfyUI is told to read
+    as ``--models-directory /vault/comfyui``; we ``mkdir`` it here so
+    a fresh install (no symlinks yet) still launches.
     """
     if not image_present:
         return StartResult(ok=False, message=f"image not pulled: {image}")
+
+    # Idempotent: the bind mount above only guarantees the vault root is
+    # visible inside the container, not this specific subdir. ComfyUI's
+    # CLI requires the models directory to exist at startup.
+    vault_models_dir.mkdir(parents=True, exist_ok=True)
 
     container = DockerContainer(container_name)
     return container.run(
