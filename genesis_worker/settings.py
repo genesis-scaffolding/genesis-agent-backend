@@ -1,4 +1,12 @@
-"""Framework settings. Plugin option slices are opaque here — see ADR-009."""
+"""Framework settings. Plugin option slices are opaque here — see ADR-009.
+
+Precedence (lowest → highest):
+
+    defaults → dev.env → .env → real env → user-overrides.env → constructor args
+
+``user-overrides.env`` lives at ``<config_dir>/user-overrides.env`` and
+is layered as the topmost file source. ADR-034.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +19,14 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .contracts import SecretsAccessor
+from .utils.config_overrides import read_user_overrides
 from .utils.paths import repo_root, xdg_path
 
 # The directory the worker owns under each XDG base. Change it here to rename them all.
 XDG_BASE = "genesis-worker"
+
+# Filename of the user-overrides file inside ``config_dir`` (ADR-034).
+USER_OVERRIDES_FILENAME = "user-overrides.env"
 
 
 @lru_cache(maxsize=1)
@@ -135,6 +147,50 @@ class Settings(BaseSettings):
     services: dict[str, dict[str, Any]] = Field(default_factory=dict)
     secrets: SecretsSettings = Field(default_factory=SecretsSettings)
 
+    def __init__(self, **data: Any) -> None:
+        # Layer the user-overrides file at the top of the precedence chain
+        # (ADR-034). The default ``env_file`` in ``model_config`` is
+        # ``("dev.env", ".env")``; we append the override file when present
+        # so later files win. Pydantic-settings reads each entry in order.
+        #
+        # We resolve ``config_dir`` from the resolved env / constructor
+        # kwargs rather than from ``data["paths"].config_dir`` because the
+        # latter would skip the override file we're about to read.
+        override_path = self._resolve_user_overrides_path(data)
+        base_env_file_raw = self.model_config.get("env_file")
+        if base_env_file_raw is None:
+            base_env_file: tuple[str, ...] = ()
+        elif isinstance(base_env_file_raw, str):
+            base_env_file = (base_env_file_raw,)
+        elif isinstance(base_env_file_raw, os.PathLike):
+            base_env_file = (os.fspath(base_env_file_raw),)
+        else:
+            base_env_file = tuple(os.fspath(p) for p in base_env_file_raw)
+        if override_path is not None and override_path.is_file():
+            # Pre-parse to surface malformed lines loudly (ADR-034 — loud
+            # failure beats silent corruption). Pydantic-settings itself
+            # silently skips lines without ``=``; we want the user to know.
+            read_user_overrides(override_path)
+            base_env_file = (*base_env_file, str(override_path))
+        super().__init__(**{**data, "_env_file": base_env_file})
+
+    @staticmethod
+    def _resolve_user_overrides_path(data: dict[str, Any]) -> Path | None:
+        """Find ``<config_dir>/user-overrides.env`` from any of the override
+        sources — constructor kwarg, real env, ``.env`` — in that order.
+
+        The constructor calls this before ``super().__init__`` so the path
+        resolution has to happen outside pydantic-settings. We mirror its
+        env-walk by inspecting ``os.environ`` and the kwarg dict.
+        """
+        # Explicit kwarg wins (matches ADR precedence: constructor > everything).
+        if "paths" in data and isinstance(data["paths"], PathsSettings):
+            return data["paths"].config_dir / USER_OVERRIDES_FILENAME
+        if os.environ.get("GENESIS_PATHS__CONFIG_DIR"):
+            return Path(os.environ["GENESIS_PATHS__CONFIG_DIR"]) / USER_OVERRIDES_FILENAME
+        # Fall back to XDG default.
+        return xdg_path("CONFIG", ".config", XDG_BASE) / USER_OVERRIDES_FILENAME
+
     def options_for(self, axis: str, name: str) -> dict[str, Any]:
         return dict(getattr(self, axis).get(name, {}))
 
@@ -147,9 +203,20 @@ class Settings(BaseSettings):
         return self.secrets.accessor().get(name)
 
 
+def user_overrides_path(settings_paths: PathsSettings) -> Path:
+    """The framework-level path to the user-overrides file. Helpers and the
+    facade call this so the file's location has exactly one definition.
+
+    Reads the resolved ``config_dir`` from a fully-built ``PathsSettings``
+    — callers that don't have one yet should use the helper above.
+    """
+    return settings_paths.config_dir / USER_OVERRIDES_FILENAME
+
+
 __all__ = [
     "PathsSettings",
     "SecretsAccessor",
     "SecretsSettings",
     "Settings",
+    "user_overrides_path",
 ]

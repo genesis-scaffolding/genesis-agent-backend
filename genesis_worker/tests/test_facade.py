@@ -334,3 +334,140 @@ def test_delete_model_raises_for_unknown_entry(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="No entry found"):
         w.delete_model("huggingface", "nonexistent/repo")
+
+
+# --- User overrides + refresh_config (ADR-034) ---------------------------
+
+
+def _hermetic_settings(tmp_path: Path):
+    """Hermetic Settings isolated from the real install + state dir."""
+    from genesis_worker.settings import PathsSettings, Settings
+
+    return Settings(
+        paths=PathsSettings(
+            data_dir=tmp_path / "data",
+            config_dir=tmp_path / "config",
+            cache_dir=tmp_path / "cache",
+            state_dir=tmp_path / "state",
+            log_dir=tmp_path / "log",
+        )
+    )
+
+
+def test_user_overrides_path_resolves_under_config_dir(tmp_path: Path) -> None:
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    assert w.user_overrides_path() == tmp_path / "config" / "user-overrides.env"
+
+
+def test_read_user_overrides_returns_empty_when_absent(tmp_path: Path) -> None:
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    assert w.read_user_overrides() == {}
+
+
+def test_write_user_overrides_round_trips(tmp_path: Path) -> None:
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    values = {"GENESIS_PATHS__VAULT_PATH": "/srv/vault"}
+    w.write_user_overrides(values)
+    assert w.read_user_overrides() == values
+
+
+def test_write_user_overrides_refuses_secrets(tmp_path: Path) -> None:
+    """Secrets belong to the SecretsAccessor path (ADR-012), not the override file."""
+    import pytest
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(ValueError, match="cannot set secrets"):
+        w.write_user_overrides({"GENESIS_SECRETS__GITHUB_TOKEN": "ghp_steal_me"})
+
+
+def test_refresh_config_preserves_facade_identity(tmp_path: Path) -> None:
+    """refresh_config mutates the facade in place — no new GenesisWorker."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    sources_before = w._source_registry  # noqa: SLF001
+    services_before = w._service_registry  # noqa: SLF001
+    w.refresh_config()
+    # Same facade object; its internal registries are the *new* ones
+    # (rebuilt), not the originals.
+    assert w._source_registry is not sources_before  # noqa: SLF001
+    assert w._service_registry is not services_before  # noqa: SLF001
+    # And list_sources() still works post-refresh.
+    assert w.list_sources()  # non-empty list
+
+
+def test_refresh_config_picks_up_overrides(tmp_path: Path) -> None:
+    """A vault_path written to the override file is honoured after refresh."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    new_vault = tmp_path / "alt-vault"
+    w.write_user_overrides({"GENESIS_PATHS__VAULT_PATH": str(new_vault)})
+    w.refresh_config()
+    assert w.settings.paths.vault_path == new_vault
+    assert w.settings.paths.resolved_vault_path == new_vault
+
+
+def test_refresh_config_drops_catalog_cache(tmp_path: Path) -> None:
+    """After refresh, the next catalog() call walks the new vault."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    _ = w.catalog()  # prime cache
+    assert w._catalog_cache is not None  # noqa: SLF001 — diagnostic
+    w.refresh_config()
+    assert w._catalog_cache is None  # noqa: SLF001
+
+
+def test_refresh_config_leaves_state_intact_on_failure(tmp_path: Path) -> None:
+    """A malformed override raises but the facade survives unchanged.
+
+    The 'construct-first, swap-last' safety guarantee — a bad save is
+    loud and non-destructive (ADR-034).
+    """
+    import pytest
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    vault_before = w.settings.paths.resolved_vault_path
+    sources_before = list(w.list_sources())
+    services_before = list(w.list_services())
+
+    w.user_overrides_path().parent.mkdir(parents=True, exist_ok=True)
+    w.user_overrides_path().write_text("NOKEY\n")
+
+    with pytest.raises(ValueError, match="malformed override"):
+        w.refresh_config()
+
+    assert w.settings.paths.resolved_vault_path == vault_before
+    assert [s.name for s in w.list_sources()] == [s.name for s in sources_before]
+    assert [s.name for s in w.list_services()] == [s.name for s in services_before]
+
+
+def test_snapshot_settings_includes_path_knobs(tmp_path: Path) -> None:
+    """The Settings page renders framework knobs only (ADR-034)."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    snapshots = w.snapshot_settings()
+    names = {s.name for s in snapshots}
+    # Framework knobs:
+    assert "paths.vault_path" in names
+    assert "paths.data_dir" in names
+    assert "paths.config_dir" in names
+    assert "paths.cache_dir" in names
+    assert "paths.state_dir" in names
+    assert "paths.log_dir" in names
+    # Per-source local_path knobs:
+    assert "sources.huggingface.local_path" in names
+    assert "sources.lmstudio.local_path" in names
+    # Service-specific knobs are NOT here:
+    assert not any(s.name.startswith("services.") for s in snapshots)
+
+
+def test_snapshot_settings_marks_user_overrides_source(tmp_path: Path) -> None:
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    w.write_user_overrides({"GENESIS_PATHS__VAULT_PATH": "/srv/vault"})
+    snapshots = {s.name: s for s in w.snapshot_settings()}
+    assert snapshots["paths.vault_path"].source == "user_overrides"

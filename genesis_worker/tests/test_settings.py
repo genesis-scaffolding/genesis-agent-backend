@@ -150,3 +150,81 @@ def test_real_env_var_overrides_dot_env(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("GENESIS_PATHS__DATA_DIR", "/tmp/real-env-data")
     s = Settings()
     assert s.paths.data_dir == Path("/tmp/real-env-data")
+
+
+def test_user_overrides_layered_above_dot_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """user-overrides.env wins over .env (ADR-034)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GENESIS_PATHS__CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "user-overrides.env").write_text(
+        "GENESIS_PATHS__DATA_DIR=/tmp/override-data\n"
+    )
+    (tmp_path / ".env").write_text("GENESIS_PATHS__DATA_DIR=/tmp/dotenv-data\n")
+    s = Settings()
+    assert s.paths.data_dir == Path("/tmp/override-data")
+
+
+def test_user_overrides_layered_above_real_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """user-overrides.env loses to a real env var (ADR-034 precedence).
+
+    Real env > file-based overrides because the user's interactive shell
+    is the most explicit override surface.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GENESIS_PATHS__CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "user-overrides.env").write_text(
+        "GENESIS_PATHS__DATA_DIR=/tmp/override-data\n"
+    )
+    monkeypatch.setenv("GENESIS_PATHS__DATA_DIR", "/tmp/real-env-data")
+    s = Settings()
+    assert s.paths.data_dir == Path("/tmp/real-env-data")
+
+
+def test_missing_user_overrides_file_is_a_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh install has no override file; behaviour matches the pre-ADR days."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GENESIS_PATHS__CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()  # dir exists, no override file
+    (tmp_path / ".env").write_text("GENESIS_PATHS__DATA_DIR=/tmp/dotenv-data\n")
+    s = Settings()
+    assert s.paths.data_dir == Path("/tmp/dotenv-data")
+
+
+def test_user_overrides_supports_nested_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nested pydantic-settings keys (``GENESIS_SOURCES__HUGGINGFACE__LOCAL_PATH``)
+    pass through the override file unchanged (ADR-034). The framework treats
+    the slice as opaque ``dict[str, Any]``; pydantic-settings does not coerce
+    values inside an untyped nested dict to ``Path``, so we assert on the
+    raw string the plugin will then parse at construction time.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GENESIS_PATHS__CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "user-overrides.env").write_text(
+        "GENESIS_SOURCES__HUGGINGFACE__LOCAL_PATH=/srv/hf-cache\nMODELS_ROOT=/srv/legacy-models\n"
+    )
+    s = Settings()
+    assert s.options_for("sources", "huggingface") == {"local_path": "/srv/hf-cache"}
+
+
+def test_user_overrides_malformed_surfaces_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed override line must raise at Settings() construction,
+    not silently be ignored (ADR-034 — loud failure beats silent corruption)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GENESIS_PATHS__CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "user-overrides.env").write_text("NOKEY\n")
+    with pytest.raises(ValueError, match="malformed override"):
+        Settings()

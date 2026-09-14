@@ -44,6 +44,7 @@ nav: dict[str, list[st.Page]] = {
         _page(_FRAMEWORK_UI / "dashboard.py", "Dashboard", ":material/dashboard:", None),
         _page(_FRAMEWORK_UI / "catalog.py", "Model Catalog", ":material/folder:", None),
         _page(_FRAMEWORK_UI / "services_catalog.py", "Service Catalog", ":material/apps:", None),
+        _page(_FRAMEWORK_UI / "settings.py", "Settings", ":material/settings:", None),
     ],
 }
 
