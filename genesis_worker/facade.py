@@ -5,15 +5,21 @@ from __future__ import annotations
 import shutil
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .catalog import CatalogService
 from .contracts import AcquireSession, Catalog, InferenceService, ModelSource, SecretsAccessor
 from .registries import ServiceRegistry, SourceRegistry
-from .utils.models import ServiceInfo, SourceInfo
+from .utils.config_overrides import read_user_overrides, write_user_overrides
+from .utils.models import ServiceInfo, SettingSnapshot, SourceInfo
 
 if TYPE_CHECKING:
-    from .settings import Settings
+    from .settings import PathsSettings, Settings
+
+# Keys that must not be set via user-overrides.env — secrets have their
+# own access path (ADR-012). Stripping them silently would make a typo
+# look like a successful write; refusing loudly is the right behaviour.
+_FORBIDDEN_OVERRIDE_PREFIXES = ("GENESIS_SECRETS__",)
 
 
 _TERMINAL_KINDS = frozenset({"complete", "failed", "cancelled"})
@@ -90,6 +96,158 @@ class GenesisWorker:
     def secret(self, name: str) -> str | None:
         """Convenience: ``self.secrets.get(name)``."""
         return self._settings.secrets.accessor().get(name)
+
+    # --- User overrides + refresh (ADR-034) -------------------------------
+
+    def user_overrides_path(self) -> Path:
+        """Path to the ``user-overrides.env`` file this worker reads."""
+        from .settings import user_overrides_path
+
+        return user_overrides_path(self._settings.paths)
+
+    def read_user_overrides(self) -> dict[str, str]:
+        """Current contents of the user-overrides file as a dict.
+
+        Empty dict when the file is absent or has no parseable keys.
+        """
+        return read_user_overrides(self.user_overrides_path())
+
+    def write_user_overrides(self, values: dict[str, str]) -> None:
+        """Atomic write of the user-overrides file. Validates before writing.
+
+        Refuses keys under ``GENESIS_SECRETS__*`` — those belong to the
+        secrets access path (ADR-012), not the public override layer.
+        """
+        bad = [k for k in values if k.startswith(_FORBIDDEN_OVERRIDE_PREFIXES)]
+        if bad:
+            raise ValueError(
+                f"cannot set secrets via user-overrides: {bad}; use the secrets access path instead"
+            )
+        write_user_overrides(self.user_overrides_path(), values)
+
+    def refresh_config(self) -> None:
+        """Re-read user-overrides.env and rebuild internal state in place.
+
+        Preserves the ``GenesisWorker`` object's identity — pages and
+        routes that hold a reference continue to see the same facade.
+        The catalog cache is dropped (next call rescan walks the new
+        vault); the persisted ``catalog.json`` on disk is untouched.
+
+        In-flight acquire sessions are preserved on purpose: their
+        state lives on the session object itself, and the user
+        explicitly asked not to drop them across a config refresh.
+
+        Running services are unaffected — they're separate OS
+        processes. ``service_status()`` re-queries tmux/docker on
+        every call, so the dashboard keeps showing them as running.
+        The user must restart the affected service on its own page
+        to pick up new options.
+
+        Construct-first, swap-last: if the new ``Settings()`` raises
+        (bad pydantic value) or either registry raises (plugin
+        construction failure), the existing facade state is intact
+        and the exception propagates.
+        """
+        # Merge any per-path overrides on top of the existing
+        # ``PathsSettings`` so the constructor kwargs don't outvote
+        # the override file. Other layers (real env, .env) still
+        # take effect because we don't touch them here.
+        merged_paths = _merge_paths_with_overrides(self._settings.paths)
+        new_settings = _build_settings(paths=merged_paths)
+        new_sources = SourceRegistry(new_settings)
+        new_services = ServiceRegistry(new_settings)
+        new_catalog_service = CatalogService(
+            new_sources,
+            catalog_path=new_settings.paths.state_dir / "catalog.json",
+        )
+        # Atomic swap — only after every constructor succeeded.
+        self._settings = new_settings
+        self._source_registry = new_sources
+        self._service_registry = new_services
+        self._catalog_service = new_catalog_service
+        self._catalog_cache = None
+
+    def snapshot_settings(self) -> list[SettingSnapshot]:
+        """Framework knobs the Settings page renders, with their resolved
+        values and the precedence layer each one came from.
+
+        Returns settings the page actually exposes today: paths and
+        per-source ``local_path``s. Service-specific knobs stay on
+        each service's own page (ADR-034).
+        """
+        from .settings import user_overrides_path
+
+        paths = self._settings.paths
+        env_overrides = read_user_overrides(user_overrides_path(paths))
+        snapshots: list[SettingSnapshot] = []
+
+        # Path knobs. Each renders as an editable text field.
+        path_knobs: list[tuple[str, Path, str]] = [
+            (
+                "vault_path",
+                paths.vault_path or paths.resolved_vault_path,
+                "GENESIS_PATHS__VAULT_PATH",
+            ),
+            ("data_dir", paths.data_dir, "GENESIS_PATHS__DATA_DIR"),
+            ("config_dir", paths.config_dir, "GENESIS_PATHS__CONFIG_DIR"),
+            ("cache_dir", paths.cache_dir, "GENESIS_PATHS__CACHE_DIR"),
+            ("state_dir", paths.state_dir, "GENESIS_PATHS__STATE_DIR"),
+            ("log_dir", paths.log_dir, "GENESIS_PATHS__LOG_DIR"),
+        ]
+        for name, value, env_key in path_knobs:
+            source = self._classify_source(env_key, env_overrides, value)
+            snapshots.append(
+                SettingSnapshot(
+                    name=f"paths.{name}",
+                    value=value,
+                    source=source,
+                    override_key=env_key,
+                    override_path=value,
+                )
+            )
+
+        # Per-source local_path knobs. Use the resolved local_path the
+        # registry actually built for each source, so the UI shows
+        # what's in effect rather than what's configured (the framework
+        # may have applied vault_subdir or the legacy MODELS_ROOT
+        # fallback).
+        for info in self.list_sources():
+            src = self.source(info.name)
+            env_key = f"GENESIS_SOURCES__{info.name.upper()}__LOCAL_PATH"
+            source = self._classify_source(env_key, env_overrides, src.local_path)
+            snapshots.append(
+                SettingSnapshot(
+                    name=f"sources.{info.name}.local_path",
+                    value=src.local_path,
+                    source=source,
+                    override_key=env_key,
+                    override_path=src.local_path,
+                )
+            )
+
+        return snapshots
+
+    @staticmethod
+    def _classify_source(env_key: str, env_overrides: dict[str, str], resolved: Any) -> str:
+        """Where the resolved value of one knob came from.
+
+        The introspection is approximate: pydantic-settings doesn't
+        expose per-key source attribution, so we walk the override
+        file ourselves and label accordingly. Real env > override
+        file > ``.env`` > default. We only label "user_overrides"
+        when the override file actually carries that key.
+        """
+        import os
+
+        if env_key in os.environ:
+            return "env"
+        if env_key in env_overrides:
+            return "user_overrides"
+        # We can't easily distinguish ``.env`` from defaults without
+        # re-walking ``.env``. The page treats unknown provenance as
+        # "default"; users can spot a value they think came from
+        # elsewhere and inspect the file by hand.
+        return "default"
 
     # --- Catalog ------------------------------------------------------------
 
@@ -273,16 +431,68 @@ class GenesisWorker:
         return _collect()
 
 
-def _default_settings() -> Settings:
-    """Lazy import to avoid pulling pydantic-settings at module import time.
+def _build_settings(paths: PathsSettings | None = None) -> Settings:
+    """Build a fresh ``Settings`` instance from current env + overrides.
 
-    Tests / CLI that build Settings explicitly don't pay this cost; only
-    the no-arg ``GenesisWorker()`` path does, and it's already paying
-    for the full env-var walk.
+    Used by both the initial ``GenesisWorker()`` path and by
+    :meth:`GenesisWorker.refresh_config`. Centralised so the two
+    call sites construct identically.
+
+    ``paths`` lets the caller preserve a custom path layout across
+    refreshes — tests and embedded uses pass their hermetic layout;
+    production callers omit it and let env / XDG defaults apply.
     """
     from .settings import Settings as _Settings
 
-    return _Settings()
+    if paths is None:
+        return _Settings()
+    return _Settings(paths=paths)
+
+
+def _merge_paths_with_overrides(paths: PathsSettings) -> PathsSettings:
+    """Re-read the override file and apply any per-path keys on top
+    of the existing ``PathsSettings``.
+
+    The Settings page's framework knobs all flow through here:
+    ``GENESIS_PATHS__VAULT_PATH``, ``GENESIS_PATHS__DATA_DIR``, etc.
+    Per-source ``local_path`` knobs are not path-level fields on
+    ``PathsSettings`` — they're sources-level options, picked up by
+    the registry via ``ctx.options`` after Settings construction.
+
+    Without this merge, ``Settings(paths=...)`` constructor kwargs
+    would outvote the override file (constructor > file per ADR
+    precedence). The override file is supposed to win over the
+    initial ``PathsSettings`` we constructed the worker with.
+    """
+    from .settings import USER_OVERRIDES_FILENAME
+    from .settings import PathsSettings as _PS
+
+    overrides = read_user_overrides(paths.config_dir / USER_OVERRIDES_FILENAME)
+    if not overrides:
+        return paths
+    fields = paths.model_dump()
+    mapping = {
+        "GENESIS_PATHS__VAULT_PATH": "vault_path",
+        "GENESIS_PATHS__DATA_DIR": "data_dir",
+        "GENESIS_PATHS__CONFIG_DIR": "config_dir",
+        "GENESIS_PATHS__CACHE_DIR": "cache_dir",
+        "GENESIS_PATHS__STATE_DIR": "state_dir",
+        "GENESIS_PATHS__LOG_DIR": "log_dir",
+    }
+    for env_key, field_name in mapping.items():
+        if env_key in overrides:
+            fields[field_name] = overrides[env_key]
+    return _PS(**fields)
+
+
+def _default_settings() -> Settings:
+    """Backward-compat alias for :func:`_build_settings`.
+
+    Kept as a separate name to preserve the existing call site's
+    readability (``GenesisWorker.__init__`` reads
+    ``_default_settings()`` more clearly than ``_build_settings()``).
+    """
+    return _build_settings()
 
 
 __all__ = ["GenesisWorker"]
