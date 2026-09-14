@@ -164,12 +164,26 @@ class ComfyUiService(InferenceService):
             )
         runtime: str | None = None
         gpu_flags: list[str] | None = None
-        if self._options.gpu_required and self._hardware.nvidia_runtime:
-            runtime = self._options.runtime
-            gpu_flags = [
-                f"driver={self._options.gpu_driver}",
-                f"count={self._options.gpu_count}",
-            ]
+        if self._options.gpu_required and self._hardware.nvidia:
+            if self._hardware.nvidia_runtime:
+                # Legacy path (Docker ≤28 with the nvidia OCI runtime
+                # registered). The daemon honours `--runtime nvidia`; the
+                # toolkit injects /dev/nvidia* via the OCI hook chain.
+                runtime = self._options.runtime
+                gpu_flags = [
+                    f"driver={self._options.gpu_driver}",
+                    f"count={self._options.gpu_count}",
+                ]
+            elif self._hardware.nvidia_cdi:
+                # Modern path (Docker 29+ where the legacy OCI runtime is
+                # no longer registered, but nvidia-container-toolkit's
+                # CDI specs are present). Native `--gpus all` lets the
+                # daemon inject devices via CDI — no `--runtime` needed.
+                gpu_flags = ["all"]
+            # else: NVIDIA card present but neither legacy runtime nor
+            # CDI specs available. Container starts without a GPU; the
+            # user sees the PyTorch "no NVIDIA driver" message and knows
+            # to install nvidia-container-toolkit.
 
         return lifecycle.start_comfyui(
             image=self.image_ref,
@@ -193,6 +207,7 @@ class ComfyUiService(InferenceService):
             gpu_flags=gpu_flags,
             restart_policy=self._options.restart_policy,
             hostname=self._options.container_name,
+            vault_models_dir=self._vault_models_dir,
         )
 
     def stop(self) -> StopResult:

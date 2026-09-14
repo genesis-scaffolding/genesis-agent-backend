@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from genesis_worker.contracts import ServiceState, StartResult, StopResult
 from genesis_worker.services.comfyui import lifecycle
 
 
-def _start_kwargs(**overrides):
-    """Default kwargs for ``start_comfyui``."""
+def _start_kwargs(tmp_path: Path, **overrides):
+    """Default kwargs for ``start_comfyui``. ``vault_models_dir`` defaults to a tmp path."""
     base = {
         "image": "ghcr.io/genesis-scaffolding/comfyui-cuda:v1",
         "image_present": True,
@@ -23,22 +24,23 @@ def _start_kwargs(**overrides):
         "extra_args": ["--verbose"],
         "restart_policy": "unless-stopped",
         "hostname": "comfyui",
+        "vault_models_dir": tmp_path / "vault" / "comfyui",
     }
     base.update(overrides)
     return base
 
 
-def test_start_returns_failure_when_image_not_present() -> None:
-    result = lifecycle.start_comfyui(**_start_kwargs(image_present=False))
+def test_start_returns_failure_when_image_not_present(tmp_path: Path) -> None:
+    result = lifecycle.start_comfyui(**_start_kwargs(tmp_path, image_present=False))
     assert result.ok is False
     assert "image not pulled" in result.message
 
 
-def test_start_dispatches_to_docker_container() -> None:
+def test_start_dispatches_to_docker_container(tmp_path: Path) -> None:
     """When image is present, lifecycle delegates to ``DockerContainer.run``."""
     sentinel = StartResult(ok=True, message="started comfyui")
     with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel) as mock_run:
-        result = lifecycle.start_comfyui(**_start_kwargs())
+        result = lifecycle.start_comfyui(**_start_kwargs(tmp_path))
     assert result is sentinel
     assert mock_run.called
     kwargs = mock_run.call_args.kwargs
@@ -53,22 +55,48 @@ def test_start_dispatches_to_docker_container() -> None:
     assert kwargs["hostname"] == "comfyui"
 
 
-def test_start_skips_gpu_args_when_runtime_none() -> None:
+def test_start_skips_gpu_args_when_runtime_none(tmp_path: Path) -> None:
     """CPU-only path: runtime is None, gpu_flags is None."""
     sentinel = StartResult(ok=True, message="started")
     with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel) as mock_run:
-        lifecycle.start_comfyui(**_start_kwargs(runtime=None, gpu_flags=None))
+        lifecycle.start_comfyui(**_start_kwargs(tmp_path, runtime=None, gpu_flags=None))
     kwargs = mock_run.call_args.kwargs
     assert kwargs["runtime"] is None
     assert kwargs["gpu_flags"] is None
 
 
-def test_start_calls_docker_run() -> None:
+def test_start_calls_docker_run(tmp_path: Path) -> None:
     """The lifecycle calls ``DockerContainer.run``; that method itself calls ``remove``."""
     sentinel = StartResult(ok=True, message="started")
     with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel) as mock_run:
-        lifecycle.start_comfyui(**_start_kwargs())
+        lifecycle.start_comfyui(**_start_kwargs(tmp_path))
     assert mock_run.called
+
+
+def test_start_creates_vault_models_dir_when_missing(tmp_path: Path) -> None:
+    """Before calling ``container.run``, the lifecycle ensures ``vault_models_dir`` exists.
+
+    Without this, ``--models-directory /vault/comfyui`` would point at a
+    directory that doesn't exist inside the container, and ComfyUI's CLI
+    would refuse to start on a fresh install with no symlinks yet.
+    """
+    sentinel = StartResult(ok=True, message="started")
+    target = tmp_path / "vault" / "comfyui"
+    assert not target.exists()  # precondition
+    with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel):
+        lifecycle.start_comfyui(**_start_kwargs(tmp_path, vault_models_dir=target))
+    assert target.is_dir()
+
+
+def test_start_idempotent_when_vault_models_dir_already_exists(tmp_path: Path) -> None:
+    """Re-starting with the directory already present doesn't raise."""
+    sentinel = StartResult(ok=True, message="started")
+    target = tmp_path / "vault" / "comfyui"
+    target.mkdir(parents=True)
+    (target / "existing-file").write_text("keep me")
+    with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel):
+        lifecycle.start_comfyui(**_start_kwargs(tmp_path, vault_models_dir=target))
+    assert (target / "existing-file").exists()
 
 
 # --- stop -----------------------------------------------------------------

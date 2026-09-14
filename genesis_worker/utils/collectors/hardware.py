@@ -16,9 +16,13 @@ Detection strategy, in order:
 3. AMD / Intel enumeration: ``/sys/class/drm/card*/device/vendor`` files,
    mapped from PCI vendor ID hex (``0x1002`` AMD, ``0x8086`` Intel,
    ``0x10de`` NVIDIA cross-check). Avoids needing ``lspci`` installed.
-4. NVIDIA runtime: ``docker info`` substring match (same probe
-   ``DockerContainer.nvidia_runtime_available`` performs today;
-   both surfaces agree on the answer).
+4. NVIDIA OCI runtime: ``docker info`` token match on the ``Runtimes:``
+   line — NOT a substring check over the whole blob; Docker 29+ with
+   only CDI installed would otherwise match ``cdi: nvidia.com/gpu=...``
+   lines and falsely report a legacy runtime.
+5. NVIDIA CDI: same ``docker info`` output, scanning for
+   ``cdi: nvidia.com/gpu=...`` lines. This is the modern (Docker 29+)
+   path; ``--gpus all`` asks the daemon to inject devices via CDI.
 
 Probed once per process via :func:`functools.lru_cache`; the
 dashboard calls ``collect_host_info`` on every render and the cost
@@ -110,8 +114,12 @@ def _nvidia_smi_count() -> int:
     return sum(1 for line in result.stdout.splitlines() if line.startswith("GPU "))
 
 
-def _nvidia_runtime_available() -> bool:
-    """True iff ``docker info`` reports the nvidia runtime."""
+def _docker_info_lines() -> list[str] | None:
+    """Lowercased, stripped lines of ``docker info``, or ``None`` on any failure.
+
+    Shared by both runtime/CDI probes — running ``docker info`` once
+    for each is wasteful on hosts where both detections need to fire.
+    """
     try:
         result = subprocess.run(
             ["docker", "info"],
@@ -121,10 +129,45 @@ def _nvidia_runtime_available() -> bool:
             check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False
+        return None
     if result.returncode != 0:
+        return None
+    return [(line or "").strip().lower() for line in (result.stdout or "").splitlines()]
+
+
+def _nvidia_runtime_available(lines: list[str] | None = None) -> bool:
+    """True iff ``docker info`` registers the legacy ``nvidia`` OCI runtime.
+
+    Matches a line like ``Runtimes: io.containerd.runc.v2 runc nvidia`` —
+    not the ``cdi: nvidia.com/gpu=...`` lines, which Docker 29+ exposes
+    for CDI but which do NOT register a usable ``--runtime nvidia``.
+    """
+    if lines is None:
+        lines = _docker_info_lines()
+    if lines is None:
         return False
-    return "nvidia" in (result.stdout or "").lower()
+    for line in lines:
+        if line.startswith("runtimes:"):
+            return "nvidia" in line.split()[1:]
+    return False
+
+
+def _nvidia_cdi_available(lines: list[str] | None = None) -> bool:
+    """True iff ``docker info`` announces an NVIDIA CDI spec.
+
+    Docker 29+ exposes devices via CDI specs at well-known
+    ``cdi: nvidia.com/gpu=...`` lines under ``Discovered Devices``.
+    With CDI present the daemon can inject GPUs natively via
+    ``--gpus all`` — no legacy runtime registration required.
+    """
+    if lines is None:
+        lines = _docker_info_lines()
+    if lines is None:
+        return False
+    for line in lines:
+        if line.startswith("cdi:") and "nvidia.com/gpu=" in line:
+            return True
+    return False
 
 
 @functools.lru_cache(maxsize=1)
@@ -139,12 +182,19 @@ def collect_hardware_info() -> Hardware:
     nvidia_count = max(nvidia_count_pci, nvidia_count_smi)
     nvidia = nvidia_count > 0
     driver_loaded = os.path.exists(_PROC_NVIDIA_DRIVER)
-    runtime = _nvidia_runtime_available() if nvidia else False
+    if nvidia:
+        lines = _docker_info_lines()
+        runtime = _nvidia_runtime_available(lines)
+        cdi = _nvidia_cdi_available(lines)
+    else:
+        runtime = False
+        cdi = False
     return Hardware(
         nvidia=nvidia,
         nvidia_count=nvidia_count,
         nvidia_driver_loaded=driver_loaded,
         nvidia_runtime=runtime,
+        nvidia_cdi=cdi,
         amd=amd_count_pci > 0,
         amd_count=amd_count_pci,
         amd_vendor_id_present=amd_count_pci > 0,

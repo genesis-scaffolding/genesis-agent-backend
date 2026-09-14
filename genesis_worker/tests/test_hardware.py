@@ -84,6 +84,19 @@ def _stub_docker_info(monkeypatch: pytest.MonkeyPatch, *, nvidia: bool) -> None:
     monkeypatch.setattr(hardware.subprocess, "run", fake_run)
 
 
+def _stub_docker_info_text(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None:
+    """Stub ``docker info`` with arbitrary text; ``nvidia-smi`` returns no GPUs."""
+
+    def fake_run(args: list[str], **kw: Any) -> subprocess.CompletedProcess:
+        if args[:2] == ["docker", "info"]:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+        if args[:2] == ["nvidia-smi", "-L"]:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected subprocess call: {args}")
+
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+
+
 def _patch_drm_glob(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Glob ``/sys/class/drm/card*`` to the tmp_path equivalent."""
     monkeypatch.setattr(
@@ -264,6 +277,62 @@ def test_nvidia_runtime_true_when_docker_has_it(
     _stub_docker_info(monkeypatch, nvidia=True)
     h = collect_hardware_info()
     assert h.nvidia_runtime is True
+
+
+def test_nvidia_runtime_false_on_docker_29_with_only_cdi(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Docker 29 ships CDI specs but no legacy ``nvidia`` OCI runtime.
+
+    Reproduces the incident on the archdesktop host: substring-matching
+    ``nvidia.com/gpu=...`` yields a false positive; token-matching the
+    ``Runtimes:`` line is correct.
+    """
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x10DE)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+    _stub_nvidia_smi(monkeypatch, count=1)
+    _stub_docker_info_text(
+        monkeypatch,
+        "Runtimes: runc io.containerd.runc.v2\n"
+        "  cdi: nvidia.com/gpu=0\n"
+        "  cdi: nvidia.com/gpu=GPU-42cfac0d-xxxx-yyyy-zzzz-aaaaaaaaaaaa\n"
+        "  cdi: nvidia.com/gpu=all\n",
+    )
+    h = collect_hardware_info()
+    assert h.nvidia_runtime is False
+    assert h.nvidia_cdi is True
+
+
+def test_nvidia_cdi_false_when_no_cdi_specs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CDI detection is precise — only ``cdi: nvidia.com/gpu=...`` lines count."""
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x10DE)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+    _stub_nvidia_smi(monkeypatch, count=1)
+    _stub_docker_info(monkeypatch, nvidia=True)
+    h = collect_hardware_info()
+    assert h.nvidia_runtime is True
+    assert h.nvidia_cdi is False
+
+
+def test_legacy_runtime_true_and_cdi_present_both_reported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A host with both legacy runtime and CDI specs reports both flags True."""
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x10DE)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+    _stub_nvidia_smi(monkeypatch, count=1)
+    _stub_docker_info_text(
+        monkeypatch,
+        "Runtimes: nvidia runc io.containerd.runc.v2\n  cdi: nvidia.com/gpu=0\n",
+    )
+    h = collect_hardware_info()
+    assert h.nvidia_runtime is True
+    assert h.nvidia_cdi is True
 
 
 # --- caching -------------------------------------------------------------

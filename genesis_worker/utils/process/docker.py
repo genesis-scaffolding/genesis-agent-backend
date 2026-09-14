@@ -387,11 +387,21 @@ class DockerContainer:
 
     @staticmethod
     def nvidia_runtime_available() -> bool:
-        """True iff ``docker info`` reports the nvidia runtime."""
+        """True iff ``docker info`` registers the legacy ``nvidia`` OCI runtime.
+
+        Token-matches the ``Runtimes:`` line — see
+        :func:`genesis_worker.utils.collectors.hardware._nvidia_runtime_available`
+        for the rationale. No production callers today; the framework-level
+        probe is the source of truth.
+        """
         result = _run(["docker", "info"], timeout=_DEFAULT_INSPECT_TIMEOUT_S)
         if result.returncode != 0:
             return False
-        return "nvidia" in (result.stdout or "").lower()
+        for line in (result.stdout or "").splitlines():
+            stripped = line.strip().lower()
+            if stripped.startswith("runtimes:"):
+                return "nvidia" in stripped.split()[1:]
+        return False
 
 
 __all__ = ["DockerContainer"]
