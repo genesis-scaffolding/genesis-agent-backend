@@ -676,3 +676,51 @@ def test_ui_pages_default_returns_framework_status_page(tmp_path: Path) -> None:
     assert page.url_path == "svc_status"
     assert page.path.name == "default_service_status.py"
     assert page.path.is_file()
+
+
+# --- volume dir pre-creation --------------------------------------------
+
+
+def test_ensure_volume_dirs_pre_creates_as_host_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bind-mount targets are created with the host user's uid/gid before the container starts.
+
+    Without this, a container that initializes as root would create
+    the bind-mount target itself as root, leaving the host user
+    unable to remove it later.
+    """
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.image_present",
+        lambda self, ref: True,
+    )
+
+    svc = _service(tmp_path)
+    target = tmp_path / "fresh-mount"
+    svc.config.extra_volumes["/container/path"] = str(target)
+
+    svc._ensure_volume_dirs()
+
+    assert target.is_dir()
+    st = target.stat()
+    assert st.st_uid == svc._puid
+    assert st.st_gid == svc._pgid
+
+
+def test_ensure_volume_dirs_existing_dir_is_left_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-existing dirs aren't chowned -- we don't want to clobber user-set permissions."""
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.image_present",
+        lambda self, ref: True,
+    )
+
+    svc = _service(tmp_path)
+    target = tmp_path / "existing"
+    target.mkdir()
+    original_mode = target.stat().st_mode
+
+    svc._ensure_volume_dirs()
+
+    assert target.stat().st_mode == original_mode

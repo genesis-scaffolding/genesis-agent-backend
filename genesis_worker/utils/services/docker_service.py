@@ -352,9 +352,36 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         tail_lines = max(50, n_bytes // 80)
         return DockerContainer(self.config.container_name).logs(tail_lines=tail_lines)
 
+    def _ensure_volume_dirs(self) -> None:
+        """Pre-create bind-mount targets as the host user.
+
+        Without this, a container that initializes as root will create
+        the bind-mount target as root, leaving the host user unable to
+        remove it later. Pre-creating with the host uid/gid prevents
+        that one failure mode; containers that ignore PUID/PGID may
+        still write root-owned files inside the mount -- that's a
+        container-side issue.
+        """
+        for host_path_str in self.config.extra_volumes.values():
+            host_path = Path(host_path_str)
+            try:
+                host_path.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                continue
+            if self._puid is not None and self._pgid is not None:
+                try:
+                    os.chown(host_path, self._puid, self._pgid)
+                except OSError:
+                    # chown fails on some filesystems or when not root
+                    pass
+
     def start(self) -> StartResult:
         if not self.is_available():
             return StartResult(ok=False, message=f"image not pulled: {self.image_ref}")
+
+        # Pre-create bind-mount targets as the host user before the
+        # container initializes. See ``_ensure_volume_dirs`` for why.
+        self._ensure_volume_dirs()
 
         # Pre-start hooks fire before env composition so their side effects
         # (e.g. generated token files) are visible to the env-builder below.
