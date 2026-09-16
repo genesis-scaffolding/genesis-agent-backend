@@ -1,0 +1,71 @@
+# SillyTavern declarative service spec.
+#
+# LLM chat front-end (ghcr.io/sillytavern/sillytavern). The
+# ``seed_yaml_whitelist`` pre-start hook ensures ``config.yaml`` has a
+# whitelist wide enough to admit the host's LAN + the Tailscale CGNAT
+# range, so every Tailnet peer can reach the container without per-peer
+# whitelisting.
+
+version: 1
+kind: docker
+name: sillytavern
+display_name: SillyTavern
+description: LLM chat front-end
+category: chat
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 2
+
+image:
+  repo: ghcr.io/sillytavern/sillytavern
+  tag: release
+  install_name: sillytavern
+  source_url: https://github.com/SillyTavern/SillyTavern/pkgs/container/sillytavern
+
+container:
+  name: sillytavern
+  listen_host: 0.0.0.0
+  listen_port: 8000
+  internal_port: 8000
+  health_probe_path: /
+
+volumes:
+  /home/node/app/config: "$data_dir/config"
+  /home/node/app/data: "$data_dir/data"
+
+pre_start_hooks:
+  - kind: seed_yaml_whitelist
+    target: "$data_dir/config/config.yaml"
+    key: whitelist
+    extras:
+      - 100.64.0.0/10
+    disable_docker_hosts: true
+
+ui:
+  status_panels:
+    - container_info
+    - log_tail
+
+options:
+  config_path:
+    type: path
+    optional: true
+    default: null
+  data_path:
+    type: path
+    optional: true
+    default: null
+  extra_args:
+    type: "list[string]"
+    default: []

@@ -36,12 +36,12 @@ def test_list_enabled_services_filters_by_registry_state(tmp_path: Path, monkeyp
     """
     from genesis_worker import GenesisWorker as _GW
     from genesis_worker.services.llama_swap import LlamaSwapService
-    from genesis_worker.services.sillytavern import SillyTavernService
     from genesis_worker.settings import PathsSettings, Settings
 
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
-    monkeypatch.setattr(SillyTavernService, "is_available", lambda self: False)
-
+    # sillytavern is now YAML-declared; monkeypatch the constructed
+    # instance's method after the registry builds it (no Python class
+    # to attach the patch to anymore).
     settings = Settings(
         paths=PathsSettings(
             data_dir=tmp_path / "data",
@@ -52,6 +52,7 @@ def test_list_enabled_services_filters_by_registry_state(tmp_path: Path, monkeyp
         )
     )
     w = _GW(settings=settings)
+    monkeypatch.setattr(w.service("sillytavern"), "is_available", lambda: False)
     w.services.enable("llama_swap")
 
     enabled_names = {s.name for s in w.list_enabled_services()}
