@@ -71,7 +71,7 @@ def test_declarative_dir_has_no_python_modules_other_than_init() -> None:
 # --- built-in YAMLs construct ----------------------------------------------
 
 
-_BUILT_IN_SPECS = ("crawl4ai.yaml", "sillytavern.yaml")
+_BUILT_IN_SPECS = ("bifrost.yaml", "crawl4ai.yaml", "sillytavern.yaml")
 
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
@@ -108,10 +108,14 @@ def test_built_in_spec_capabilities_and_resource(spec_name: str, tmp_path: Path)
     svc = _load_spec(spec_name, tmp_path)
     caps = svc.capabilities()
     assert isinstance(caps, ServiceCapabilities)
-    # Both built-ins ship as docker-with-web-UI services.
+    # Every built-in ships as docker-with-web-UI + installable.
     assert caps.has_web_ui is True
     assert caps.can_install is True
-    assert caps.can_serve_llm is False
+    # crawl4ai + sillytavern don't serve LLMs; bifrost does (LLM gateway).
+    if spec_name == "bifrost.yaml":
+        assert caps.can_serve_llm is True
+    else:
+        assert caps.can_serve_llm is False
     resource = svc.resource_estimate()
     assert isinstance(resource, ServiceResourceEstimate)
     # Both built-ins have no GPU requirement.
@@ -128,6 +132,19 @@ def test_built_in_spec_unavailable_before_install(spec_name: str, tmp_path: Path
     """
     svc = _load_spec(spec_name, tmp_path)
     assert svc.is_available() is False
+
+
+# --- bifrost-specific -----------------------------------------------------
+
+
+def test_bifrost_identity(tmp_path: Path) -> None:
+    """Bifrost's identity / category / description match the spec's surface."""
+    svc = _load_spec("bifrost.yaml", tmp_path)
+    assert svc.name == "bifrost"
+    assert svc.display_name == "Bifrost"
+    assert svc.category.value == "llm"
+    assert svc.config.listen_port == 9090  # we don't collide with llama-swap on 8080
+    assert svc.image_ref == "maximhq/bifrost:latest"
 
 
 # --- crawl4ai-specific ----------------------------------------------------
