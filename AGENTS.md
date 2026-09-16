@@ -85,6 +85,20 @@ Rules, both directions:
 - Capability-gated behaviour (`can_generate_config`, `can_export_for_agent`) is declared on the ABC as optional methods, so the framework stays capability-driven instead of branching on extension names.
 - **Every new `InferenceService` subclass must override `category`** to declare its dashboard group (ADR-029). The default `OTHER` is a stopgap, not a destination — the dashboard renders `OTHER` services under a less prominent heading as a nudge to update. Also override `description` with one short sentence (~25–30 chars) for the Service Catalog row; longer copy belongs on the service's own landing page.
 
+## Adding a new service: declarative YAML first
+
+For any docker-backed service that the worker should install, run, and expose,
+**try the declarative path first**. Write one YAML file under
+`services/_declarative/<name>.yaml`. The loader reads it, resolves
+`$variable` substitutions, and constructs the service. No Python plugin
+needed for bifrost, crawl4ai, sillytavern, and most other docker services we
+ship. The full how-to is in
+[`docs/tutorials/declarative-services.md`](docs/tutorials/declarative-services.md)
+— read it before adding a service. Drop into Python (subclass `DockerService`
+or `UvService`) only when the YAML can't express what you need: post-install
+file patches, custom installables, multi-process orchestration, dynamic port
+discovery. The tutorial covers the boundary.
+
 ## Stack
 
 - Packaging: uv (single project, `dependency-groups` for dev)
