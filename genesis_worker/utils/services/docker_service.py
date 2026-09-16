@@ -44,18 +44,19 @@ _RELEASE_CACHE_TTL_S = 15 * 60  # same TTL as GithubReleaseTarball.
 class AuthConfig:
     """Optional API-token plumbing for docker services.
 
-    ``token_file`` is resolved against ``ctx.state_dir`` at instance
-    time. ``token_generator`` is a registered name from
-    ``utils/services/hooks.py`` (phase 2); phase 1 only ships
-    ``random_hex_32`` and ``random_urlsafe_32``.
+    ``enabled`` and ``fallback`` are resolved values from the YAML
+    loader (not string references to option names). ``enabled`` is
+    truthy when the service should advertise JWT mode; ``fallback``
+    is the explicit user-typed override that wins over the on-disk
+    file.
     """
 
-    enabled_option: str | None  # option name; truthy → render "JWT enabled"
+    enabled: bool | None
+    fallback: str | None
     token_env_var: str  # injected as env var in start()
     token_file: Path  # resolved against ctx.state_dir at construction
     token_file_mode: int
     token_generator: str
-    fallback_option: str | None = None  # explicit option wins over the file
 
 
 @dataclass(frozen=True)
@@ -357,8 +358,9 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
 
         # Pre-start hooks fire before env composition so their side effects
         # (e.g. generated token files) are visible to the env-builder below.
-        # The hook list comes from the YAML (or, in Python subclasses, the
-        # config) -- the framework never interprets the entries.
+        # Hook entries are already-resolved dicts at this point -- the
+        # loader substituted $state_dir / $data_dir at construction time,
+        # so the runtime just dispatches by ``kind``.
         if self.config.pre_start_hooks:
             from .hooks import PreStartHookContext
             from .hooks import run as run_hooks
@@ -368,7 +370,7 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
                 PreStartHookContext(
                     service=self,
                     state_dir=self._ctx.state_dir,
-                    data_dir=self._data_dir,
+                    data_dir=self._ctx.data_dir,
                 ),
             )
 
@@ -387,8 +389,7 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
 
         # Auth plumbing — token (or "JWT enabled" hint) injected as env var.
         if self.config.auth is not None:
-            enabled_opt = self.config.auth.enabled_option
-            if enabled_opt and getattr(self.options, enabled_opt, False):
+            if self.config.auth.enabled:
                 env[f"{self.config.auth.token_env_var}_JWT_ENABLED"] = "true"
             else:
                 env[self.config.auth.token_env_var] = self._resolve_or_generate_token()
@@ -409,9 +410,10 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     def _resolve_or_generate_token(self) -> str:
         """Resolve the auth token to inject — file → generate.
 
-        Explicit option (``fallback_option``) wins outright. Otherwise the
-        on-disk file is read; if absent, a 256-bit token is generated
-        and persisted atomically with the configured mode.
+        Explicit ``auth.fallback`` (the resolved user-typed option)
+        wins outright. Otherwise the on-disk file is read; if absent,
+        a 256-bit token is generated and persisted atomically with
+        the configured mode.
         """
         existing = self.auth_token()
         if existing:
@@ -432,21 +434,17 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     def auth_token(self) -> str | None:
         """The auth token currently in use, or ``None``.
 
-        Reads ``fallback_option`` first, then the on-disk file. Returns
-        ``None`` when ``enabled_option`` is truthy in the options (token
-        is irrelevant in that mode).
+        Reads ``fallback`` (the user-typed option, resolved at
+        construction) first, then the on-disk file. Returns ``None``
+        when ``enabled`` is truthy (token is irrelevant in that mode).
         """
         if self.config.auth is None:
             return None
         auth = self.config.auth
-        enabled = bool(auth.enabled_option and getattr(self.options, auth.enabled_option, False))
-        if enabled:
+        if auth.enabled:
             return None
-        fallback = (
-            getattr(self.options, auth.fallback_option, None) if auth.fallback_option else None
-        )
-        if isinstance(fallback, str) and fallback:
-            return fallback
+        if auth.fallback:
+            return auth.fallback
         if self._auth_token_path is not None and self._auth_token_path.is_file():
             existing = self._auth_token_path.read_text().strip()
             if existing:
@@ -454,11 +452,10 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return None
 
     def auth_enabled(self) -> bool:
-        """True iff the auth scheme is ``jwt_enabled`` (no token needed)."""
+        """True iff the auth scheme is in JWT mode (no token needed)."""
         if self.config.auth is None:
             return False
-        opt = self.config.auth.enabled_option
-        return bool(opt and getattr(self.options, opt, False))
+        return bool(self.config.auth.enabled)
 
     def stop(self) -> StopResult:
         container = DockerContainer(self.config.container_name)

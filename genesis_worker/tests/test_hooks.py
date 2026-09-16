@@ -98,11 +98,13 @@ def test_ensure_persistent_token_writes_when_absent(tmp_path: Path) -> None:
     ctx = PreStartHookContext(
         service=None, state_dir=tmp_path / "state", data_dir=tmp_path / "data"
     )
+    # Hook entries arrive pre-resolved; the loader substitutes
+    # ``$state_dir`` etc. at construction time.
     run(
         [
             {
                 "kind": "ensure_persistent_token",
-                "target": "$state_dir/token",
+                "target": str(target),
                 "mode": "0o600",
                 "generator": "random_hex_32",
             }
@@ -125,7 +127,7 @@ def test_ensure_persistent_token_returns_existing(tmp_path: Path) -> None:
         [
             {
                 "kind": "ensure_persistent_token",
-                "target": "$state_dir/token",
+                "target": str(target),
                 "generator": "random_hex_32",
             }
         ],
@@ -143,27 +145,9 @@ def test_ensure_persistent_token_unknown_generator(tmp_path: Path) -> None:
             [
                 {
                     "kind": "ensure_persistent_token",
-                    "target": "$state_dir/token",
+                    "target": str(tmp_path / "state" / "token"),
                     "generator": "no_such_generator",
                 }
             ],
             ctx,
         )
-
-
-def test_state_dir_and_data_dir_placeholders_resolve(tmp_path: Path) -> None:
-    """``$state_dir`` and ``$data_dir`` placeholders resolve to the context's paths."""
-    state_dir = tmp_path / "state"
-    data_dir = tmp_path / "data"
-    ctx = PreStartHookContext(service=None, state_dir=state_dir, data_dir=data_dir)
-    target_path = data_dir / "token"
-    run(
-        [
-            {
-                "kind": "ensure_persistent_token",
-                "target": "$data_dir/token",
-            }
-        ],
-        ctx,
-    )
-    assert target_path.is_file()

@@ -240,7 +240,12 @@ def test_sillytavern_has_no_auth_block(tmp_path: Path) -> None:
 
 
 def test_sillytavern_pre_start_hooks_seeded(tmp_path: Path) -> None:
-    """SillyTavern seeds the whitelist hook on its config (no start call needed)."""
+    """SillyTavern seeds the whitelist hook on its config (no start call needed).
+
+    The loader resolves ``$data_dir/config/config.yaml`` to an
+    absolute path against ``ctx.data_dir`` at construction time, so
+    the hook entry the runtime sees is already concrete.
+    """
     svc = _load_spec("sillytavern.yaml", tmp_path)
     hooks = list(svc.config.pre_start_hooks)
     assert len(hooks) == 1
@@ -248,8 +253,8 @@ def test_sillytavern_pre_start_hooks_seeded(tmp_path: Path) -> None:
     assert hooks[0]["key"] == "whitelist"
     assert "100.64.0.0/10" in hooks[0]["extras"]
     assert hooks[0]["disable_docker_hosts"] is True
-    # The path placeholder is left intact — the hook handler resolves it.
-    assert hooks[0]["target"] == "$data_dir/config/config.yaml"
+    expected_target = str(tmp_path / "data" / "config" / "config.yaml")
+    assert hooks[0]["target"] == expected_target
 
 
 def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:

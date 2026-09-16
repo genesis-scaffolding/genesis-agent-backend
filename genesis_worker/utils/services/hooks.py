@@ -1,5 +1,12 @@
 """Pre-start hook registry — named handlers invoked by ``DockerService.start()``.
 
+Hook entries arrive already-resolved at this point: the loader
+substituted ``$state_dir`` / ``$data_dir`` etc. at construction time,
+so handlers treat ``entry["target"]`` as an absolute path string and
+don't need to know about placeholders. ``ctx.state_dir`` /
+``ctx.data_dir`` are still carried for hooks that want to derive
+paths dynamically.
+
 Two handlers ship in v1:
 
 - ``seed_yaml_whitelist`` -- lifted from ``services/sillytavern/config.py``;
@@ -84,22 +91,10 @@ def run(hooks: list[dict], ctx: PreStartHookContext) -> None:
 # --- handlers ---------------------------------------------------------------
 
 
-def _resolve_path(value: Any, ctx: PreStartHookContext) -> Path:
-    """Resolve a ``$state_dir`` / ``$data_dir`` / absolute path string."""
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"hook target must be a non-empty string, got {value!r}")
-    if value.startswith("$state_dir"):
-        return Path(value.replace("$state_dir", str(ctx.state_dir), 1))
-    if value.startswith("$data_dir"):
-        return Path(value.replace("$data_dir", str(ctx.data_dir), 1))
-    return Path(value)
-
-
 def _resolve_mode(value: Any) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
-        # Accept octal literals like "0o600" (and forgiving "600").
         text = value.strip()
         if text.startswith("0o"):
             return int(text, 8)
@@ -109,7 +104,7 @@ def _resolve_mode(value: Any) -> int:
 
 @register("seed_yaml_whitelist")
 def _seed_yaml_whitelist(entry: dict, ctx: PreStartHookContext) -> None:
-    target = _resolve_path(entry["target"], ctx)
+    target = Path(entry["target"])
     key = entry.get("key", "whitelist")
     extras = entry.get("extras") or []
     disable = entry.get("disable_docker_hosts", True)
@@ -120,7 +115,7 @@ def _seed_yaml_whitelist(entry: dict, ctx: PreStartHookContext) -> None:
 
 @register("ensure_persistent_token")
 def _ensure_persistent_token(entry: dict, ctx: PreStartHookContext) -> None:
-    target = _resolve_path(entry["target"], ctx)
+    target = Path(entry["target"])
     mode = _resolve_mode(entry.get("mode", 0o600))
     generator_name = entry.get("generator", "random_hex_32")
     generator = _GENERATORS.get(generator_name)

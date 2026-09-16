@@ -202,7 +202,8 @@ def test_resolve_vault_path_placeholder(tmp_path: Path) -> None:
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
     svc = load_service_spec(path, ctx=ctx)
-    assert svc.config.extra_env["MODELS"] == str(ctx.vault_path)
+    # Single-placeholder strings resolve to the typed value (Path here).
+    assert svc.config.extra_env["MODELS"] == ctx.vault_path
 
 
 def test_resolve_options_placeholder(tmp_path: Path) -> None:
@@ -241,6 +242,7 @@ def test_resolve_handles_list_values(tmp_path: Path) -> None:
     ctx = service_ctx(tmp_path, name="demo")
     svc = load_service_spec(path, ctx=ctx)
     parts = svc.config.extra_env["PATH_PARTS"]
+    # Mixed strings go through regex substitution (string result).
     assert parts[0] == str(ctx.state_dir / "a")
     assert parts[1] == str(ctx.data_dir / "b")
     assert parts[2] == "literal"
@@ -257,8 +259,10 @@ def test_resolve_placeholders_direct_call(tmp_path: Path) -> None:
         {},
         None,
     )
+    # Mixed strings produce strings (regex sub stringifies the
+    # replacement). Single-placeholder strings keep the typed value.
     assert out["k"] == str(ctx.state_dir / "x")
-    assert out["list"] == [str(ctx.vault_path)]
+    assert out["list"] == [ctx.vault_path]
     assert out["raw"] == 42
     assert out["flag"] is True
 
@@ -370,5 +374,6 @@ def test_docker_with_pre_start_hook_resolves_state_dir(tmp_path: Path) -> None:
     svc = load_service_spec(path, ctx=ctx)
     entry = svc.config.pre_start_hooks[0]
     assert entry["kind"] == "ensure_persistent_token"
-    # ``target`` is the raw dict; the hook handler resolves the path.
-    assert entry["target"] == "$state_dir/api_token"
+    # ``target`` is resolved at construction; the handler reads an
+    # absolute path string.
+    assert entry["target"] == str(ctx.state_dir / "api_token")

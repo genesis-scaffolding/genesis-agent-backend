@@ -58,12 +58,12 @@ pre_start_hooks:
     generator: random_hex_32
 
 auth:
-  enabled_option: jwt_enabled
+  enabled_option: "$options.jwt_enabled"
   token_env_var: CRAWL4AI_API_TOKEN
   token_file: "$state_dir/api_token"
   token_file_mode: "0o600"
   token_generator: random_hex_32
-  fallback_option: api_token
+  fallback_option: "$options.api_token"
 
 ui:
   status_panels:

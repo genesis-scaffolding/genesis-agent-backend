@@ -412,28 +412,44 @@ def test_tail_log_delegates_to_container(tmp_path: Path, monkeypatch) -> None:
 # --- auth: enabled vs token ----------------------------------------------
 
 
-def _auth_config(tmp_path: Path) -> AuthConfig:
+def _auth_config(
+    tmp_path: Path,
+    *,
+    enabled: bool | None = False,
+    fallback: str | None = None,
+    token_file: Path | None = None,
+) -> AuthConfig:
+    """Build an ``AuthConfig`` with the loader's resolved-value shape.
+
+    The loader resolves ``enabled_option: "$options.jwt_enabled"`` and
+    ``fallback_option: "$options.api_token"`` at construction time;
+    tests pass the post-resolution values directly.
+    """
     return AuthConfig(
-        enabled_option="jwt_enabled",
+        enabled=enabled,
+        fallback=fallback,
         token_env_var="API_TOKEN",
-        token_file=tmp_path / "state" / "api_token",
+        token_file=token_file if token_file is not None else tmp_path / "state" / "api_token",
         token_file_mode=0o600,
         token_generator="random_hex_32",
-        fallback_option="api_token",
     )
 
 
 def test_auth_token_returns_none_when_jwt_enabled(tmp_path: Path) -> None:
-    """When ``jwt_enabled`` is True, the token machinery is bypassed."""
-    ctx = service_ctx(tmp_path, name="svc", options={"jwt_enabled": True})
-    svc2 = DockerService(ctx, config=_config(auth=_auth_config(tmp_path)))
+    """When ``enabled`` is True, the token machinery is bypassed."""
+    svc2 = DockerService(
+        service_ctx(tmp_path, name="svc"),
+        config=_config(auth=_auth_config(tmp_path, enabled=True)),
+    )
     assert svc2.auth_token() is None
     assert svc2.auth_enabled() is True
 
 
 def test_auth_token_returns_fallback_option(tmp_path: Path) -> None:
-    ctx = service_ctx(tmp_path, name="svc", options={"api_token": "explicit-token-from-user"})
-    svc2 = DockerService(ctx, config=_config(auth=_auth_config(tmp_path)))
+    svc2 = DockerService(
+        service_ctx(tmp_path, name="svc"),
+        config=_config(auth=_auth_config(tmp_path, fallback="explicit-token-from-user")),
+    )
     assert svc2.auth_token() == "explicit-token-from-user"
     assert svc2.auth_enabled() is False
 
@@ -442,15 +458,7 @@ def test_auth_token_reads_persisted_file(tmp_path: Path) -> None:
     path = tmp_path / "state" / "api_token"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("persisted-token\n")
-    auth = AuthConfig(
-        enabled_option="jwt_enabled",
-        token_env_var="API_TOKEN",
-        token_file=path,
-        token_file_mode=0o600,
-        token_generator="random_hex_32",
-        fallback_option="api_token",
-    )
-    svc = _service(tmp_path, auth=auth)
+    svc = _service(tmp_path, auth=_auth_config(tmp_path, token_file=path))
     assert svc.auth_token() == "persisted-token"
 
 
