@@ -51,12 +51,14 @@ def test_service_state_branches_cover_every_value() -> None:
     src = inspect.getsource(render_action_button)
     for state in ServiceState:
         # All states except the fall-through STOPPED / UNAVAILABLE branch
-        # should appear as an explicit ``if`` or ``elif``.
+        # should appear as an explicit ``if`` or ``elif``. The helper may
+        # group two states into one branch via ``state in (X, Y)`` —
+        # accept either form.
         if state in (ServiceState.STOPPED, ServiceState.UNAVAILABLE):
             continue
-        assert f"== ServiceState.{state.name}" in src, (
-            f"no explicit branch for ServiceState.{state.name}"
-        )
+        in_eq = f"== ServiceState.{state.name}" in src
+        in_tuple = f"ServiceState.{state.name}," in src or f"ServiceState.{state.name})" in src
+        assert in_eq or in_tuple, f"no explicit branch for ServiceState.{state.name}"
 
 
 def test_render_badge_uses_color_coding() -> None:

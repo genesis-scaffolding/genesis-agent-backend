@@ -44,13 +44,19 @@ def render_action_button(
     width is fine); the dashboard cards pass ``True`` so Start/Stop/Install
     matches the Admin button's width.
 
-    The five states map to: Stop (RUNNING), disabled Starting… (STARTING,
-    polled and auto-refreshed when the container reaches RUNNING),
-    disabled Stopping… (STOPPING, polled and auto-refreshed when the
-    container reaches STOPPED), inline install (!available and
-    STOPPED/UNAVAILABLE), Start (available and STOPPED/FAILED/UNAVAILABLE).
+    The states map to: active Stop (RUNNING or STARTING — the latter so a
+    container stuck in a reboot loop can be killed from the UI), disabled
+    Stopping… (STOPPING, polled and auto-refreshed when the container
+    reaches STOPPED), inline install (!available and STOPPED/UNAVAILABLE),
+    Start (available and STOPPED/FAILED/UNAVAILABLE).
     """
-    if state == ServiceState.RUNNING:
+    # RUNNING and STARTING both render an active Stop. STARTING happens
+    # when the container is up but the health probe is still failing
+    # (see DockerService.status) — including containers in a reboot loop
+    # where every restart cycle lands on "running + unhealthy". Folding
+    # it into the Stop branch gives the user an escape hatch without
+    # having to SSH in to kill the container.
+    if state in (ServiceState.RUNNING, ServiceState.STARTING):
         if st.button("Stop", key=f"{key_prefix}-stop", use_container_width=use_container_width):
             worker.stop_service(name)
             st.rerun()
@@ -64,35 +70,6 @@ def render_action_button(
     pending_error = st.session_state.pop(error_key, None)
     if pending_error:
         st.error(pending_error)
-
-    if state == ServiceState.STARTING:
-        # Wrap in a polling fragment so the button auto-switches to "Stop"
-        # when the container finishes coming up. Without this, the page
-        # would show "Starting…" indefinitely and only a manual reload
-        # would update it; for slow starters (SillyTavern's Node.js
-        # entrypoint takes a few seconds, large images take longer) the
-        # transition is otherwise invisible.
-        @st.fragment(run_every="2s")
-        def _wait_for_state_change(*, expected: str, label: str, btn_key: str) -> None:
-            current = worker.service_status(name).state
-            if current.value != expected:
-                # State moved on (e.g. STARTING -> RUNNING). Re-render the
-                # full app so the outer page redraws with the new button.
-                st.rerun(scope="app")
-            st.button(
-                label,
-                key=btn_key,
-                disabled=True,
-                use_container_width=use_container_width,
-            )
-
-        _wait_for_state_change.__name__ = f"_wait_for_{key_prefix}_starting"
-        _wait_for_state_change(
-            expected=ServiceState.STARTING.value,
-            label="Starting…",
-            btn_key=f"{key_prefix}-starting",
-        )
-        return
 
     if state == ServiceState.STOPPING:
 
