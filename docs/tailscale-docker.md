@@ -89,7 +89,27 @@ the smoking gun.
 
 ## Fix
 
-Run the script (requires sudo):
+### Preferred: ufw-docker --docker-subnets (recommended)
+
+The cleanest fix is to include Tailscale's CGNAT range when installing ufw-docker.
+This makes the fix survive future ufw-docker updates:
+
+```bash
+sudo ufw-docker install --docker-subnets 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10
+sudo systemctl restart ufw
+```
+
+Preview what will be added (no changes):
+```bash
+sudo ufw-docker check --docker-subnets 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10
+```
+
+This generates rules in `/etc/ufw/after.rules` that RETURN Tailscale traffic
+before it hits the logging-deny chain.
+
+### Alternative: tailscale-docker-fix.sh script
+
+If you need a less invasive fix that doesn't re-run ufw-docker install:
 
 ```bash
 sudo ./scripts/tailscale-docker-fix.sh install
@@ -112,20 +132,8 @@ Remove with:
 sudo ./scripts/tailscale-docker-fix.sh rollback
 ```
 
-## Optional: a deeper fix
-
-The real root cause is that ufw-docker's `cidr_list` is hardcoded to
-RFC 1918:
-
-```bash
-# /usr/bin/ufw-docker, ~line 418
-cidr_list=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16)
-```
-
-Editing this to add `100.64.0.0/10` (and similar ranges for ZeroTier,
-Nebula, etc.) and re-running `ufw-docker install` makes the fix survive
-future ufw-docker updates. Our one-line script is a less invasive
-alternative that doesn't touch the system package.
+Note: If you used the `--docker-subnets` approach above, the fix is already
+persistent and the script will report rules as missing (expected).
 
 ## Related
 
@@ -134,3 +142,6 @@ alternative that doesn't touch the system package.
   reveals the stale-vs-current state.
 - See `~/.local/share/omarchy/install/first-run/firewall.sh` for the
   Omarchy installer line that triggers this (`sudo ufw-docker install`).
+- See [ufw-docker-container-to-host.md](ufw-docker-container-to-host.md) for a
+  related issue: Docker containers unable to reach host services (requires
+  separate UFW INPUT rule).
