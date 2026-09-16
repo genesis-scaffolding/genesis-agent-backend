@@ -58,14 +58,6 @@ ui:
     - log_tail
 
 options:
-  config_path:
-    type: path
-    optional: true
-    default: null
-  data_path:
-    type: path
-    optional: true
-    default: null
   extra_args:
     type: "list[string]"
     default: []
