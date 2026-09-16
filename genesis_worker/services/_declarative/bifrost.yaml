@@ -37,13 +37,13 @@ container:
   name: bifrost
   listen_host: 0.0.0.0
   listen_port: 8090
-  internal_port: 8090
+  internal_port: 8080    # bifrost's default; we map host 8090 → container 8080
   health_probe_path: /
   web_ui_path: /
 
 env:
   APP_HOST: "0.0.0.0"
-  APP_PORT: "8090"
+  APP_PORT: "8080"
   LOG_LEVEL: "$options.log_level"
   LOG_STYLE: "$options.log_style"
 

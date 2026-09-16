@@ -143,7 +143,8 @@ def test_bifrost_identity(tmp_path: Path) -> None:
     assert svc.name == "bifrost"
     assert svc.display_name == "Bifrost"
     assert svc.category.value == "llm"
-    assert svc.config.listen_port == 8090  # off llama-swap (8080) and worker API (9090)
+    assert svc.config.listen_port == 8090  # host-side mapping, off llama-swap (8080) and worker API (9090)
+    assert svc.config.internal_port == 8080  # bifrost's actual server port (default)
     assert svc.image_ref == "maximhq/bifrost:latest"
 
 
