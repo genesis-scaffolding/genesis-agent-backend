@@ -29,8 +29,15 @@ def test_services_ship_pages_with_existing_files(tmp_path: Path) -> None:
             assert page.label, f"{info.name}: empty label"
             assert page.icon, f"{info.name}: empty icon"
             assert page.path.exists(), f"{info.name}: page path missing: {page.path}"
-            # Every page must live inside the plugin's ui/ directory.
-            assert "ui" in page.path.parts, f"{info.name}: page outside ui/: {page.path}"
+            # Pages live either in the plugin's own ``ui/`` directory
+            # (Python plugins) or in the framework's ``utils/services/``
+            # directory (declarative services that share the default
+            # status page -- ADR-035).
+            in_plugin_ui = "ui" in page.path.parts
+            in_framework_services = "utils" in page.path.parts and "services" in page.path.parts
+            assert in_plugin_ui or in_framework_services, (
+                f"{info.name}: page outside plugin/ui/ and framework/services/: {page.path}"
+            )
 
 
 def test_sources_ship_pages_with_existing_files(tmp_path: Path) -> None:

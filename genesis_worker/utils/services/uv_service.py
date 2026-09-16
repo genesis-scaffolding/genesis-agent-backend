@@ -45,6 +45,24 @@ _UV_LIST_TIMEOUT_S = 10.0
 _UV_INSTALL_TIMEOUT_S = 300.0
 
 
+def _format_command_env(command_env: dict[str, str]) -> str:
+    """Build the ``export K1=V1 K2=V2 && `` prefix for a tmux-spawned command.
+
+    Empty / unset values are skipped; keys are quoted with :func:`shlex.quote`
+    so names with spaces or shell metacharacters survive intact. The trailing
+    `` && `` joins the export block to the actual command, mirroring the
+    pre-phase-1 cptr lifecycle.
+    """
+    parts: list[str] = []
+    for key, value in command_env.items():
+        if not value:
+            continue
+        parts.append(f"{shlex.quote(str(key))}={shlex.quote(str(value))}")
+    if not parts:
+        return ""
+    return "export " + " ".join(parts) + " && "
+
+
 def _http_get_json(url: str, *, timeout: float) -> Any:
     headers = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
     req = urllib.request.Request(url, headers=headers)
@@ -254,10 +272,17 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
         cmd = " ".join(
             [shlex.quote(str(binary)), *(shlex.quote(str(c)) for c in self.config.command)]
         )
+        # Prepend command_env exports so the child sees them in its
+        # environment (ADR-035 regression fix: cptr's CPTR_STREAM_*_TIMEOUT
+        # was previously set via shell ``export VAR=val && cmd``; the new
+        # contract puts the same values in ``config.command_env`` and the
+        # base injects them the same way).
+        env_prefix = _format_command_env(self.config.command_env)
+        full_cmd = f"{env_prefix}{cmd}" if env_prefix else cmd
         # Allow subclass hooks (e.g. cptr's pi-agent patch) to run pre-start.
         self._post_install()
         tmux = TmuxProcess(self._session_name)
-        result = tmux.start(cmd, self.log_file)
+        result = tmux.start(full_cmd, self.log_file)
         if not result.ok:
             return result
         if self.wait_ready(self.config.health_timeout_s):

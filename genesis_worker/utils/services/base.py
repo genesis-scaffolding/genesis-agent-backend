@@ -137,12 +137,35 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
     def ui_pages(self) -> list[UiPage]:
         """Pages contributed by this service.
 
-        Declarative services point at the framework's default status
-        page. The page is implemented once in ``utils/services/`` (phase 2);
-        for now, the base returns an empty list so existing services that
-        supply their own ``ui/`` directory keep working.
+        Defaults to a single entry pointing at the framework's default
+        status dispatcher (``genesis_worker/ui/default_service_status.py``).
+        That script resolves the service name from the URL and calls
+        into ``utils.services.default_status.render_default_status``.
+        Python services that need bespoke layouts (cptr's layout,
+        comfyui's Models page, etc.) override this and point at their
+        own scripts under ``services/<name>/ui/``.
         """
-        return []
+        default_status_path = (
+            Path(__file__).resolve().parents[2] / "ui" / "default_service_status.py"
+        )
+        return [
+            UiPage(
+                "Status",
+                ":material/monitor:",
+                default_status_path,
+                url_path=f"{self.name}_status",
+            )
+        ]
+
+    @property
+    def ui_panels(self) -> tuple[str, ...]:
+        """Panel kinds the default status page renders for this service.
+
+        Subclasses override to add or remove panels. The default mirrors
+        the pre-phase-1 cptr layout (status + log tail). Docker services
+        additionally include ``container_info``.
+        """
+        return ("service_info", "log_tail")
 
     # --- contract: public_host (uniform across kinds) ---------------------
 

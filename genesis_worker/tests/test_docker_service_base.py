@@ -659,6 +659,12 @@ def test_image_install_uninstall_noop_when_no_selection(tmp_path: Path, monkeypa
 # --- ui_pages default ----------------------------------------------------
 
 
-def test_ui_pages_default_returns_empty_list(tmp_path: Path) -> None:
-    """The framework page machinery ships in phase 2."""
-    assert _service(tmp_path).ui_pages == []
+def test_ui_pages_default_returns_framework_status_page(tmp_path: Path) -> None:
+    """Phase 2 wires the default status page so declarative services get a UI."""
+    pages = _service(tmp_path).ui_pages
+    assert len(pages) == 1
+    page = pages[0]
+    assert page.label == "Status"
+    assert page.url_path == "svc_status"
+    assert page.path.name == "default_service_status.py"
+    assert page.path.is_file()

@@ -7,7 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
-from genesis_worker.contracts import ServiceState
+from genesis_worker.contracts import (
+    ServiceCapabilities,
+    ServiceCategory,
+    ServiceResourceEstimate,
+    ServiceState,
+)
 from genesis_worker.services.cptr.service import CptrService
 from genesis_worker.tests._factories import service_ctx
 
@@ -277,13 +282,212 @@ def test_tail_log_handles_short_file(tmp_path: Path) -> None:
     assert svc.tail_log(n_bytes=8192) == "hi"
 
 
+# --- stream timeouts (ADR-035 phase 2 regression fix) -------------------
+
+
+def test_default_stream_timeout_is_1200(tmp_path: Path) -> None:
+    """Pre-phase-1 cptr lifecycle used 1200s as the default. We honor that."""
+    from genesis_worker.services.cptr.options import CptrOptions
+
+    opts = CptrOptions()
+    assert opts.stream_timeout_s == 1200
+
+
+def test_command_env_injects_stream_timeouts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``start()`` prepends the stream-timeout exports to the tmux command."""
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/cptr")
+    svc = CptrService(service_ctx(tmp_path, name="cptr"))
+    captured: list[str] = []
+
+    def _capture_start(cmd: str, _log_file):
+        captured.append(cmd)
+        return type("R", (), {"ok": True, "message": "ok"})()
+
+    with (
+        patch(
+            "genesis_worker.utils.services.uv_service.TmuxProcess.start",
+            side_effect=_capture_start,
+        ),
+        patch.object(svc, "wait_ready", return_value=True),
+    ):
+        svc.start()
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert "export" in cmd
+    assert "CPTR_STREAM_READ_TIMEOUT=1200" in cmd
+    assert "CPTR_STREAM_WRITE_TIMEOUT=1200" in cmd
+
+
+def test_command_env_respects_custom_stream_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-default ``stream_timeout_s`` flows through to the env block."""
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/cptr")
+    svc = CptrService(service_ctx(tmp_path, name="cptr", options={"stream_timeout_s": 600}))
+    captured: list[str] = []
+
+    def _capture_start(cmd: str, _log_file):
+        captured.append(cmd)
+        return type("R", (), {"ok": True, "message": "ok"})()
+
+    with (
+        patch(
+            "genesis_worker.utils.services.uv_service.TmuxProcess.start",
+            side_effect=_capture_start,
+        ),
+        patch.object(svc, "wait_ready", return_value=True),
+    ):
+        svc.start()
+    assert "CPTR_STREAM_READ_TIMEOUT=600" in captured[0]
+    assert "CPTR_STREAM_WRITE_TIMEOUT=600" in captured[0]
+
+
+def test_command_env_omitted_when_stream_timeout_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``stream_timeout_s=0`` opts out (cptr's own defaults take over)."""
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/cptr")
+    svc = CptrService(service_ctx(tmp_path, name="cptr", options={"stream_timeout_s": 0}))
+    captured: list[str] = []
+
+    def _capture_start(cmd: str, _log_file):
+        captured.append(cmd)
+        return type("R", (), {"ok": True, "message": "ok"})()
+
+    with (
+        patch(
+            "genesis_worker.utils.services.uv_service.TmuxProcess.start",
+            side_effect=_capture_start,
+        ),
+        patch.object(svc, "wait_ready", return_value=True),
+    ):
+        svc.start()
+    assert "CPTR_STREAM" not in captured[0]
+
+
+def test_command_env_works_through_uv_service_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The base ``UvService.start`` honors ``command_env`` independently of cptr."""
+    from pydantic import BaseModel
+
+    from genesis_worker.utils.services import UvService, UvServiceConfig
+
+    class _Opts(BaseModel):
+        pass
+
+    cfg = UvServiceConfig(
+        name="svc",
+        display_name="Svc",
+        description="",
+        category=ServiceCategory.UTILITY,
+        capabilities=ServiceCapabilities(
+            can_generate_config=False,
+            can_export_for_agent=False,
+            can_serve_llm=False,
+            can_serve_image=False,
+            can_train_models=False,
+            has_web_ui=False,
+            can_install=False,
+        ),
+        resource_estimate=ServiceResourceEstimate(
+            vram_bytes_typical=0, vram_bytes_min=0, cpu_cores_recommended=1
+        ),
+        options_model=_Opts,
+        package_name="svcpkg",
+        binary_name="svc",
+        command=["run"],
+        command_env={"FOO": "bar"},
+        listen_port=9999,
+    )
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/svc")
+    svc = UvService(service_ctx(tmp_path, name="svc"), config=cfg)
+    captured: list[str] = []
+
+    def _capture(cmd: str, _log_file):
+        captured.append(cmd)
+        return type("R", (), {"ok": True, "message": "ok"})()
+
+    with (
+        patch(
+            "genesis_worker.utils.services.uv_service.TmuxProcess.start",
+            side_effect=_capture,
+        ),
+        patch.object(svc, "wait_ready", return_value=True),
+    ):
+        svc.start()
+    assert captured and "FOO=bar" in captured[0] and captured[0].startswith("export ")
+
+
+def test_command_env_empty_skips_export_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ``command_env`` means no ``export ... && `` prefix."""
+    from pydantic import BaseModel
+
+    from genesis_worker.utils.services import UvService, UvServiceConfig
+
+    class _Opts(BaseModel):
+        pass
+
+    cfg = UvServiceConfig(
+        name="svc",
+        display_name="Svc",
+        description="",
+        category=ServiceCategory.UTILITY,
+        capabilities=ServiceCapabilities(
+            can_generate_config=False,
+            can_export_for_agent=False,
+            can_serve_llm=False,
+            can_serve_image=False,
+            can_train_models=False,
+            has_web_ui=False,
+            can_install=False,
+        ),
+        resource_estimate=ServiceResourceEstimate(
+            vram_bytes_typical=0, vram_bytes_min=0, cpu_cores_recommended=1
+        ),
+        options_model=_Opts,
+        package_name="svcpkg",
+        binary_name="svc",
+        command=["run"],
+        listen_port=9999,
+    )
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/svc")
+    svc = UvService(service_ctx(tmp_path, name="svc"), config=cfg)
+    captured: list[str] = []
+
+    def _capture(cmd: str, _log_file):
+        captured.append(cmd)
+        return type("R", (), {"ok": True, "message": "ok"})()
+
+    with (
+        patch(
+            "genesis_worker.utils.services.uv_service.TmuxProcess.start",
+            side_effect=_capture,
+        ),
+        patch.object(svc, "wait_ready", return_value=True),
+    ):
+        svc.start()
+    assert captured and not captured[0].startswith("export")
+
+
 # --- ui_pages --------------------------------------------------------------
 
 
-def test_ui_pages_default_returns_empty_list(tmp_path: Path) -> None:
-    """Declarative services get their UI from the framework; base returns []."""
+def test_ui_pages_default_returns_framework_status_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 2: declarative services point at the framework default page."""
     svc = CptrService(service_ctx(tmp_path, name="cptr"))
-    assert svc.ui_pages == []
+    pages = svc.ui_pages
+    assert len(pages) == 1
+    page = pages[0]
+    assert page.label == "Status"
+    assert page.url_path == "cptr_status"
+    assert page.path.name == "default_service_status.py"
 
 
 # --- installed_version -----------------------------------------------------

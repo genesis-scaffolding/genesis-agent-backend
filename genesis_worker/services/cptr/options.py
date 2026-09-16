@@ -6,6 +6,11 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+# cptr's own default stream timeouts are around 60s, which is too tight for
+# local GPU inference. 1200s is the value the previous (pre-ADR-035) cptr
+# lifecycle set, and matches what `docs/cptr-timeout-patch.md` recommends.
+_STREAM_READ_TIMEOUT_S = 1200
+
 
 class CptrOptions(BaseModel):
     # Bind address for the cptr process. ``0.0.0.0`` exposes it on the LAN/VPN.
@@ -21,6 +26,11 @@ class CptrOptions(BaseModel):
     session_name: str = "cptr"
     health_timeout_s: float = 60.0
     log_file: Path | None = None
+    # Sets ``CPTR_STREAM_READ_TIMEOUT`` and ``CPTR_STREAM_WRITE_TIMEOUT`` for
+    # the cptr process. Defaults to 1200s, which mirrors the pre-ADR-035
+    # behavior; set to 0 to fall back to cptr's own defaults.
+    # Override via ``GENESIS_SERVICES__CPTR__STREAM_TIMEOUT_S``.
+    stream_timeout_s: int = _STREAM_READ_TIMEOUT_S
 
 
 __all__ = ["CptrOptions"]

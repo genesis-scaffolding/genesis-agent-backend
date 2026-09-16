@@ -16,6 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ...contracts import (
     AcquireSession,
@@ -83,11 +84,16 @@ class DockerServiceConfig(DeclarativeServiceConfig):
     runtime: str | None = None
     gpu_flags: list[str] | None = None
     # Bind mounts, env, args
-    extra_env: dict[str, str] = field(default_factory=dict)
-    extra_volumes: dict[str, str] = field(default_factory=dict)
+    extra_env: dict[str, Any] = field(default_factory=dict)
+    extra_volumes: dict[str, Any] = field(default_factory=dict)
     extra_args: list[str] = field(default_factory=list)
     # Data / log layout
     data_dir_subpath: str | None = "data"
+    # Pre-start hooks: list of ``{"kind": ..., ...}`` dicts dispatched
+    # by ``utils.services.hooks.run`` at start time. The framework keeps
+    # the entries opaque (no per-kind schema here) so adding a hook
+    # kind is a one-place change in ``hooks.py``.
+    pre_start_hooks: tuple[dict, ...] = ()
     # Auth
     auth: AuthConfig | None = None
 
@@ -281,12 +287,23 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return f"{self.config.image_repo}:{self.config.image_tag}"
 
     @property
+    def container_name(self) -> str:
+        return self.config.container_name
+
+    @property
     def listen_address(self) -> str:
         return f"{self.config.listen_host}:{self.config.listen_port}"
 
     @property
     def data_dir(self) -> Path:
         return self._data_dir
+
+    @property
+    def ui_panels(self) -> tuple[str, ...]:
+        cfg_panels = tuple(self.config.ui_pages or ())
+        if cfg_panels:
+            return cfg_panels
+        return ("service_info", "container_info", "log_tail")
 
     # --- contract overrides -----------------------------------------------
 
@@ -331,6 +348,23 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     def start(self) -> StartResult:
         if not self.is_available():
             return StartResult(ok=False, message=f"image not pulled: {self.image_ref}")
+
+        # Pre-start hooks fire before env composition so their side effects
+        # (e.g. generated token files) are visible to the env-builder below.
+        # The hook list comes from the YAML (or, in Python subclasses, the
+        # config) -- the framework never interprets the entries.
+        if self.config.pre_start_hooks:
+            from .hooks import PreStartHookContext
+            from .hooks import run as run_hooks
+
+            run_hooks(
+                list(self.config.pre_start_hooks),
+                PreStartHookContext(
+                    service=self,
+                    state_dir=self._ctx.state_dir,
+                    data_dir=self._data_dir,
+                ),
+            )
 
         container = DockerContainer(self.config.container_name)
         internal_port = self.config.internal_port or self.config.listen_port

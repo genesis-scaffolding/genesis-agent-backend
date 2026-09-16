@@ -70,6 +70,17 @@ class CptrService(UvService):
 
     def __init__(self, ctx: ServiceContext) -> None:
         opts = CptrOptions(**ctx.options)
+        # Pre-phase-1 cptr lifecycle exported these two env vars via shell
+        # ``export VAR=val && cmd``. ADR-035 moved that injection into
+        # ``config.command_env`` so the framework can build the export
+        # block once. Behaviour parity: both env vars are set when
+        # ``stream_timeout_s > 0`` (the default); set to 0 to opt out.
+        command_env: dict[str, str] = {}
+        if opts.stream_timeout_s > 0:
+            command_env = {
+                "CPTR_STREAM_READ_TIMEOUT": str(opts.stream_timeout_s),
+                "CPTR_STREAM_WRITE_TIMEOUT": str(opts.stream_timeout_s),
+            }
         config = UvServiceConfig(
             name="cptr",
             display_name=self.display_name,
@@ -89,6 +100,7 @@ class CptrService(UvService):
             package_name="cptr",
             binary_name="cptr",
             command=["run", "--host", opts.listen_host, "--port", str(opts.listen_port)],
+            command_env=command_env,
             listen_host=opts.listen_host,
             listen_port=opts.listen_port,
             health_probe_path="/",

@@ -42,6 +42,22 @@ def _plugin_classes(package: str, base: type[P]) -> Iterator[type[P]]:
             yield cls
 
 
+def _declarative_spec_paths(services_pkg: str) -> list[Path]:
+    """Every ``*.yaml`` under ``<services_pkg>/_declarative/``.
+
+    Phase 3 will populate ``services/_declarative/`` with the real
+    service YAMLs; phase 2 only walks an empty marker package, so the
+    helper exists but yields nothing yet.
+    """
+    pkg = importlib.import_module(services_pkg)
+    assert pkg.__path__ is not None
+    pkg_path = Path(pkg.__path__[0])
+    declarative_dir = pkg_path / "_declarative"
+    if not declarative_dir.is_dir():
+        return []
+    return sorted(p for p in declarative_dir.glob("*.yaml") if p.is_file())
+
+
 def _find_plugin_class(module: ModuleType, base: type[P]) -> type[P] | None:
     for _, attr in inspect.getmembers(module, inspect.isclass):
         if issubclass(attr, base) and attr is not base and not inspect.isabstract(attr):
@@ -142,16 +158,52 @@ class ServiceRegistry(_Registry):
 
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
+        # Python plugins first (they win duplicate-name conflicts so a
+        # service can pin a YAML aside while keeping the Python class).
         for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
             build = cast("Callable[[ServiceContext], InferenceService]", cls)
             self._instances[cls.name] = build(self._context(cls))
+        # Then declarative YAML specs (ADR-035 phase 2).
+        from .utils.services import load_service_spec
+
+        for spec_path in _declarative_spec_paths(_SERVICES_PKG):
+            svc = load_service_spec(spec_path, context_factory=self._context_from_name)
+            if svc.name in self._instances:
+                raise ValueError(
+                    f"duplicate service name {svc.name!r}: "
+                    f"already registered from a Python plugin before {spec_path.name}"
+                )
+            self._instances[svc.name] = svc
         self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
 
-    def _context(self, cls: type[InferenceService]) -> ServiceContext:
+    def _context_from_name(self, name: str) -> ServiceContext:
+        """Build a ``ServiceContext`` keyed by ``name`` (used by the YAML walker).
+
+        Mirrors :meth:`_context` but takes the name as a string instead of
+        a Python class -- the YAML has no class object to pass.
+        """
+        return self._context_for_name(name)
+
+    def _context_for_name(self, name: str) -> ServiceContext:
+        from .utils.collectors.host_info import collect_host_info
+
+        p = self._settings.paths
         return ServiceContext(
-            options=self._settings.options_for("services", cls.name),
-            **self._common_kwargs(cls),
+            name=name,
+            repo_root=p.resolved_repo_root,
+            vault_path=p.resolved_vault_path,
+            host_info=collect_host_info(),
+            secrets=self._settings.secrets.accessor(),
+            options=self._settings.options_for("services", name),
+            data_dir=p.data_dir / name.replace("_", "-"),
+            config_dir=p.config_dir / name.replace("_", "-"),
+            cache_dir=p.cache_dir / name.replace("_", "-"),
+            state_dir=p.state_dir / name.replace("_", "-"),
+            log_dir=p.log_dir / name.replace("_", "-"),
         )
+
+    def _context(self, cls: type[InferenceService]) -> ServiceContext:
+        return self._context_for_name(cls.name)
 
     def _load_or_bootstrap_enabled_set(self) -> set[str]:
         """Read the persisted enabled set, or bootstrap on first run.

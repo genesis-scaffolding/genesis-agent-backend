@@ -1,4 +1,12 @@
-"""The framework/plugin boundary is a rule, so it gets a test (ADR-009)."""
+"""The framework/plugin boundary is a rule, so it gets a test (ADR-009).
+
+NOTE: This test walks ``*.py`` files only. ADR-035 added YAML-declared
+services under ``services/_declarative/*.yaml``; YAML files are invisible
+to the AST walker by construction. The parallel check for YAML services
+lives in :mod:`genesis_worker.tests.test_declarative_specs` -- a YAML
+whose ``kind:`` field, required options, or capability shape is wrong
+should fail that test, not this one.
+"""
 
 from __future__ import annotations
 
