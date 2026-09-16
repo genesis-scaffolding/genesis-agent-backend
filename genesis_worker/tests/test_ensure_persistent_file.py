@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from genesis_worker.utils.ensure_persistent_file import (
+from genesis_worker.utils.services.ensure_persistent_file import (
     ensure_persistent_file,
     random_hex_32,
     random_urlsafe_32,

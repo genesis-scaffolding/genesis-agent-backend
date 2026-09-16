@@ -300,10 +300,16 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
 
     @property
     def ui_panels(self) -> tuple[str, ...]:
-        cfg_panels = tuple(self.config.ui_pages or ())
-        if cfg_panels:
-            return cfg_panels
-        return ("service_info", "container_info", "log_tail")
+        """Panel kinds the default status page renders for this service.
+
+        Docker-specific default: ``(service_info, container_info,
+        log_tail)``. The base class merges the YAML's ``status_panels``
+        in additively on top of this. ``service_info`` carries the
+        install / start / stop controls and is always first.
+        """
+        base = ("service_info", "container_info", "log_tail")
+        extras = tuple(p for p in self.config.ui_pages if p not in base)
+        return base + extras
 
     # --- contract overrides -----------------------------------------------
 

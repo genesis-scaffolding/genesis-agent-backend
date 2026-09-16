@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from .net.constants import TAILSCALE_CGNAT
+from ..net.constants import TAILSCALE_CGNAT
 
 _GATEWAY_FALLBACK = "172.17.0.1"
 
@@ -171,8 +171,26 @@ def seed_yaml_whitelist(
     Returns True if the file was written, False if it was already correct
     (or absent and no write was needed).
     """
-    target.mkdir(parents=True, exist_ok=True)
-    config_file = target / "config.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Defensive: if a prior start left ``config.tmp.*`` artifacts (failed
+    # atomic-replace, killed mid-write), drop them so the next start
+    # doesn't trip the ``os.replace`` below.
+    for stale in target.parent.glob(f"{target.name}.tmp.*"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+    # Defensive: if the target path is itself a directory (happens when
+    # something else — e.g. a Docker entrypoint — created the path as a
+    # folder), back it up and start fresh. ``os.replace`` would otherwise
+    # raise ``IsADirectoryError``.
+    if target.is_dir():
+        backup = target.with_suffix(f".dirbackup.{os.getpid()}.{os.urandom(4).hex()}")
+        target.rename(backup)
+
+    config_file = target
 
     config = _load_config(config_file)
     changed = False

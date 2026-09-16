@@ -35,13 +35,16 @@ def test_bootstrap_auto_enables_installed_services(
 ) -> None:
     """First run: every service reporting ``is_available() == True`` is enabled."""
     from genesis_worker.services.llama_swap import LlamaSwapService
+    from genesis_worker.utils.services.docker_service import DockerService
 
+    # Patch availability at the class level *before* registry construction;
+    # the bootstrap walks each service's ``is_available()`` once during
+    # ``ServiceRegistry.__init__``. Patching the constructed instance
+    # afterward is too late.
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    monkeypatch.setattr(DockerService, "is_available", lambda self: False)
 
     reg = ServiceRegistry(_settings(tmp_path))
-    # sillytavern is YAML-declared now — patch the constructed instance.
-    monkeypatch.setattr(reg.get("sillytavern"), "is_available", lambda: False)
-
     assert reg.is_enabled("llama_swap")
     assert not reg.is_enabled("sillytavern")
 

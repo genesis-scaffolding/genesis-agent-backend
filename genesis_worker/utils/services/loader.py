@@ -20,7 +20,7 @@ with mixed placeholders works without callers caring.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -243,14 +243,16 @@ def _build_uv_config(
 def load_service_spec(
     path: Path,
     *,
-    context_factory: Callable[[str], ServiceContext],
+    ctx: ServiceContext,
 ) -> DeclarativeServiceBase:
     """Parse ``path`` and return a fully-constructed declarative service.
 
-    ``context_factory(name)`` builds a ``ServiceContext`` scoped to the
-    service name. The factory is the framework's usual
-    ``ServiceRegistry._context`` shim, so directories are scoped to
-    ``<root>/<name>`` exactly like Python plugins.
+    ``ctx`` is the per-service ``ServiceContext`` already scoped by the
+    caller (the registry uses ``path.stem`` as the name; tests pass a
+    hermetic context built from a tmp dir). The filename and the
+    YAML's ``name:`` field must agree -- ``sillytavern.yaml`` must
+    declare ``name: sillytavern``. This catches the "renamed one but
+    not the other" mistake at load time.
     """
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
@@ -261,9 +263,15 @@ def load_service_spec(
     except ValidationError as exc:
         raise ValueError(f"{path}: YAML failed schema validation:\n{exc}") from exc
 
-    name = spec.name
-    ctx = context_factory(name)
-    options_model = spec_to_options_model(spec.options, model_name=f"{name.title()}YAMLOptions")
+    if spec.name != path.stem:
+        raise ValueError(
+            f"{path}: filename stem {path.stem!r} does not match spec name {spec.name!r}; "
+            f"rename the file or fix the YAML's name field"
+        )
+
+    options_model = spec_to_options_model(
+        spec.options, model_name=f"{spec.name.title()}YAMLOptions"
+    )
 
     if isinstance(spec, DockerServiceSpec):
         config = _build_docker_config(spec, options_model, ctx)

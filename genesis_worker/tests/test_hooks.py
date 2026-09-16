@@ -70,14 +70,18 @@ def test_seed_yaml_whitelist_hook_writes_config(
 ) -> None:
     """``seed_yaml_whitelist`` hook writes a config.yaml on first call."""
     monkeypatch.setattr(
-        "genesis_worker.utils.seed_yaml_whitelist._bridge_gateways", lambda: ["172.17.0.1"]
+        "genesis_worker.utils.services.seed_yaml_whitelist._bridge_gateways", lambda: ["172.17.0.1"]
     )
-    monkeypatch.setattr("genesis_worker.utils.seed_yaml_whitelist._host_connected_subnets", list)
-    monkeypatch.setattr("genesis_worker.utils.seed_yaml_whitelist._host_own_addresses", list)
-    target = tmp_path / "state"
-    ctx = PreStartHookContext(service=None, state_dir=target, data_dir=tmp_path / "data")
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.seed_yaml_whitelist._host_connected_subnets", list
+    )
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.seed_yaml_whitelist._host_own_addresses", list
+    )
+    target = tmp_path / "state" / "config.yaml"
+    ctx = PreStartHookContext(service=None, state_dir=target.parent, data_dir=tmp_path / "data")
     run([{"kind": "seed_yaml_whitelist", "target": str(target), "key": "whitelist"}], ctx)
-    assert (target / "config.yaml").is_file()
+    assert target.is_file()
 
 
 def test_seed_yaml_whitelist_hook_keyword_only(tmp_path: Path) -> None:

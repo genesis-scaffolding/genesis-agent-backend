@@ -161,11 +161,15 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
     def ui_panels(self) -> tuple[str, ...]:
         """Panel kinds the default status page renders for this service.
 
-        Subclasses override to add or remove panels. The default mirrors
-        the pre-phase-1 cptr layout (status + log tail). Docker services
-        additionally include ``container_info``.
+        The YAML's ``ui.status_panels`` is *additive* to the kind-default
+        below. ``service_info`` is mandatory: it carries the install /
+        start / stop controls the dashboard always needs. Subclasses
+        that want a different default override this property and apply
+        their own additive merge.
         """
-        return ("service_info", "log_tail")
+        base = ("service_info", "log_tail")
+        extras = tuple(p for p in self.config.ui_pages if p not in base)  # type: ignore[attr-defined]
+        return base + extras
 
     # --- contract: public_host (uniform across kinds) ---------------------
 

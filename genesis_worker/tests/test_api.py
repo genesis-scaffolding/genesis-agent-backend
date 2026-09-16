@@ -162,6 +162,7 @@ def test_source_unknown_returns_404(client: TestClient) -> None:
 # --- /v1/services ------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_services_list_includes_disabled(client: TestClient) -> None:
     r = client.get("/v1/services")
     assert r.status_code == 200
@@ -185,6 +186,7 @@ def test_services_list_includes_disabled(client: TestClient) -> None:
             assert s["web_ui_endpoint"] is None
 
 
+@pytest.mark.integration
 def test_service_detail(client: TestClient) -> None:
     r = client.get("/v1/services/llama_swap")
     assert r.status_code == 200
@@ -197,6 +199,7 @@ def test_service_detail(client: TestClient) -> None:
     assert body["runtime_endpoint"] is None
 
 
+@pytest.mark.integration
 def test_service_status_subroute(client: TestClient) -> None:
     r = client.get("/v1/services/llama_swap/status")
     assert r.status_code == 200

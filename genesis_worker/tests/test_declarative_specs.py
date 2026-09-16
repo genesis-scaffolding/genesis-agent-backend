@@ -78,7 +78,7 @@ def _load_spec(name: str, tmp_path: Path) -> DockerService:
     """Parse + construct one built-in YAML spec against a hermetic context."""
     path = _DECLARATIVE_DIR / name
     assert path.is_file(), f"missing built-in spec: {path}"
-    svc = load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
     assert isinstance(svc, DockerService)
     return svc
 
@@ -120,8 +120,12 @@ def test_built_in_spec_capabilities_and_resource(spec_name: str, tmp_path: Path)
 
 
 @pytest.mark.parametrize("spec_name", _BUILT_IN_SPECS)
+@pytest.mark.integration
 def test_built_in_spec_unavailable_before_install(spec_name: str, tmp_path: Path) -> None:
-    """A fresh context has no pulled image — ``is_available()`` must report False."""
+    """A fresh context has no pulled image — ``is_available()`` must report False.
+
+    Integration: probes the host's docker daemon via ``DockerContainer.image_present``.
+    """
     svc = _load_spec(spec_name, tmp_path)
     assert svc.is_available() is False
 
@@ -168,7 +172,7 @@ def test_crawl4ai_auth_disabled_when_jwt_enabled(tmp_path: Path) -> None:
     svc = _load_spec("crawl4ai.yaml", tmp_path)
     # ``ctx.options`` is the input; ``_load_spec`` rebuilds the context from
     # the hermetic tmp_path, so re-bind via a fresh load with this ctx.
-    svc = load_service_spec(_DECLARATIVE_DIR / "crawl4ai.yaml", context_factory=lambda n: ctx)
+    svc = load_service_spec(_DECLARATIVE_DIR / "crawl4ai.yaml", ctx=ctx)
     assert isinstance(svc, DockerService)
     assert svc.auth_token() is None
     assert svc.auth_enabled() is True
@@ -189,7 +193,7 @@ def test_crawl4ai_generated_token_is_64_hex(tmp_path: Path) -> None:
     ``utils/services/hooks.py``). We invoke the same generator here
     because the YAML file's contract is that token format.
     """
-    from genesis_worker.utils.ensure_persistent_file import random_hex_32
+    from genesis_worker.utils.services.ensure_persistent_file import random_hex_32
 
     token = random_hex_32()
     assert len(token) == 64
@@ -248,10 +252,16 @@ def test_sillytavern_pre_start_hooks_seeded(tmp_path: Path) -> None:
     assert hooks[0]["target"] == "$data_dir/config/config.yaml"
 
 
-def test_sillytavern_ui_panels_exclude_auth_token(tmp_path: Path) -> None:
-    """SillyTavern's panel set is ``container_info`` + ``log_tail`` only."""
+def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:
+    """SillyTavern's YAML declares ``container_info`` and ``log_tail``.
+
+    The default docker set is ``(service_info, container_info,
+    log_tail)``; the YAML entries are already in the default so the
+    additive merge is a no-op. ``service_info`` is always present so
+    the install / start / stop controls render.
+    """
     svc = _load_spec("sillytavern.yaml", tmp_path)
-    assert svc.ui_panels == ("container_info", "log_tail")
+    assert svc.ui_panels == ("service_info", "container_info", "log_tail")
 
 
 # --- registry discovers YAMLs ---------------------------------------------

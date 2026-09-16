@@ -93,7 +93,7 @@ def _write_yaml(tmp_path: Path, name: str, payload: dict) -> Path:
 
 def test_load_docker_service_happy_path(tmp_path: Path) -> None:
     path = _write_yaml(tmp_path, "demo.yaml", DOCKER_BASE)
-    svc = load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
     assert isinstance(svc, DockerService)
     assert svc.name == "demo"
     assert svc.display_name == "Demo"
@@ -104,7 +104,7 @@ def test_load_docker_service_happy_path(tmp_path: Path) -> None:
 
 def test_load_uv_service_happy_path(tmp_path: Path) -> None:
     path = _write_yaml(tmp_path, "uv_demo.yaml", UV_BASE)
-    svc = load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
     assert isinstance(svc, UvService)
     assert svc.name == "uv_demo"
     assert svc.config.package_name == "uvdemo"
@@ -119,7 +119,7 @@ def test_load_service_propagates_options_defaults(tmp_path: Path) -> None:
         "max_connections": {"type": "int", "default": 50},
     }
     path = _write_yaml(tmp_path, "demo.yaml", payload)
-    svc = load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
     # ``svc.options`` is the synthetic pydantic model built from the YAML.
     assert svc.options.extra_args == ["--quiet", "--debug"]  # type: ignore[attr-defined]
     assert svc.options.max_connections == 50  # type: ignore[attr-defined]
@@ -133,7 +133,7 @@ def test_load_rejects_version_2(tmp_path: Path) -> None:
     payload["version"] = 2
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises((ValueError, Exception), match="version|model"):
-        load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
 def test_load_rejects_unknown_top_level_key(tmp_path: Path) -> None:
@@ -141,7 +141,7 @@ def test_load_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     payload["not_a_field"] = "x"
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="YAML failed schema validation"):
-        load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
 def test_load_rejects_unknown_option_type(tmp_path: Path) -> None:
@@ -149,7 +149,7 @@ def test_load_rejects_unknown_option_type(tmp_path: Path) -> None:
     payload["options"] = {"flag": {"type": "list[bool]", "default": []}}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="unknown option type"):
-        load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
 def test_load_rejects_missing_kind(tmp_path: Path) -> None:
@@ -157,14 +157,14 @@ def test_load_rejects_missing_kind(tmp_path: Path) -> None:
     payload.pop("kind")
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="YAML failed schema validation|kind"):
-        load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
 def test_load_rejects_top_level_non_mapping(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("- not\n- a\n- mapping\n")
     with pytest.raises(TypeError, match="top-level YAML must be a mapping"):
-        load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
 def test_load_rejects_unknown_kind(tmp_path: Path) -> None:
@@ -172,7 +172,7 @@ def test_load_rejects_unknown_kind(tmp_path: Path) -> None:
     payload["kind"] = "lambda"
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="unknown service kind"):
-        load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name=n))
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
 # --- placeholder resolution -----------------------------------------------
@@ -183,7 +183,7 @@ def test_resolve_state_dir_in_env_value(tmp_path: Path) -> None:
     payload["env"] = {"DATA_DIR": "$state_dir/data"}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     assert svc.config.extra_env["DATA_DIR"] == str(ctx.state_dir / "data")
 
 
@@ -192,7 +192,7 @@ def test_resolve_data_dir_in_volume_target(tmp_path: Path) -> None:
     payload["volumes"] = {"/data": "$data_dir/files"}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     assert svc.config.extra_volumes["/data"] == str(ctx.data_dir / "files")
 
 
@@ -201,7 +201,7 @@ def test_resolve_vault_path_placeholder(tmp_path: Path) -> None:
     payload["env"] = {"MODELS": "$vault_path"}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     assert svc.config.extra_env["MODELS"] == str(ctx.vault_path)
 
 
@@ -211,7 +211,7 @@ def test_resolve_options_placeholder(tmp_path: Path) -> None:
     payload["env"] = {"GREETING": "$options.label"}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     assert svc.config.extra_env["GREETING"] == "hello"
 
 
@@ -220,7 +220,7 @@ def test_resolve_unresolved_marker_is_left_intact(tmp_path: Path) -> None:
     payload = dict(DOCKER_BASE)
     payload["env"] = {"X": "$not_a_real_key"}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
-    svc = load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name="demo"))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name="demo"))
     assert svc.config.extra_env["X"] == "$not_a_real_key"
 
 
@@ -230,7 +230,7 @@ def test_resolve_recurses_into_nested_dicts(tmp_path: Path) -> None:
     payload = dict(DOCKER_BASE)
     payload["volumes"] = nested  # type: ignore[assignment]
     path = _write_yaml(tmp_path, "demo.yaml", payload)
-    svc = load_service_spec(path, context_factory=lambda n: service_ctx(tmp_path, name="demo"))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name="demo"))
     assert "/nested" in svc.config.extra_volumes["a"]["b"]
 
 
@@ -239,7 +239,7 @@ def test_resolve_handles_list_values(tmp_path: Path) -> None:
     payload["env"] = {"PATH_PARTS": ["$state_dir/a", "$data_dir/b", "literal"]}
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     parts = svc.config.extra_env["PATH_PARTS"]
     assert parts[0] == str(ctx.state_dir / "a")
     assert parts[1] == str(ctx.data_dir / "b")
@@ -350,7 +350,7 @@ def test_docker_with_auth_block_resolves_token_file(tmp_path: Path) -> None:
     }
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     assert svc.config.auth is not None
     assert svc.config.auth.token_file == ctx.state_dir / "api_token"
     assert svc.config.auth.token_file_mode == 0o600
@@ -367,7 +367,7 @@ def test_docker_with_pre_start_hook_resolves_state_dir(tmp_path: Path) -> None:
     ]
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     ctx = service_ctx(tmp_path, name="demo")
-    svc = load_service_spec(path, context_factory=lambda n: ctx)
+    svc = load_service_spec(path, ctx=ctx)
     entry = svc.config.pre_start_hooks[0]
     assert entry["kind"] == "ensure_persistent_token"
     # ``target`` is the raw dict; the hook handler resolves the path.

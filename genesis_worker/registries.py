@@ -167,7 +167,8 @@ class ServiceRegistry(_Registry):
         from .utils.services import load_service_spec
 
         for spec_path in _declarative_spec_paths(_SERVICES_PKG):
-            svc = load_service_spec(spec_path, context_factory=self._context_from_name)
+            ctx = self._context_for_name(spec_path.stem)
+            svc = load_service_spec(spec_path, ctx=ctx)
             if svc.name in self._instances:
                 raise ValueError(
                     f"duplicate service name {svc.name!r}: "
@@ -176,15 +177,12 @@ class ServiceRegistry(_Registry):
             self._instances[svc.name] = svc
         self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
 
-    def _context_from_name(self, name: str) -> ServiceContext:
-        """Build a ``ServiceContext`` keyed by ``name`` (used by the YAML walker).
-
-        Mirrors :meth:`_context` but takes the name as a string instead of
-        a Python class -- the YAML has no class object to pass.
-        """
-        return self._context_for_name(name)
-
     def _context_for_name(self, name: str) -> ServiceContext:
+        """Build a ``ServiceContext`` keyed by ``name``.
+
+        Used by both the Python-plugin path (via ``_context(cls)``)
+        and the YAML loader (which only has a name string, no class).
+        """
         from .utils.collectors.host_info import collect_host_info
 
         p = self._settings.paths

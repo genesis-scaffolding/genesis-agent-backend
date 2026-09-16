@@ -121,8 +121,14 @@ def test_uv_default_panels_exclude_container_info(tmp_path: Path) -> None:
     assert _uv_service(tmp_path).ui_panels == ("service_info", "log_tail")
 
 
-def test_docker_config_ui_pages_overrides_default(tmp_path: Path) -> None:
-    """A non-empty ``ui_pages`` on the config wins over the docker default."""
+def test_docker_config_ui_pages_is_additive(tmp_path: Path) -> None:
+    """YAML ``ui.status_panels`` is additive — it adds to the docker default.
+
+    ``service_info`` is always present (install / start / stop controls).
+    The default docker set is ``(service_info, container_info,
+    log_tail)``; YAML entries that aren't already in the default are
+    appended in the order declared.
+    """
     config = DockerServiceConfig(
         name="docker_svc",
         display_name="Docker Svc",
@@ -148,10 +154,10 @@ def test_docker_config_ui_pages_overrides_default(tmp_path: Path) -> None:
         listen_host="0.0.0.0",
         listen_port=12345,
         health_probe_path="/",
-        ui_pages=("service_info", "auth_token", "log_tail"),
+        ui_pages=("auth_token",),
     )
     svc = DockerService(service_ctx(tmp_path, name="docker_svc"), config=config)
-    assert svc.ui_panels == ("service_info", "auth_token", "log_tail")
+    assert svc.ui_panels == ("service_info", "container_info", "log_tail", "auth_token")
 
 
 # --- render_default_status -------------------------------------------------

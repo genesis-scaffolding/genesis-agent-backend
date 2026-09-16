@@ -6,7 +6,7 @@ Two handlers ship in v1:
   idempotently seeds a YAML whitelist key (loopback + docker bridge gateway
   + host LAN subnets + Tailscale CGNAT + user entries).
 - ``ensure_persistent_token`` -- read-or-create a token file using
-  :func:`genesis_worker.utils.ensure_persistent_file.ensure_persistent_file`.
+  :func:`genesis_worker.utils.services.ensure_persistent_file.ensure_persistent_file`.
 
 Adding a new hook kind is one function in this module + a registered name.
 """
@@ -18,12 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..ensure_persistent_file import (
+from .ensure_persistent_file import (
     ensure_persistent_file,
     random_hex_32,
     random_urlsafe_32,
 )
-from ..seed_yaml_whitelist import seed_yaml_whitelist
+from .seed_yaml_whitelist import seed_yaml_whitelist
 
 _GENERATORS: dict[str, Callable[[], str]] = {
     "random_hex_32": random_hex_32,
