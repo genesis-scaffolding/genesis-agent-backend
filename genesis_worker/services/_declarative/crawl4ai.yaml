@@ -1,0 +1,87 @@
+# Crawl4AI declarative service spec.
+#
+# Web crawler + dashboard containerised by unclecode/crawl4ai. The
+# ``CRAWL4AI_API_TOKEN`` is auto-generated on first run, persisted under
+# ``$state_dir/api_token`` with mode 0o600, and survives image upgrades
+# so a token the user copy-pasted into their notes still works after
+# a reinstall. An explicit ``api_token`` option (or ``jwt_enabled``)
+# always wins over the on-disk token.
+
+version: 1
+kind: docker
+name: crawl4ai
+display_name: Crawl4AI
+description: Web crawler + dashboard
+category: crawler
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 2
+
+image:
+  repo: unclecode/crawl4ai
+  tag: latest
+  install_name: crawl4ai
+  source_url: https://hub.docker.com/r/unclecode/crawl4ai
+
+container:
+  name: crawl4ai
+  listen_host: 0.0.0.0
+  listen_port: 11235
+  internal_port: 11235
+  shm_size: 1g
+  restart_policy: unless-stopped
+  health_probe_path: /health
+  web_ui_path: /playground/
+
+env:
+  CRAWL4AI_JWT_ENABLED: "$options.jwt_enabled"
+  CRAWL4AI_API_TOKEN: "$auth.token"
+
+volumes:
+  /app/data: "$data_dir/data"
+
+pre_start_hooks:
+  - kind: ensure_persistent_token
+    target: "$state_dir/api_token"
+    mode: "0o600"
+    generator: random_hex_32
+
+auth:
+  enabled_option: "$options.jwt_enabled"
+  token_env_var: CRAWL4AI_API_TOKEN
+  token_file: "$state_dir/api_token"
+  token_file_mode: "0o600"
+  token_generator: random_hex_32
+  fallback_option: "$options.api_token"
+
+ui:
+  status_panels:
+    - container_info
+    - auth_token
+    - log_tail
+
+options:
+  api_token:
+    type: string
+    optional: true
+    default: null
+  jwt_enabled:
+    type: bool
+    default: false
+  extra_args:
+    type: "list[string]"
+    default: []
+
+data_dir_subpath: data
+log_filename: crawl4ai.log

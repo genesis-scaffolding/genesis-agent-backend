@@ -36,12 +36,16 @@ def test_list_enabled_services_filters_by_registry_state(tmp_path: Path, monkeyp
     """
     from genesis_worker import GenesisWorker as _GW
     from genesis_worker.services.llama_swap import LlamaSwapService
-    from genesis_worker.services.sillytavern import SillyTavernService
     from genesis_worker.settings import PathsSettings, Settings
+    from genesis_worker.utils.services.docker_service import DockerService
 
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
-    monkeypatch.setattr(SillyTavernService, "is_available", lambda self: False)
-
+    # Patch both LlamaSwap and the Docker base class so the YAML-declared
+    # sillytavern (which extends DockerService) reports unavailable during
+    # the bootstrap walk. Patching happens before the registry is built;
+    # patching the instance afterward is too late because the bootstrap
+    # runs in ``__init__``.
+    monkeypatch.setattr(DockerService, "is_available", lambda self: False)
     settings = Settings(
         paths=PathsSettings(
             data_dir=tmp_path / "data",
@@ -52,6 +56,7 @@ def test_list_enabled_services_filters_by_registry_state(tmp_path: Path, monkeyp
         )
     )
     w = _GW(settings=settings)
+    monkeypatch.setattr(w.service("sillytavern"), "is_available", lambda: False)
     w.services.enable("llama_swap")
 
     enabled_names = {s.name for s in w.list_enabled_services()}

@@ -51,6 +51,7 @@ def test_registry_all_returns_every_service() -> None:
         "comfyui",
         "sillytavern",
         "crawl4ai",
+        "bifrost",
     }
 
 

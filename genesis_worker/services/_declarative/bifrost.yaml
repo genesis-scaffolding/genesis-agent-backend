@@ -1,0 +1,59 @@
+# Bifrost declarative service spec.
+#
+# LLM gateway proxy (maximhq/bifrost) that exposes an OpenAI-compatible
+# HTTP API on port 9090 (we avoid 8080 because llama-swap owns it).
+# Persists ``config.json``, ``config.db``, and ``logs.db`` under
+# ``$data_dir/data`` so configuration and request logs survive container
+# restarts. See https://docs.getbifrost.ai/quickstart/gateway/setting-up.
+
+version: 1
+kind: docker
+name: bifrost
+display_name: Bifrost
+description: LLM gateway proxy with OpenAI-compatible API
+category: llm
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: true
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: maximhq/bifrost
+  tag: latest
+  install_name: bifrost
+  source_url: https://hub.docker.com/r/maximhq/bifrost
+
+container:
+  name: bifrost
+  listen_host: 0.0.0.0
+  listen_port: 9090
+  internal_port: 9090
+  health_probe_path: /
+  web_ui_path: /
+
+env:
+  APP_HOST: "0.0.0.0"
+  APP_PORT: "9090"
+  LOG_LEVEL: "$options.log_level"
+  LOG_STYLE: "$options.log_style"
+
+volumes:
+  /app/data: "$data_dir/data"
+
+options:
+  log_level:
+    type: string
+    default: "info"
+  log_style:
+    type: string
+    default: "json"

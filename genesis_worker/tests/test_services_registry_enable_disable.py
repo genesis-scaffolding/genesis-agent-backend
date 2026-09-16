@@ -35,13 +35,16 @@ def test_bootstrap_auto_enables_installed_services(
 ) -> None:
     """First run: every service reporting ``is_available() == True`` is enabled."""
     from genesis_worker.services.llama_swap import LlamaSwapService
-    from genesis_worker.services.sillytavern import SillyTavernService
+    from genesis_worker.utils.services.docker_service import DockerService
 
+    # Patch availability at the class level *before* registry construction;
+    # the bootstrap walks each service's ``is_available()`` once during
+    # ``ServiceRegistry.__init__``. Patching the constructed instance
+    # afterward is too late.
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
-    monkeypatch.setattr(SillyTavernService, "is_available", lambda self: False)
+    monkeypatch.setattr(DockerService, "is_available", lambda self: False)
 
     reg = ServiceRegistry(_settings(tmp_path))
-
     assert reg.is_enabled("llama_swap")
     assert not reg.is_enabled("sillytavern")
 
@@ -146,16 +149,16 @@ def test_enabled_and_disabled_partition_registry(
 ) -> None:
     """enabled() and disabled() partition every discovered service."""
     from genesis_worker.services.llama_swap import LlamaSwapService
-    from genesis_worker.services.sillytavern import SillyTavernService
 
+    reg = ServiceRegistry(_settings(tmp_path))
     # Force the bootstrap to a known state: nothing installed → nothing
     # auto-enabled. We then explicitly enable one and disable it.
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
-    monkeypatch.setattr(SillyTavernService, "is_available", lambda self: False)
+    monkeypatch.setattr(reg.get("sillytavern"), "is_available", lambda: False)
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
-    monkeypatch.setattr(SillyTavernService, "is_running", lambda self: False)
-
-    reg = ServiceRegistry(_settings(tmp_path))
+    monkeypatch.setattr(reg.get("sillytavern"), "is_running", lambda: False)
+    # Re-resolve enabled/disabled sets after the patches so the bootstrap
+    # (which ran on construction) reflects the patched state too.
     reg.enable("llama_swap")
     reg.disable("llama_swap")  # round trip via disable
 

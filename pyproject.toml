@@ -38,6 +38,10 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["genesis_worker/tests"]
+# Default: skip integration tests. Run with `pytest -m integration`
+# (or `pytest -m ''`) to opt in. Routine coding runs should stay on
+# the fast mocked unit-test path; CI runs both.
+addopts = ["-m", "not integration"]
 markers = [
     "integration: touches real subprocesses, sockets, or system resources. Run with `pytest -m integration`. Exclude from fast unit runs with `pytest -m 'not integration'`.",
 ]
