@@ -56,6 +56,15 @@ def render_action_button(
             st.rerun()
         return
 
+    # Surface any error from the previous Start attempt. The framework returns
+    # StartResult(ok=False, message=...) when docker run fails (port collision,
+    # image missing, etc.); without this, the user clicks Start and the page
+    # silently returns to "Start" with no explanation.
+    error_key = f"{key_prefix}-start_error"
+    pending_error = st.session_state.pop(error_key, None)
+    if pending_error:
+        st.error(pending_error)
+
     if state == ServiceState.STARTING:
         # Wrap in a polling fragment so the button auto-switches to "Stop"
         # when the container finishes coming up. Without this, the page
@@ -110,7 +119,9 @@ def render_action_button(
             help="Service previously failed; see logs.",
             use_container_width=use_container_width,
         ):
-            worker.start_service(name)
+            result = worker.start_service(name)
+            if not result.ok:
+                st.session_state[f"{key_prefix}-start_error"] = result.message
             st.rerun()
         return
 
@@ -128,7 +139,9 @@ def render_action_button(
         return
 
     if st.button("Start", key=f"{key_prefix}-start", use_container_width=use_container_width):
-        worker.start_service(name)
+        result = worker.start_service(name)
+        if not result.ok:
+            st.session_state[f"{key_prefix}-start_error"] = result.message
         st.rerun()
 
 

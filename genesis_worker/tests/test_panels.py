@@ -131,10 +131,17 @@ def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> None:
             return _StubStatus()
 
     class _StubSession:
+        def __init__(self) -> None:
+            self._data: dict[str, Any] = {"worker": _StubWorker()}
+
         def __getitem__(self, key: str) -> Any:
-            if key == "worker":
-                return _StubWorker()
-            raise KeyError(key)
+            return self._data[key]
+
+        def pop(self, key: str, default: Any = None) -> Any:
+            return self._data.pop(key, default)
+
+        def __setitem__(self, key: str, value: Any) -> None:
+            self._data[key] = value
 
     monkeypatch.setattr(panels.st, "session_state", _StubSession())
 

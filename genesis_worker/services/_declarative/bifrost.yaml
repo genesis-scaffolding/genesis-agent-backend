@@ -36,14 +36,14 @@ image:
 container:
   name: bifrost
   listen_host: 0.0.0.0
-  listen_port: 9090
-  internal_port: 9090
+  listen_port: 8090
+  internal_port: 8090
   health_probe_path: /
   web_ui_path: /
 
 env:
   APP_HOST: "0.0.0.0"
-  APP_PORT: "9090"
+  APP_PORT: "8090"
   LOG_LEVEL: "$options.log_level"
   LOG_STYLE: "$options.log_style"
 
