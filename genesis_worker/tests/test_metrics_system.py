@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from genesis_worker.utils.collectors.metrics import collect_metrics
 from genesis_worker.utils.models import MachineMetrics
 
 
+@pytest.mark.integration
 def test_collect_returns_dataclass_with_cpu_ram() -> None:
     m = collect_metrics()
     assert isinstance(m, MachineMetrics)

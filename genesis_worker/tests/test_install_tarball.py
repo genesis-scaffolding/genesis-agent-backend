@@ -143,6 +143,7 @@ def _backend(
     )
 
 
+@pytest.mark.integration
 def test_install_completes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -176,6 +177,7 @@ def test_install_completes(
     assert manifest.sha256 is None
 
 
+@pytest.mark.integration
 def test_install_fails_on_sha_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -219,6 +221,7 @@ def test_install_fails_on_sha_mismatch(
     assert not layout.current_symlink.exists()
 
 
+@pytest.mark.integration
 def test_install_cancel_mid_fetch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -322,6 +325,7 @@ def test_find_asset_by_suffix_resolves_checksums() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_available_versions_lists_multiple_releases(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -364,6 +368,7 @@ def test_available_versions_lists_multiple_releases(
     assert [v.url for v in versions] == [url_v045, url_v044]
 
 
+@pytest.mark.integration
 def test_install_with_specific_version_uses_tag_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -395,6 +400,7 @@ def test_install_with_specific_version_uses_tag_url(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_available_versions_caches_to_disk(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -437,6 +443,7 @@ def test_available_versions_caches_to_disk(
     assert payload["releases"][0]["tag_name"] == "v0.4.5"
 
 
+@pytest.mark.integration
 def test_release_cache_hits_within_ttl(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -494,6 +501,7 @@ def test_release_cache_hits_within_ttl(
     assert counter["hits"] == 1, "subsequent calls within TTL must hit the cache"
 
 
+@pytest.mark.integration
 def test_release_cache_ttl_expiry_triggers_refetch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -538,6 +546,7 @@ def test_release_cache_ttl_expiry_triggers_refetch(
     assert payload["releases"][0]["tag_name"] == "v0.5.0"
 
 
+@pytest.mark.integration
 def test_invalidate_release_cache_removes_cache_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -601,6 +610,7 @@ def test_static_secrets_accessor_returns_static_value() -> None:
     assert a.get("missing") is None
 
 
+@pytest.mark.integration
 def test_backend_with_secrets_attaches_bearer(
     monkeypatch: pytest.MonkeyPatch, fake_github: _FakeServer, tmp_path: Path
 ) -> None:
@@ -649,6 +659,7 @@ def test_backend_with_secrets_attaches_bearer(
     assert captured["headers"].get("Authorization") == "Bearer test_pat_xyz"
 
 
+@pytest.mark.integration
 def test_backend_without_secrets_omits_authorization(
     monkeypatch: pytest.MonkeyPatch, fake_github: _FakeServer, tmp_path: Path
 ) -> None:

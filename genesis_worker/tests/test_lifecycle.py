@@ -113,8 +113,13 @@ def _serve_in_background(port: int, body: bytes) -> threading.Thread:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_status_returns_stopped_when_no_session() -> None:
-    """With no tmux session, status reports STOPPED with the endpoint set."""
+    """With no tmux session, status reports STOPPED with the endpoint set.
+
+    Integration: ``lifecycle.status`` calls ``tmux has-session``; this
+    test exercises that real subprocess path.
+    """
     s = lifecycle.status("definitely-not-running-12345", "127.0.0.1:1")
     assert s.state == ServiceState.STOPPED
     assert s.endpoint == "http://127.0.0.1:1/v1"
@@ -134,6 +139,7 @@ def test_wait_ready_returns_true_when_endpoint_responds(tmp_path: Path) -> None:
     assert lifecycle.wait_ready(f"127.0.0.1:{port}", timeout_s=2.0) is True
 
 
+@pytest.mark.integration
 def test_wait_ready_returns_false_on_timeout() -> None:
     """wait_ready fails when nothing is listening."""
     port = _free_port()  # unused
@@ -171,6 +177,7 @@ def fake_swap_env(tmp_path: Path):
     subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
 
 
+@pytest.mark.integration
 def test_start_then_status_running_then_stop(fake_swap_env) -> None:
     """Full lifecycle: start -> status==RUNNING -> stop -> status==STOPPED."""
     binary, config, listen, session, log = fake_swap_env
@@ -202,6 +209,7 @@ def test_start_then_status_running_then_stop(fake_swap_env) -> None:
     assert lifecycle.status(session, listen).state == ServiceState.STOPPED
 
 
+@pytest.mark.integration
 def test_stop_is_idempotent(fake_swap_env) -> None:
     """stop_swap returns ok=True when there's nothing to stop."""
     _, _, _, session, _ = fake_swap_env
@@ -210,6 +218,7 @@ def test_stop_is_idempotent(fake_swap_env) -> None:
     assert "no session" in result.message
 
 
+@pytest.mark.integration
 def test_stop_swap_waits_for_children_before_tearing_down_tmux(
     tmp_path: Path,
 ) -> None:
@@ -263,6 +272,7 @@ def test_stop_swap_waits_for_children_before_tearing_down_tmux(
     assert lifecycle.is_running(session) is False
 
 
+@pytest.mark.integration
 def test_stop_swap_falls_back_to_hard_cleanup_on_timeout(
     tmp_path: Path,
 ) -> None:
@@ -305,6 +315,7 @@ def test_stop_swap_falls_back_to_hard_cleanup_on_timeout(
     assert lifecycle.is_running(session) is False
 
 
+@pytest.mark.integration
 def test_start_fails_when_binary_missing(tmp_path: Path) -> None:
     """A binary path that doesn't exist fails before any tmux activity."""
     config = tmp_path / "config.yaml"
@@ -322,6 +333,7 @@ def test_start_fails_when_binary_missing(tmp_path: Path) -> None:
     assert not lifecycle.is_running("swap-noop-binary")
 
 
+@pytest.mark.integration
 def test_start_fails_when_config_missing(tmp_path: Path) -> None:
     """A missing config file fails before any tmux activity."""
     binary = tmp_path / "fake-llama-swap"
@@ -339,5 +351,7 @@ def test_start_fails_when_config_missing(tmp_path: Path) -> None:
     assert "config not found" in result.message
 
 
+@pytest.mark.integration
 def test_is_running_false_when_session_absent() -> None:
+    """Integration: ``lifecycle.is_running`` calls ``tmux has-session``."""
     assert lifecycle.is_running("never-created-session") is False

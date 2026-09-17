@@ -124,14 +124,27 @@ def test_built_in_spec_capabilities_and_resource(spec_name: str, tmp_path: Path)
 
 
 @pytest.mark.parametrize("spec_name", _BUILT_IN_SPECS)
-@pytest.mark.integration
-def test_built_in_spec_unavailable_before_install(spec_name: str, tmp_path: Path) -> None:
-    """A fresh context has no pulled image — ``is_available()`` must report False.
+def test_built_in_spec_is_available_reflects_image_present(
+    spec_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The YAML loader must preserve the base ``is_available()`` contract.
 
-    Integration: probes the host's docker daemon via ``DockerContainer.image_present``.
+    Python-defined DockerService subclasses get this test in
+    ``test_docker_service_base``; we run it again here against
+    ``load_service_spec`` to make sure the YAML→DockerService path
+    doesn't break the same wiring.
     """
-    svc = _load_spec(spec_name, tmp_path)
-    assert svc.is_available() is False
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    assert _load_spec(spec_name, tmp_path).is_available() is True
+
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.image_present",
+        staticmethod(lambda image: False),
+    )
+    assert _load_spec(spec_name, tmp_path).is_available() is False
 
 
 # --- bifrost-specific -----------------------------------------------------
