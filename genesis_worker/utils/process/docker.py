@@ -102,6 +102,7 @@ class DockerContainer:
         restart: str = "unless-stopped",
         shm_size: str | None = None,
         extra_args: list[str] | None = None,
+        security_opts: list[str] | None = None,
     ) -> StartResult:
         """Create and start a detached container.
 
@@ -112,7 +113,8 @@ class DockerContainer:
         (``nvidia`` or ``None``). ``gpu_flags`` are the value of ``--gpus``
         when ``runtime`` is set. ``shm_size`` adds ``--shm-size`` when set
         (e.g. ``"1g"`` for browser-backed services that need more than the
-        64 MB default).
+        64 MB default). ``security_opts`` adds ``--security-opt`` flags
+        (e.g. ``seccomp=unconfined``, ``apparmor=unconfined``).
 
         Any prior container of the same name is removed first
         (idempotent). The function returns ``StartResult(ok=True)`` only
@@ -137,6 +139,9 @@ class DockerContainer:
             argv += ["--gpus", ",".join(gpu_flags)]
         if shm_size:
             argv += ["--shm-size", shm_size]
+        if security_opts:
+            for opt in security_opts:
+                argv += ["--security-opt", opt]
         argv.append(image)
         if command:
             argv += list(command)

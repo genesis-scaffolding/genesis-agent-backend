@@ -191,6 +191,7 @@ def _build_docker_config(
         pgid_default=container["pgid_default"],
         runtime=container.get("runtime"),
         gpu_flags=container.get("gpu_flags"),
+        security_opts=container.get("security_opts"),
         extra_env=dict(resolved.get("env") or {}),
         extra_volumes=dict(resolved.get("volumes") or {}),
         extra_args=[],

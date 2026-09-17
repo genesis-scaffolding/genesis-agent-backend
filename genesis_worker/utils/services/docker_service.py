@@ -84,6 +84,8 @@ class DockerServiceConfig(DeclarativeServiceConfig):
     # GPU
     runtime: str | None = None
     gpu_flags: list[str] | None = None
+    # Security
+    security_opts: list[str] | None = None
     # Bind mounts, env, args
     extra_env: dict[str, Any] = field(default_factory=dict)
     extra_volumes: dict[str, Any] = field(default_factory=dict)
@@ -432,6 +434,7 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
             hostname=self.config.container_name,
             restart=self.config.restart_policy,
             shm_size=self.config.shm_size,
+            security_opts=self.config.security_opts,
         )
 
     def _resolve_or_generate_token(self) -> str:

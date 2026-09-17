@@ -71,7 +71,7 @@ def test_declarative_dir_has_no_python_modules_other_than_init() -> None:
 # --- built-in YAMLs construct ----------------------------------------------
 
 
-_BUILT_IN_SPECS = ("bifrost.yaml", "crawl4ai.yaml", "sillytavern.yaml")
+_BUILT_IN_SPECS = ("bifrost.yaml", "crawl4ai.yaml", "sillytavern.yaml", "photoprism.yaml")
 
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
@@ -161,6 +161,24 @@ def test_bifrost_identity(tmp_path: Path) -> None:
     )  # host-side mapping, off llama-swap (8080) and worker API (9090)
     assert svc.config.internal_port == 8080  # bifrost's actual server port (default)
     assert svc.image_ref == "maximhq/bifrost:latest"
+
+
+def test_photoprism_identity(tmp_path: Path) -> None:
+    """PhotoPrism's identity / volumes / security_opts match the spec."""
+    svc = _load_spec("photoprism.yaml", tmp_path)
+    assert svc.name == "photoprism"
+    assert svc.display_name == "PhotoPrism"
+    assert svc.category.value == "media"
+    assert svc.config.listen_port == 2342
+    assert svc.config.internal_port == 2342
+    assert svc.image_ref == "photoprism/photoprism:latest"
+    assert svc.config.security_opts == ["seccomp=unconfined", "apparmor=unconfined"]
+    volumes = svc.config.extra_volumes
+    # originals mounts the parent of data_dir so comfyui output is visible
+    originals_host = volumes["/photoprism/originals"]
+    assert originals_host.endswith("/.."), f"expected parent-of-data-dir, got {originals_host}"
+    assert "/photoprism/storage" in volumes
+    assert svc.config.extra_env["PHOTOPRISM_UPLOAD_NSFW"] == "true"
 
 
 # --- crawl4ai-specific ----------------------------------------------------

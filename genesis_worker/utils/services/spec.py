@@ -68,6 +68,7 @@ class ContainerSpec(BaseModel):
     pgid_default: bool = True
     runtime: str | None = None
     gpu_flags: list[str] | None = None
+    security_opts: list[str] | None = None
 
 
 class HookSpec(BaseModel):

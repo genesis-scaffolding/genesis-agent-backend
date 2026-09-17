@@ -52,6 +52,7 @@ def test_registry_all_returns_every_service() -> None:
         "sillytavern",
         "crawl4ai",
         "bifrost",
+        "photoprism",
     }
 
 
