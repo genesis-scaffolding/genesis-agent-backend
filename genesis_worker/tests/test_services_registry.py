@@ -181,3 +181,51 @@ def test_service_capabilities_is_frozen() -> None:
     )
     with pytest.raises(Exception):
         caps.can_serve_llm = False  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# rebuild (ADR-036)
+# ---------------------------------------------------------------------------
+
+
+def test_rebuild_replaces_cached_instance(tmp_path: Path) -> None:
+    """A rebuild swaps the cached instance for one built against fresh options."""
+    settings = Settings(paths=PathsSettings(config_dir=tmp_path / "config"))
+    reg = ServiceRegistry(settings)
+    svc_before = reg.get("crawl4ai")
+    # Rebuild -- ctx is rebuilt from settings, but with no override changes the
+    # result should be a new instance with the same effective config.
+    svc_after = reg.rebuild("crawl4ai")
+    assert svc_after is not svc_before
+    assert svc_after.name == "crawl4ai"
+    assert isinstance(svc_after, InferenceService)
+
+
+def test_rebuild_refuses_when_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from genesis_worker.utils.process.docker import DockerContainer
+
+    settings = Settings(paths=PathsSettings(config_dir=tmp_path / "config"))
+    reg = ServiceRegistry(settings)
+    monkeypatch.setattr(DockerContainer, "is_running", lambda self: True)
+    with pytest.raises(RuntimeError, match="running"):
+        reg.rebuild("crawl4ai")
+
+
+def test_rebuild_unknown_service_raises(tmp_path: Path) -> None:
+    settings = Settings(paths=PathsSettings(config_dir=tmp_path / "config"))
+    reg = ServiceRegistry(settings)
+    with pytest.raises(KeyError, match="no declarative YAML"):
+        reg.rebuild("does_not_exist")
+
+
+def test_rebuild_python_service_raises(tmp_path: Path) -> None:
+    """Python services (no YAML spec path) cannot be rebuilt via this path.
+
+    The configure panel doesn't render for them; this branch is the
+    defence against an accidental call.
+    """
+    settings = Settings(paths=PathsSettings(config_dir=tmp_path / "config"))
+    reg = ServiceRegistry(settings)
+    # ``llama_swap`` is a Python plugin (no YAML).
+    with pytest.raises(KeyError, match="no declarative YAML"):
+        reg.rebuild("llama_swap")

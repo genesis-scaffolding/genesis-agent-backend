@@ -31,9 +31,15 @@ class OptionSpec(BaseModel):
     """One entry in the YAML's ``options:`` block.
 
     ``type`` is a tiny DSL: ``string``, ``int``, ``float``, ``bool``,
-    ``path``, ``list[string]``, ``list[int]``, ``list[path]``. Exotic
-    option types (nested models, custom validators) need a Python
-    ``options.py`` companion; the YAML DSL intentionally stops short.
+    ``path``, ``port``, ``env_map``, ``mount_map``, ``list[string]``,
+    ``list[int]``, ``list[path]``. Exotic option types (nested models,
+    custom validators) need a Python ``options.py`` companion; the
+    YAML DSL intentionally stops short.
+
+    ``ui_label``, ``ui_help``, ``ui_group`` are UI metadata consumed by
+    the ``configure`` panel. Free-form strings; the panel renders
+    ``ui_group`` as the section heading and falls back to the option
+    name when ``ui_label`` is empty (ADR-036).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -41,6 +47,9 @@ class OptionSpec(BaseModel):
     type: str
     optional: bool = False
     default: Any = None
+    ui_label: str = ""
+    ui_help: str = ""
+    ui_group: str = ""
 
 
 class ImageSpec(BaseModel):
@@ -85,14 +94,22 @@ class HookSpec(BaseModel):
 
 
 class AuthSpec(BaseModel):
+    """Auth block schema. ``enabled_option`` / ``fallback_option`` accept
+    any type because the loader substitutes ``$options.X`` references
+    to their typed values (bool / int / str / None) before pydantic
+    validates the spec (ADR-036). The docker config builder then
+    coerces these to the right shape (``bool`` for ``enabled``,
+    ``str | None`` for ``fallback``).
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    enabled_option: str | None = None
+    enabled_option: Any | None = None
     token_env_var: str = ""
     token_file: str  # may reference $state_dir/$data_dir
     token_file_mode: str = "0o600"
     token_generator: str = "random_hex_32"
-    fallback_option: str | None = None
+    fallback_option: Any | None = None
 
 
 class UiSpec(BaseModel):
@@ -194,9 +211,18 @@ def _parse_mode(value: Any) -> int:
     return 0o600
 
 
-def _build_path_field() -> Any:
-    """``Path`` field accepts str-or-Path; pydantic coerces."""
-    return (Path | None, None)
+def _build_path_field(optional: bool, default: Any) -> Any:
+    """``Path`` field accepts str-or-Path; pydantic coerces.
+
+    Path defaults may carry ``$variable`` markers (e.g.
+    ``"$data_dir/.."``); the loader resolves those before constructing
+    the model so pydantic coerces the resolved string, not the raw
+    marker (ADR-036).
+    """
+    coerced = Path(default) if isinstance(default, str) else default
+    if optional:
+        return (Path | None, coerced)
+    return (Path, coerced)
 
 
 def _build_list_string_field(optional: bool, default: Any) -> Any:
@@ -233,9 +259,45 @@ def _build_scalar_field(type_name: str, optional: bool, default: Any) -> Any:
         return (float, default if default is not None else 0.0)
     if type_name == "bool":
         return (bool, bool(default))
-    if type_name == "path":
-        return _build_path_field()
     raise ValueError(f"unknown option type {type_name!r}")
+
+
+def _build_port_field(optional: bool, default: Any) -> Any:
+    """``int`` constrained to ``(0, 65536)`` via pydantic Field constraints.
+
+    Optional ports allow ``None``; required ports reject 0 and values
+    in the ephemeral range. The constraint fires at options-validation
+    time, so a bad user override fails loudly rather than reaching the
+    container's port mapper.
+    """
+    if optional:
+        return (int | None, default)
+    base = default if default is not None else 0
+    return (int, Field(base, gt=0, lt=65536))
+
+
+def _build_env_map_field(optional: bool, default: Any) -> Any:
+    """``dict[str, str]`` — additive raw env vars for a docker service.
+
+    Optional by convention (the long tail is opt-in). Coerces YAML
+    mappings; JSON sidecar values pass through unchanged.
+    """
+    if optional:
+        return (dict[str, str] | None, default or {})
+    return (dict[str, str], default or {})
+
+
+def _build_mount_map_field(optional: bool, default: Any) -> Any:
+    """``dict[str, Path]`` — additive bind mounts (container -> host).
+
+    The container path stays a string (docker accepts any string);
+    the host path is coerced to ``Path`` so it matches the static
+    volumes' type and downstream mkdir/chown works on a Path.
+    """
+    default_paths = {k: Path(v) for k, v in default.items()} if isinstance(default, dict) else {}
+    if optional:
+        return (dict[str, Path] | None, default_paths)
+    return (dict[str, Path], default_paths)
 
 
 _OPTION_TYPE_BUILDERS: dict[str, Callable[[bool, Any], Any]] = {
@@ -243,7 +305,10 @@ _OPTION_TYPE_BUILDERS: dict[str, Callable[[bool, Any], Any]] = {
     "int": lambda opt, default: _build_scalar_field("int", opt, default),
     "float": lambda opt, default: _build_scalar_field("float", opt, default),
     "bool": lambda opt, default: _build_scalar_field("bool", opt, default),
-    "path": lambda opt, default: _build_scalar_field("path", opt, default),
+    "path": lambda opt, default: _build_path_field(opt, default),
+    "port": lambda opt, default: _build_port_field(opt, default),
+    "env_map": lambda opt, default: _build_env_map_field(opt, default),
+    "mount_map": lambda opt, default: _build_mount_map_field(opt, default),
     "list[string]": lambda opt, default: _build_list_string_field(opt, default),
     "list[int]": lambda opt, default: _build_list_int_field(opt, default),
     "list[path]": lambda opt, default: _build_list_path_field(opt, default),

@@ -70,3 +70,61 @@ def test_render_badge_uses_color_coding() -> None:
     assert '"green"' in src
     assert '"orange"' in src
     assert '"red"' in src
+
+
+def test_polling_fragment_detects_starting_to_running_transition() -> None:
+    """The polling fragment must rerun the full app on STARTING -> RUNNING.
+
+    The previous "current not in (RUNNING, STARTING)" check missed
+    this transition (both states are in the set), leaving the badge
+    stuck on "Starting…" and the Web UI link invisible even though
+    the container was running. The current implementation tracks the
+    last-seen state and reruns whenever it changes.
+    """
+    from genesis_worker.utils.ui._service_controls import render_action_button
+
+    src = inspect.getsource(render_action_button)
+    # The fragment must track last-seen state via session_state.
+    assert "last_state_key" in src
+    assert "st.session_state.get(last_state_key)" in src
+    assert "st.session_state[last_state_key] = current" in src
+    # And it must trigger a full app rerun when current != last,
+    # NOT only when current is outside the active set.
+    assert "current != last" in src
+    assert 'st.rerun(scope="app")' in src
+    # Specifically: the "is current outside the active set" check
+    # is the bug we're guarding against — assert it is NOT used for
+    # the "should we rerun?" decision.
+    assert "current not in (ServiceState.RUNNING, ServiceState.STARTING)" not in src
+
+
+def test_running_or_starting_branch_polls_for_state_transition() -> None:
+    """RUNNING/STARTING Stop button is wrapped in a polling fragment.
+
+    Without the polling fragment, the page would show "Starting…"
+    indefinitely once a service starts — the badge wouldn't update
+    when the container transitioned to RUNNING, and the Web UI
+    link (which only renders for RUNNING state) would never
+    appear until the user manually refreshed the page.
+
+    The fragment must rerun the full app on ANY state change, not
+    just transitions out of (RUNNING, STARTING) — the STARTING ->
+    RUNNING transition is the most common one and stays inside the
+    active set.
+    """
+    from genesis_worker.utils.ui._service_controls import render_action_button
+
+    src = inspect.getsource(render_action_button)
+    # The combined RUNNING + STARTING branch must wrap its Stop button
+    # in a ``@st.fragment(run_every=...)``.
+    assert "state in (ServiceState.RUNNING, ServiceState.STARTING)" in src
+    assert "@st.fragment(run_every=" in src
+    # The fragment must track the last-seen state and call
+    # ``st.rerun(scope="app")`` whenever it changes — the bug this
+    # guards against is the previous "is current outside the active
+    # set" check that missed STARTING -> RUNNING.
+    assert "last_state_key" in src
+    assert 'st.rerun(scope="app")' in src
+    # Specifically: it must compare ``current != last`` and rerun,
+    # not check for being outside (RUNNING, STARTING).
+    assert "current != last" in src

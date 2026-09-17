@@ -164,21 +164,45 @@ def test_bifrost_identity(tmp_path: Path) -> None:
 
 
 def test_photoprism_identity(tmp_path: Path) -> None:
-    """PhotoPrism's identity / volumes / security_opts match the spec."""
+    """PhotoPrism's identity / volumes / security_opts / options match the spec."""
     svc = _load_spec("photoprism.yaml", tmp_path)
     assert svc.name == "photoprism"
     assert svc.display_name == "PhotoPrism"
     assert svc.category.value == "media"
+    # ``listen_port`` resolves from ``$options.listen_port`` (default 2342).
     assert svc.config.listen_port == 2342
     assert svc.config.internal_port == 2342
     assert svc.image_ref == "photoprism/photoprism:latest"
     assert svc.config.security_opts == ["seccomp=unconfined", "apparmor=unconfined"]
     volumes = svc.config.extra_volumes
-    # originals mounts the parent of data_dir so comfyui output is visible
+    # ``originals`` is a ``$options.pictures_dir`` reference whose default
+    # is ``$data_dir/..``; the substitution produces the literal
+    # ``<data_dir>/..`` string, which docker normalises to the parent.
     originals_host = volumes["/photoprism/originals"]
-    assert originals_host.endswith("/.."), f"expected parent-of-data-dir, got {originals_host}"
+    assert originals_host.endswith("/data/.."), f"expected data_dir parent, got {originals_host}"
     assert "/photoprism/storage" in volumes
+    # Typed knobs land on the options instance with their declared defaults.
+    assert svc.options.listen_port == 2342
+    assert svc.options.upload_nsfw is True
+    assert svc.options.extra_env == {}
+    assert svc.options.extra_mounts == {}
+    # Admin password defaults to a non-empty placeholder so a fresh
+    # install creates the admin user out of the box. An empty
+    # password would skip admin auto-creation (photoprism's behaviour
+    # — see PHOTOPRISM_ADMIN_PASSWORD upstream docs). Operators can
+    # still clear the field via the configure panel if they want to
+    # skip the admin account; the YAML default just guarantees a
+    # working first-launch.
+    assert svc.options.admin_password == "insecure"
+    assert svc.config.extra_env["PHOTOPRISM_ADMIN_PASSWORD"] == "insecure"
+    # Bool env values get stringified to ``true`` / ``false`` for docker.
     assert svc.config.extra_env["PHOTOPRISM_UPLOAD_NSFW"] == "true"
+    # ``option_specs`` carries the YAML UI metadata for the configure panel.
+    assert svc.config.option_specs["listen_port"].ui_label == "Web UI port"
+    assert svc.config.option_specs["listen_port"].ui_group == "Network"
+    # ``configure`` panel is auto-included for any service with options
+    # (ADR-036); photoprism declares six, so the panel renders.
+    assert "configure" in svc.ui_panels
 
 
 # --- crawl4ai-specific ----------------------------------------------------
@@ -315,9 +339,13 @@ def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:
     log_tail)``; the YAML entries are already in the default so the
     additive merge is a no-op. ``service_info`` is always present so
     the install / start / stop controls render.
+
+    ``configure`` is auto-included at the bottom because sillytavern
+    declares an ``options:`` block (ADR-036). The live operational
+    info stays at the top; ``configure`` is the least-frequent action.
     """
     svc = _load_spec("sillytavern.yaml", tmp_path)
-    assert svc.ui_panels == ("service_info", "container_info", "log_tail")
+    assert svc.ui_panels == ("service_info", "container_info", "log_tail", "configure")
 
 
 # --- registry discovers YAMLs ---------------------------------------------

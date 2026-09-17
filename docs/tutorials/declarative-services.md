@@ -231,7 +231,7 @@ reference, no "is this the right option name" surprises.
 | `auth.enabled_option`, `auth.fallback_option` | Yes (`$options.X` only) |
 | `pre_start_hooks[].target` | Yes (resolved before the hook fires) |
 | `image.repo`, `image.tag` | No — these are concrete image references |
-| `container.listen_host`, `listen_port` | No — these are config, not paths |
+| `container.listen_host`, `listen_port`, `internal_port`, `public_host` | Yes (`$options.X` only) — user-editable since ADR-036 |
 
 ## Options block
 
@@ -240,14 +240,28 @@ User-editable settings live in `options:`. Each entry declares:
 ```yaml
 options:
   <name>:
-    type: <string|int|float|bool|path|list[string]|list[int]|list[path]>
+    type: <string|int|float|bool|path|port|env_map|mount_map|list[string]|list[int]|list[path]>
     optional: <true|false>     # adds | None to the type
     default: <value>            # used when no user override
+    ui_label: "Display name"    # shown in the configure panel (optional)
+    ui_help: "Tooltip text"     # shown next to the widget (optional)
+    ui_group: "Network"         # section heading in the form (optional)
 ```
 
 The type system is intentionally closed — exotic shapes (nested models,
 custom validators) require a Python `options.py` companion file. For typical
 env-var-style configuration the YAML DSL is enough.
+
+Three new types landed in ADR-036:
+
+- **`port`** — `int` constrained to `(0, 65536)`. Use for `listen_port`,
+  `internal_port`, and any other service-controlled port.
+- **`env_map`** — `dict[str, str]`. A free-form map of additional env
+  vars. The user populates key/value pairs through the configure panel;
+  YAML-declared typed knobs in `env:` still win on collision (the typed
+  knob is the discovery surface; the map is the long tail).
+- **`mount_map`** — `dict[str, Path]`. Same shape for bind mounts
+  (container path → host path).
 
 `optional: true` means "may be unset by the user". The Python type becomes
 `<declared> | None`, and pydantic accepts `None` for the value.
@@ -260,11 +274,19 @@ registry merges into `ctx.options` before the loader runs. So:
 3. Loader does `options_model(**ctx.options)` → typed instance with overrides
 4. `$options.log_level` resolves to `"debug"`
 
+Map options don't fit the flat KEY=VALUE dotenv format. They live in a
+per-service JSON sidecar at
+`<config_dir>/services/<name>.overrides.json`. The Settings page's flat-key
+override path stays as-is for backward compat with bifrost / crawl4ai /
+sillytavern; the sidecar carries map values only.
+
 This is why the user doesn't have to restart the worker to pick up changes
 to **most** fields — but for `env` and `volumes` whose `$...` substitution
-happens at construction, the user DOES need to restart the worker (the
-resolved values are baked into `DockerServiceConfig.extra_env` and never
-re-resolved at start time).
+happens at construction, the user DOES need to restart the service on its
+own page (the resolved values are baked into `DockerServiceConfig.extra_env`
+and never re-resolved at start time). The configure panel's **Apply**
+button rebuilds the in-memory service; **Apply & restart** stops + starts
+the container so the new config takes effect immediately (ADR-036).
 
 ## Pre-start hooks
 
@@ -344,7 +366,26 @@ The status page for a docker service renders, in order:
 
 1. **`service_info`** — mandatory. Carries install / start / stop buttons.
 2. **`container_info`** — docker-specific. Shows container state, image, ports.
-3. **`log_tail`** — last N bytes of the log file.
+3. **`configure`** — auto-generated **dialog** for the service's
+   user-editable options. The status page renders a single
+   `Configure` button; clicking it opens a modal (`@st.dialog`)
+   with one widget per option in `svc.config.option_specs`,
+   grouped by `ui_group`. The form is intentionally modal so the
+   status page stays focused on operational info (install /
+   start / stop, container state, logs) and the dense form
+   doesn't dump inline (ADR-036).
+
+   **Apply** persists scalars to `user-overrides.env` and map types
+   to the JSON sidecar, then rebuilds the in-memory service.
+   **Apply & restart** does that and stops + starts the container so
+   the new config takes effect immediately.
+
+   `configure` is **auto-included** for any service that declares an
+   `options:` block — YAML authors don't need to add `- configure` to
+   `ui.status_panels`. Services without `options:` (Python services
+   that ship their own `options.py`, services with no user-tunable
+   settings) don't get the panel.
+4. **`log_tail`** — last N bytes of the log file.
 
 If the YAML declares extra panels, they append after the defaults:
 
@@ -465,6 +506,120 @@ assert svc.image_ref == "maximhq/bifrost:latest"
    the expected set.
 8. **Run all four gates:** `uv run pytest -q`, `uv run pyright`,
    `uv run ruff check genesis_worker`, `uv run ruff format --check genesis_worker`.
+
+## Worked example: photoprism with user-editable config
+
+PhotoPrism is the canonical example of a service that benefits from
+ADR-036 — it has a bind mount pointing at a per-deployment photos
+directory, an admin password to set, several env vars beyond the
+common ones, and a port the operator might want to move. All of
+this lands in the YAML via the `options:` block, surfaced through
+the `configure` panel, and persisted through the same precedence
+chain as everything else (ADR-036).
+
+```yaml
+# photoprism.yaml
+version: 1
+kind: docker
+name: photoprism
+display_name: PhotoPrism
+description: Photo and video organizer
+category: media
+
+capabilities:
+  has_web_ui: true
+  can_install: true
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 2
+
+image:
+  repo: photoprism/photoprism
+  tag: latest
+  install_name: photoprism
+  source_url: https://hub.docker.com/r/photoprism/photoprism
+
+container:
+  name: photoprism
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port       # user-editable
+  internal_port: 2342
+  health_probe_path: /
+  web_ui_path: /
+  restart_policy: unless-stopped
+  security_opts: [seccomp=unconfined, apparmor=unconfined]
+
+env:
+  PHOTOPRISM_UPLOAD_NSFW: "$options.upload_nsfw"
+  PHOTOPRISM_ADMIN_PASSWORD: "$options.admin_password"
+
+volumes:
+  /photoprism/storage: "$data_dir/storage"
+  /photoprism/originals: "$options.pictures_dir"   # user-editable
+
+# No ``ui.status_panels`` entry needed; ``configure`` auto-includes
+# for any service with options.
+
+options:
+  listen_port:
+    type: port
+    default: 2342
+    ui_label: Web UI port
+    ui_help: Host-side port the web UI listens on
+    ui_group: Network
+  pictures_dir:
+    type: path
+    default: "$data_dir/.."
+    ui_label: Pictures directory
+    ui_help: Directory PhotoPrism indexes for photos and videos
+    ui_group: Storage
+  admin_password:
+    type: string
+    optional: true
+    ui_label: Admin password
+    ui_help: Blank keeps the auto-generated one
+    ui_group: Security
+  upload_nsfw:
+    type: bool
+    default: true
+    ui_label: Allow NSFW uploads
+    ui_help: Toggle the PHOTOPRISM_UPLOAD_NSFW env var
+    ui_group: Security
+  extra_env:
+    type: env_map
+    ui_label: Extra environment variables
+    ui_help: Additional PhotoPrism env vars (upstream docs)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    ui_label: Extra volume mounts
+    ui_help: Additional host→container bind mounts
+    ui_group: Advanced
+```
+
+How the user interacts with this:
+
+1. They open the PhotoPrism status page and click the **Configure**
+   button. A modal dialog opens with one widget per option,
+   grouped by `ui_group` (Network / Storage / Security / Advanced).
+2. They edit `pictures_dir` to `/srv/photos` and click **Apply**.
+3. The dialog writes `GENESIS_SERVICES__PHOTOPRISM__PICTURES_DIR=/srv/photos`
+   to `user-overrides.env` and rebuilds the in-memory service. The
+   dialog closes; the running container still uses the old bind
+   mount until restart.
+4. They open the dialog again and click **Apply & restart**, or
+   stop/start the service manually on its status page. The
+   container starts with the new bind mount.
+
+The two map options (`extra_env`, `extra_mounts`) use a key/value row
+editor instead of scalar fields. Edits land in
+`<config_dir>/services/photoprism.overrides.json`. The merge order
+inside `Settings.options_for` is scalars-first, maps-second, so the
+sidecar wins on key collisions (the typed knob is the discovery
+surface; the map is the long tail — a user who types
+`PHOTOPRISM_UPLOAD_NSFW=false` into `extra_env` while the typed knob
+is `true` gets the long-tail value).
 
 ## Limitations (when to fall back to Python)
 

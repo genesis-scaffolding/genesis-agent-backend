@@ -28,7 +28,7 @@ image:
 container:
   name: photoprism
   listen_host: 0.0.0.0
-  listen_port: 2342
+  listen_port: $options.listen_port
   internal_port: 2342
   health_probe_path: /
   web_ui_path: /
@@ -40,10 +40,50 @@ container:
     - apparmor=unconfined
 
 env:
-  PHOTOPRISM_UPLOAD_NSFW: "true"
-  PHOTOPRISM_ADMIN_PASSWORD: "insecure"
+  PHOTOPRISM_UPLOAD_NSFW: "$options.upload_nsfw"
+  PHOTOPRISM_ADMIN_PASSWORD: "$options.admin_password"
 
 volumes:
   /photoprism/storage: "$data_dir/storage"
-  /photoprism/originals: "$data_dir/.."
+  /photoprism/originals: "$options.pictures_dir"
 
+ui:
+  status_panels: []
+
+options:
+  listen_port:
+    type: port
+    default: 2342
+    ui_label: Web UI port
+    ui_help: Host-side port the PhotoPrism web UI listens on
+    ui_group: Network
+  pictures_dir:
+    type: path
+    default: "$data_dir/.."
+    ui_label: Pictures directory
+    ui_help: Directory PhotoPrism indexes for photos and videos (the literal "$data_dir/.." means the parent of the data dir)
+    ui_group: Storage
+  admin_password:
+    type: string
+    default: "insecure"
+    ui_label: Admin password
+    ui_help: Initial password for the admin user (set on first launch). Clear the field to skip admin auto-creation.
+    ui_group: Security
+  upload_nsfw:
+    type: bool
+    default: true
+    ui_label: Allow NSFW uploads
+    ui_help: Toggle the PHOTOPRISM_UPLOAD_NSFW env var
+    ui_group: Security
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional PhotoPrism env vars (see upstream docs for the long tail)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host→container bind mounts
+    ui_group: Advanced

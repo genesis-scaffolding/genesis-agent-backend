@@ -38,6 +38,7 @@ from .base import DeclarativeServiceBase
 from .docker_service import AuthConfig, DockerService, DockerServiceConfig
 from .spec import (
     DockerServiceSpec,
+    OptionSpec,
     UvServiceSpec,
     spec_to_options_model,
 )
@@ -51,15 +52,29 @@ def _resolve_string(
 ) -> Any:
     """Resolve ``$placeholders`` in ``value``.
 
-    If the string is exactly one ``$placeholder``, return the typed
-    value (bool, int, str, Path, None) — preserving the option's
-    original type for fields like ``auth.enabled_option``. Mixed
-    strings (e.g. ``"$state_dir/$options.subpath"``) fall through to
-    regex substitution and always return a string.
+    Single-placeholder strings return the typed value when the
+    placeholder is ``$options.X`` (so ``$options.jwt_enabled`` rounds
+    trips as ``bool`` for the auth block) or when the typed value is
+    already a string. Otherwise the typed value is stringified --
+    notably ``Path`` from ``$data_dir`` / ``$state_dir`` -- so the
+    result fits ``env`` / ``volumes`` dicts that pydantic validates
+    as ``dict[str, str]``.
+
+    Mixed strings always return a string via regex substitution
+    (stringified replacements). The env dict gets a post-pass that
+    stringifies ``bool`` values into ``"true"`` / ``"false"`` so
+    docker run gets the conventional lowercase form (ADR-036).
     """
     match = _PLACEHOLDER_RE.fullmatch(value)
     if match:
-        return _resolve_placeholder(match.group(1), ctx, options, auth_token)
+        resolved = _resolve_placeholder(match.group(1), ctx, options, auth_token)
+        if resolved is None:
+            return None
+        if isinstance(resolved, str):
+            return resolved
+        if match.group(1).startswith("options."):
+            return resolved  # typed value preserved; env post-pass handles bool coercion
+        return str(resolved)  # Path / int from $data_dir etc.
 
     def _replace(match: re.Match[str]) -> str:
         return str(_resolve_placeholder(match.group(1), ctx, options, auth_token))
@@ -70,6 +85,15 @@ def _resolve_string(
 def _resolve_placeholder(
     key: str, ctx: ServiceContext, options: Mapping[str, Any], auth_token: Any
 ) -> Any:
+    """Resolve a single placeholder key to its typed value.
+
+    ``$data_dir`` / ``$state_dir`` / etc. return ``Path`` objects; the
+    caller (``_resolve_string``) stringifies them. ``$options.X``
+    returns the typed option value (bool, int, str, None) so
+    downstream code can use it as a typed value (notably the auth
+    block, which needs ``$options.jwt_enabled`` to round-trip as
+    bool -- not a stringified ``"True"`` / ``"False"``).
+    """
     if key == "state_dir":
         return ctx.state_dir
     if key == "data_dir":
@@ -96,12 +120,20 @@ def resolve_placeholders(
 ) -> Any:
     """Recursively replace ``$state_dir`` / ``$options.X`` markers in ``value``.
 
-    Strings get the substitution (typed when the string is a single
-    placeholder, string when mixed); dicts and lists are walked;
+    Strings get the substitution (typed for single placeholder, string
+    for mixed); ``Path`` objects get stringified so the recursive walk
+    over a model_dump output (where ``Path`` survives as a Path
+    object) still substitutes correctly; dicts and lists are walked;
     everything else is returned untouched.
     """
     if isinstance(value, str):
         return _resolve_string(value, ctx, options, auth_token)
+    if isinstance(value, Path):
+        # Path objects can survive ``model_dump`` with their string
+        # form containing ``$variable`` markers (e.g. option defaults
+        # like ``"$data_dir/.."``). Stringify so the substitution
+        # path picks them up; the next pass replaces the marker.
+        return _resolve_string(str(value), ctx, options, auth_token)
     if isinstance(value, dict):
         return {k: resolve_placeholders(v, ctx, options, auth_token) for k, v in value.items()}
     if isinstance(value, list):
@@ -130,6 +162,7 @@ def _validate_spec(raw: dict) -> DockerServiceSpec | UvServiceSpec:
 def _build_docker_config(
     resolved: dict,
     options_model: type[BaseModel],
+    option_specs: Mapping[str, _spec_module.OptionSpec],
 ) -> DockerServiceConfig:
     """Translate an already-resolved docker spec dict into ``DockerServiceConfig``.
 
@@ -173,6 +206,7 @@ def _build_docker_config(
         options_model=options_model,
         log_filename=resolved["log_filename"],
         ui_pages=tuple(ui["status_panels"]),
+        option_specs=option_specs,
         # docker-specific
         image_repo=image["repo"],
         image_tag=image["tag"],
@@ -204,6 +238,7 @@ def _build_docker_config(
 def _build_uv_config(
     resolved: dict,
     options_model: type[BaseModel],
+    option_specs: Mapping[str, _spec_module.OptionSpec],
 ) -> UvServiceConfig:
     """Translate an already-resolved uv spec dict into ``UvServiceConfig``.
 
@@ -224,6 +259,7 @@ def _build_uv_config(
         options_model=options_model,
         log_filename=resolved["log_filename"],
         ui_pages=tuple(ui["status_panels"]),
+        option_specs=option_specs,
         # uv-specific
         package_name=resolved["package_name"],
         binary_name=resolved["binary_name"],
@@ -254,41 +290,102 @@ def load_service_spec(
     declare ``name: sillytavern``. This catches the "renamed one but
     not the other" mistake at load time.
 
-    The loader runs ONE resolution pass over the validated spec: every
-    ``$state_dir`` / ``$data_dir`` / ``$options.X`` marker is replaced
-    with its concrete value (paths, typed option values) before any
-    config builder runs. Builders take the resolved dict and produce
-    dataclasses with no placeholder machinery of their own.
+    Loading order (ADR-036):
+
+    1. Parse YAML and validate the ``options:`` block in isolation --
+       we need the typed options schema to resolve ``$options.X``
+       markers elsewhere.
+    2. Build the options model, probe it against ``ctx.options``, and
+       resolve ``$variable`` markers inside option defaults (e.g.
+       ``pictures_dir: { default: "$data_dir/.." }``).
+    3. Substitute ``$variable`` markers in the *raw* spec dict so
+       pydantic validation sees concrete values. This is what lets
+       ``container.listen_port: "$options.web_port"`` validate as an
+       ``int`` after substitution (the ADR-035 carve-out for
+       ``listen_port`` / ``listen_host`` / ``internal_port`` /
+       ``public_host`` is lifted here).
+    4. Pydantic-validate the substituted dict against the spec
+       union.
+    5. Merge ``extra_env`` / ``extra_mounts`` options additively into
+       ``env`` / ``volumes`` (user additions win on collisions).
+    6. Build the kind-specific config dataclass and instantiate the
+       service.
+
+    Builders take the fully-resolved dict and produce dataclasses
+    with no placeholder machinery of their own.
     """
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
         raise TypeError(f"{path}: top-level YAML must be a mapping, got {type(raw).__name__}")
 
-    try:
-        spec: DockerServiceSpec | UvServiceSpec = _validate_spec(raw)
-    except ValidationError as exc:
-        raise ValueError(f"{path}: YAML failed schema validation:\n{exc}") from exc
-
-    if spec.name != path.stem:
+    if raw.get("name") != path.stem:
         raise ValueError(
-            f"{path}: filename stem {path.stem!r} does not match spec name {spec.name!r}; "
+            f"{path}: filename stem {path.stem!r} does not match spec name {raw.get('name')!r}; "
             f"rename the file or fix the YAML's name field"
         )
 
+    # Validate the options block first so we have a typed schema to
+    # resolve ``$options.X`` references against. The full spec
+    # validation happens after substitution below.
+    raw_options = raw.get("options") or {}
+    option_specs: dict[str, OptionSpec] = {
+        name: OptionSpec.model_validate(spec) for name, spec in raw_options.items()
+    }
     options_model = spec_to_options_model(
-        spec.options, model_name=f"{spec.name.title()}YAMLOptions"
+        option_specs, model_name=f"{path.stem.title()}YAMLOptions"
     )
 
     # Probe the merged options (user overrides > YAML defaults) so
     # ``$options.X`` resolves to the runtime value, not just the default.
     probe = options_model(**ctx.options)
-    resolved = resolve_placeholders(spec.model_dump(), ctx, probe.model_dump())
+    options_dump = probe.model_dump()
+    # Resolve ``$variable`` markers in option defaults themselves, so
+    # ``pictures_dir: { default: "$data_dir/.." }`` becomes a concrete
+    # path before it's used as a lookup value for ``$options.X``
+    # elsewhere in the spec.
+    options_resolved = resolve_placeholders(options_dump, ctx, options_dump)
+
+    # Substitute placeholders in the raw dict so pydantic sees concrete
+    # values. ``container.listen_port: "$options.web_port"`` becomes
+    # ``container.listen_port: 9090`` before validation.
+    raw_substituted = resolve_placeholders(raw, ctx, options_resolved)
+
+    try:
+        spec: DockerServiceSpec | UvServiceSpec = _validate_spec(raw_substituted)
+    except ValidationError as exc:
+        raise ValueError(f"{path}: YAML failed schema validation:\n{exc}") from exc
+
+    # The fully-resolved spec, used to feed the config builder.
+    resolved = resolve_placeholders(spec.model_dump(), ctx, options_resolved)
+
+    # Map options (``extra_env`` / ``extra_mounts``) merge additively
+    # into the resolved spec, with user additions winning on key
+    # collisions. The YAML ``env:`` / ``volumes:`` blocks declare the
+    # typed knobs; the map options are the free-form long tail
+    # (ADR-036). Values stay as strings so they match the static
+    # YAML volumes; ``mount_map`` pydantic coercion produces Path
+    # objects, so we stringify them back here.
+    if isinstance(spec, DockerServiceSpec):
+        extra_env = dict(options_resolved.get("extra_env") or {})
+        extra_mounts_raw = options_resolved.get("extra_mounts") or {}
+        extra_mounts = {k: str(v) for k, v in extra_mounts_raw.items()}
+        merged_env = {**(resolved.get("env") or {}), **extra_env}
+        # Coerce bool env values to lowercase strings so docker run
+        # gets ``PHOTOPRISM_UPLOAD_NSFW=true`` (the conventional form)
+        # rather than ``=True`` (Python's str repr). ``$options.X``
+        # preserved the typed value through substitution; this pass
+        # converts only the env dict.
+        resolved["env"] = {
+            k: ("true" if v is True else "false" if v is False else v)
+            for k, v in merged_env.items()
+        }
+        resolved["volumes"] = {**(resolved.get("volumes") or {}), **extra_mounts}
 
     if isinstance(spec, DockerServiceSpec):
-        config = _build_docker_config(resolved, options_model)
+        config = _build_docker_config(resolved, options_model, spec.options)
         return DockerService(ctx, config=config)
 
-    config = _build_uv_config(resolved, options_model)
+    config = _build_uv_config(resolved, options_model, spec.options)
     return UvService(ctx, config=config)
 
 

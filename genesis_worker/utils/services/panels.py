@@ -214,6 +214,22 @@ def _log_tail(svc: InferenceService, panel_config: dict) -> None:
         render_tail_log(svc, n_bytes=n_bytes, key=svc.name)
 
 
+@register("configure")
+def _configure(svc: InferenceService, _panel_config: dict) -> None:
+    """Auto-generated form for the service's user-editable options.
+
+    Reads ``svc.config.option_specs`` (the original ``OptionSpec``
+    dict the loader preserves from the YAML) and renders one widget
+    per option, grouped by ``ui_group``. Apply persists to the
+    right file (scalars to ``user-overrides.env``; maps to the
+    per-service JSON sidecar) and rebuilds the in-memory service
+    so the next ``start()`` picks up the new config (ADR-036).
+    """
+    from .configure_panel import render_configure_panel
+
+    render_configure_panel(svc)
+
+
 __all__ = [
     "PanelRenderer",
     "register",

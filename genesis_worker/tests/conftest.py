@@ -103,7 +103,11 @@ def _stub_docker_probes(request, monkeypatch: pytest.MonkeyPatch) -> None:
     if "integration" in request.keywords:
         return
     monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: False))
-    monkeypatch.setattr(DockerContainer, "is_running", staticmethod(lambda self: False))
+    # ``is_running(self)`` is a regular method on the class; the stub
+    # must keep the same signature so the descriptor protocol binds
+    # ``self`` when accessed via an instance. ``staticmethod()`` would
+    # strip ``self`` and the call would raise ``TypeError``.
+    monkeypatch.setattr(DockerContainer, "is_running", lambda self: False)
 
 
 @pytest.fixture(autouse=True)
