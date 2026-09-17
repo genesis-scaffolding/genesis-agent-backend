@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from genesis_worker.contracts.host import HostInfo
 from genesis_worker.utils.collectors.host_info import collect_host_info
 
 
+@pytest.mark.integration
 def test_collect_returns_dataclass() -> None:
     info = collect_host_info()
     assert isinstance(info, HostInfo)

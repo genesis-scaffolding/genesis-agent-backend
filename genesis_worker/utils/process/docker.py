@@ -71,11 +71,19 @@ class DockerContainer:
     # --- lifecycle ---------------------------------------------------------
 
     def is_running(self) -> bool:
-        """True iff a container named ``self._name`` exists and is in ``Running`` state."""
-        result = _run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", self._name],
-            timeout=_DEFAULT_INSPECT_TIMEOUT_S,
-        )
+        """True iff a container named ``self._name`` exists and is in ``Running`` state.
+
+        Returns ``False`` on a missing docker binary, daemon unreachable,
+        or any other failure — these are not error states for the caller,
+        just "the container isn't running here".
+        """
+        try:
+            result = _run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", self._name],
+                timeout=_DEFAULT_INSPECT_TIMEOUT_S,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
         if result.returncode != 0:
             return False
         return result.stdout.strip().lower() == "true"
@@ -227,11 +235,19 @@ class DockerContainer:
 
     @staticmethod
     def image_present(image: str) -> bool:
-        """True iff ``docker image inspect <image>`` exits 0."""
-        result = _run(
-            ["docker", "image", "inspect", image],
-            timeout=_DEFAULT_INSPECT_TIMEOUT_S,
-        )
+        """True iff ``docker image inspect <image>`` exits 0.
+
+        Returns ``False`` on a missing docker binary, daemon unreachable,
+        or any other failure — the caller treats "image absent" and
+        "docker absent" the same way: not installed.
+        """
+        try:
+            result = _run(
+                ["docker", "image", "inspect", image],
+                timeout=_DEFAULT_INSPECT_TIMEOUT_S,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
         return result.returncode == 0
 
     @staticmethod

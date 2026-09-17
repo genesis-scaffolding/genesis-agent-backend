@@ -10,6 +10,25 @@ import pytest
 
 from genesis_worker.utils.process.docker import DockerContainer
 
+
+@pytest.fixture(autouse=True)
+def _stub_docker_probes() -> None:
+    """No-op override of the conftest stub.
+
+    This file tests ``DockerContainer.image_present`` and
+    ``DockerContainer.is_running`` themselves — the very methods the
+    conftest autouse stub replaces. Per-test ``monkeypatch.setattr`` on
+    ``subprocess.run`` is what each test uses to fake the docker
+    subprocess; if the class-level methods were also stubbed, those
+    tests would always return the stub value regardless of the
+    subprocess patch.
+
+    Same-name autouse fixture in a test module shadows the conftest's
+    one (pytest fixture precedence). This fixture is intentionally
+    empty.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,6 +106,21 @@ def test_is_running_false_when_container_absent(monkeypatch: pytest.MonkeyPatch)
         subprocess,
         "run",
         lambda args, **kw: _completed(args, returncode=1, stderr="No such container"),
+    )
+    assert DockerContainer("c1").is_running() is False
+
+
+def test_is_running_false_when_docker_binary_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No docker on PATH — returns False, not raise.
+
+    Same rationale as ``test_image_present_false_when_docker_binary_missing``:
+    an uncaught FileNotFoundError here would crash ServiceRegistry.disable()
+    on a CI host without docker.
+    """
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: (_ for _ in ()).throw(FileNotFoundError("docker"))
     )
     assert DockerContainer("c1").is_running() is False
 
@@ -326,6 +360,21 @@ def test_image_present_true_when_inspect_ok(monkeypatch: pytest.MonkeyPatch) -> 
 def test_image_present_false_when_inspect_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         subprocess, "run", lambda args, **kw: _completed(args, returncode=1, stderr="not found")
+    )
+    assert DockerContainer.image_present("img:1") is False
+
+
+def test_image_present_false_when_docker_binary_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No docker on PATH (CI without docker) — returns False, not raise.
+
+    The uncaught FileNotFoundError would otherwise propagate into
+    ServiceRegistry._load_or_bootstrap_enabled_set and crash every
+    worker-construction test.
+    """
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: (_ for _ in ()).throw(FileNotFoundError("docker"))
     )
     assert DockerContainer.image_present("img:1") is False
 

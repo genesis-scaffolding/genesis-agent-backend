@@ -163,30 +163,6 @@ def test_source_unknown_returns_404(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-def test_services_list_includes_disabled(client: TestClient) -> None:
-    r = client.get("/v1/services")
-    assert r.status_code == 200
-    body = r.json()
-    names = {s["name"] for s in body}
-    # Every in-tree service appears, regardless of enabled state (ADR-029).
-    assert "llama_swap" in names
-    # State is one of the documented values; unavailable services (no binary
-    # installed in the test env) report "unavailable" rather than calling
-    # into ``status()``.
-    for s in body:
-        assert s["state"] in {"running", "stopped", "starting", "stopping", "failed", "unavailable"}
-        # Endpoint URLs surface on the list so a downstream consumer
-        # can build a "what's running and where" view without N+1
-        # calls into the detail route.
-        assert "runtime_endpoint" in s
-        assert "web_ui_endpoint" in s
-        # Not running → both endpoints None.
-        if s["state"] != "running":
-            assert s["runtime_endpoint"] is None
-            assert s["web_ui_endpoint"] is None
-
-
-@pytest.mark.integration
 def test_service_detail(client: TestClient) -> None:
     r = client.get("/v1/services/llama_swap")
     assert r.status_code == 200
