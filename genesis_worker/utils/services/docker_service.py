@@ -305,14 +305,30 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     def ui_panels(self) -> tuple[str, ...]:
         """Panel kinds the default status page renders for this service.
 
-        Docker-specific default: ``(service_info, container_info,
-        log_tail)``. The base class merges the YAML's ``status_panels``
-        in additively on top of this. ``service_info`` carries the
-        install / start / stop controls and is always first.
+        Order: ``service_info`` first (always — carries the install /
+        start / stop controls and Web UI link), then any YAML-declared
+        ``status_panels`` (e.g. ``auth_token`` for crawl4ai), then the
+        default ``container_info`` + ``log_tail``, then ``configure``
+        last when the service declares ``options:``.
+
+        ``configure`` lives at the bottom — opening the modal is a
+        rare action compared to the live operational info above it,
+        and an "Configure" button pinned above the running container
+        state looks out of place.
+
+        The ``configure`` panel is auto-included when the service
+        declares any ``options:`` (ADR-036). YAML authors don't need
+        to add ``- configure`` to ``ui.status_panels`` explicitly.
         """
-        base = ("service_info", "container_info", "log_tail")
-        extras = tuple(p for p in self.config.ui_pages if p not in base)
-        return base + extras
+        base_default = ("service_info", "container_info", "log_tail")
+        yaml_extras = tuple(p for p in self.config.ui_pages if p not in base_default)
+        # Auto-include ``configure`` at the end when the service has
+        # user-editable options, so YAML authors don't have to remember
+        # to add it. ``configure`` (when YAML-explicit) is filtered out
+        # of the extras so it doesn't appear twice.
+        non_configure_yaml = tuple(p for p in yaml_extras if p != "configure")
+        auto_configure = ("configure",) if self.config.option_specs else ()
+        return ("service_info", *non_configure_yaml, *base_default[1:], *auto_configure)
 
     # --- contract overrides -----------------------------------------------
 

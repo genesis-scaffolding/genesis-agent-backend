@@ -420,6 +420,35 @@ class GenesisWorker:
     def service_status(self, name: str):
         return self._service_registry.get(name).status()
 
+    def rebuild_service(self, name: str) -> InferenceService:
+        """Re-construct a single service against current options.
+
+        Refuses if the service is currently running — stop it first.
+        The ``configure`` panel's ``Apply`` button calls this after
+        persisting user-overrides; ``Apply & restart`` wraps it with
+        stop + start so the new config takes effect immediately.
+        """
+        return self._service_registry.rebuild(name)
+
+    def read_service_overrides(self, name: str) -> dict[str, Any]:
+        """Read the per-service override JSON sidecar for ``name``.
+
+        Returns the raw dict (which may contain map-typed entries
+        that don't fit the flat ``user-overrides.env`` shape). The
+        ``configure`` panel merges these into the form's current
+        values alongside the flat-key overrides.
+        """
+        from .utils.config_overrides import read_service_overrides, service_overrides_path
+
+        return read_service_overrides(service_overrides_path(self._settings.paths.config_dir, name))
+
+    def write_service_overrides(self, name: str, values: dict[str, Any]) -> None:
+        """Atomic write of the per-service override JSON sidecar."""
+        from .utils.config_overrides import service_overrides_path
+        from .utils.config_overrides import write_service_overrides as _w
+
+        _w(service_overrides_path(self._settings.paths.config_dir, name), values)
+
     def collect_metrics(self):
         from .utils.collectors.metrics import collect_metrics as _collect
 

@@ -56,10 +56,46 @@ def render_action_button(
     # where every restart cycle lands on "running + unhealthy". Folding
     # it into the Stop branch gives the user an escape hatch without
     # having to SSH in to kill the container.
+    #
+    # The Stop button is wrapped in a 2-second polling fragment. The
+    # fragment tracks the last-seen state in session_state and triggers
+    # a full app rerun whenever it changes. Without this polling, the
+    # page would show "Starting…" indefinitely once a service starts
+    # and the Web UI link would never appear even though the container
+    # is reachable — the badge and Web UI link live OUTSIDE this
+    # fragment, so they only redraw when the full app reruns.
+    #
+    # Tracking via "last seen" rather than "is current outside the
+    # active set" matters because STARTING -> RUNNING stays inside
+    # (RUNNING, STARTING) but is still a transition the user needs to
+    # see: the badge goes from "Starting…" (orange) to "Running"
+    # (green) and the Web UI link appears. The previous "is current
+    # outside the active set" check missed this transition and left
+    # the badge stuck on "Starting…" forever.
     if state in (ServiceState.RUNNING, ServiceState.STARTING):
-        if st.button("Stop", key=f"{key_prefix}-stop", use_container_width=use_container_width):
-            worker.stop_service(name)
-            st.rerun()
+        last_state_key = f"_polled_state_{key_prefix}"
+
+        @st.fragment(run_every="2s")
+        def _polled_stop_button(*, btn_key: str) -> None:
+            current = worker.service_status(name).state
+            last = st.session_state.get(last_state_key)
+            if last is None:
+                # First poll: record the state without rerunning —
+                # the outer page just rendered with this state, so
+                # there's nothing new to draw.
+                st.session_state[last_state_key] = current
+            elif current != last:
+                # State changed (e.g. STARTING -> RUNNING). Rerun the
+                # full app so the badge / Web UI link outside this
+                # fragment redraw with the new state.
+                st.session_state[last_state_key] = current
+                st.rerun(scope="app")
+            if st.button("Stop", key=btn_key, use_container_width=use_container_width):
+                worker.stop_service(name)
+                st.rerun()
+
+        _polled_stop_button.__name__ = f"_polled_stop_button_{key_prefix}"
+        _polled_stop_button(btn_key=f"{key_prefix}-stop")
         return
 
     # Surface any error from the previous Start attempt. The framework returns
@@ -72,11 +108,19 @@ def render_action_button(
         st.error(pending_error)
 
     if state == ServiceState.STOPPING:
+        last_state_key = f"_polled_state_{key_prefix}"
 
         @st.fragment(run_every="2s")
         def _wait_for_stop(*, btn_key: str) -> None:
             current = worker.service_status(name).state
-            if current != ServiceState.STOPPING:
+            last = st.session_state.get(last_state_key)
+            if last is None:
+                st.session_state[last_state_key] = current
+            elif current != last:
+                # State changed (STOPPING -> STOPPED, FAILED, etc.).
+                # Rerun the full app so the outer badge / button
+                # redraw with the new state.
+                st.session_state[last_state_key] = current
                 st.rerun(scope="app")
             st.button(
                 "Stopping…",

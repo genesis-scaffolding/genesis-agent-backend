@@ -163,6 +163,9 @@ class ServiceRegistry(_Registry):
         for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
             build = cast("Callable[[ServiceContext], InferenceService]", cls)
             self._instances[cls.name] = build(self._context(cls))
+        # Spec-path map for declarative services so ``rebuild`` can
+        # re-run the loader without re-walking the YAMLs (ADR-036).
+        self._spec_paths: dict[str, Path] = {}
         # Then declarative YAML specs (ADR-035 phase 2).
         from .utils.services import load_service_spec
 
@@ -175,6 +178,7 @@ class ServiceRegistry(_Registry):
                     f"already registered from a Python plugin before {spec_path.name}"
                 )
             self._instances[svc.name] = svc
+            self._spec_paths[svc.name] = spec_path
         self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
 
     def _context_for_name(self, name: str) -> ServiceContext:
@@ -271,6 +275,37 @@ class ServiceRegistry(_Registry):
         """Disabled services in registration order. Used by the catalog page."""
         services = cast("dict[str, InferenceService]", self._instances)
         return [svc for name, svc in services.items() if name not in self._enabled]
+
+    # --- rebuild (ADR-036) -----------------------------------------------
+
+    def rebuild(self, name: str) -> InferenceService:
+        """Re-construct ``name`` against current options. Refuses if running.
+
+        Construct-first, swap-last: if the loader raises, the existing
+        cached instance is left untouched and the exception propagates.
+        The caller (``worker.rebuild_service`` / the ``configure``
+        panel's Apply button) is responsible for stopping the service
+        first; ``Apply & restart`` wraps this with stop + start.
+
+        Python services (no YAML spec path) raise ``KeyError``; the
+        configure panel doesn't render for them so this branch is
+        unreachable in practice, but the type system surfaces the
+        constraint.
+        """
+        spec_path = self._spec_paths.get(name)
+        if spec_path is None:
+            raise KeyError(
+                f"cannot rebuild {name!r}: no declarative YAML spec path; "
+                "Python services rebuild via their own lifecycle"
+            )
+        old = self._instances.get(name)
+        if old is not None and old.is_running():
+            raise RuntimeError(f"cannot rebuild {name!r} while running — stop the service first")
+        from .utils.services import load_service_spec
+
+        new_svc = load_service_spec(spec_path, ctx=self._context_for_name(name))
+        self._instances[name] = new_svc
+        return new_svc
 
 
 __all__ = ["ServiceRegistry", "SourceRegistry"]

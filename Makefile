@@ -44,13 +44,15 @@ ui:
 api:
 	uv run genesis-worker-api
 
+# Both `uv run` processes share the same controlling tty. The old
+# ``trap 'kill 0'`` path is racy: the trap fires after the signal,
+# but the children can race past their cleanup handlers and leave
+# ports held. ``$(MAKE) -j2`` delegates job control to make, which
+# forwards SIGINT to each child and waits for them to exit before the
+# recipe returns. One Ctrl+C, both go down cleanly.
 serve:
 	@echo "Starting UI on $${GENESIS_UI_PORT:-8501} and API on $${GENESIS_API_PORT:-20985} (Ctrl+C to stop both)..."
-	@trap 'kill 0' EXIT; \
-	trap 'kill 0; exit 130' INT; \
-	uv run genesis-worker-ui & \
-	uv run genesis-worker-api & \
-	wait
+	@$(MAKE) -j2 ui api
 
 env-init:
 	@if [ -f .env ]; then \

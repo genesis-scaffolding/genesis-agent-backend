@@ -192,7 +192,22 @@ class Settings(BaseSettings):
         return xdg_path("CONFIG", ".config", XDG_BASE) / USER_OVERRIDES_FILENAME
 
     def options_for(self, axis: str, name: str) -> dict[str, Any]:
-        return dict(getattr(self, axis).get(name, {}))
+        """Return the option slice for plugin ``name`` on axis ``services`` / ``sources``.
+
+        For ``services``, the per-service JSON sidecar at
+        ``<config_dir>/services/<name>.overrides.json`` merges on top
+        of the flat-key options so map-typed options
+        (``extra_env`` / ``extra_mounts``) reach the loader. The
+        sidecar is the source of truth for maps; the flat file is
+        the source of truth for scalars (ADR-036).
+        """
+        base = dict(getattr(self, axis).get(name, {}))
+        if axis == "services":
+            from .utils.config_overrides import read_service_overrides, service_overrides_path
+
+            sidecar = read_service_overrides(service_overrides_path(self.paths.config_dir, name))
+            return {**base, **sidecar}
+        return base
 
     def secret(self, name: str) -> str | None:
         """Read a framework-managed secret by name.

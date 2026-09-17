@@ -157,7 +157,17 @@ def test_docker_config_ui_pages_is_additive(tmp_path: Path) -> None:
         ui_pages=("auth_token",),
     )
     svc = DockerService(service_ctx(tmp_path, name="docker_svc"), config=config)
-    assert svc.ui_panels == ("service_info", "container_info", "log_tail", "auth_token")
+    # YAML-declared panels land after ``service_info`` and before
+    # the default operational info. ``configure`` doesn't appear here
+    # because this config has no ``options:`` (the test uses a minimal
+    # ``_Opts`` BaseModel with no OptionSpecs); configure auto-includes
+    # only when ``config.option_specs`` is non-empty (ADR-036).
+    assert svc.ui_panels == (
+        "service_info",
+        "auth_token",
+        "container_info",
+        "log_tail",
+    )
 
 
 # --- render_default_status -------------------------------------------------

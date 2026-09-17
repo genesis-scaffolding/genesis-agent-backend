@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import socket
 from abc import abstractmethod
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -35,6 +35,7 @@ from ...contracts import (
     StopResult,
     UiPage,
 )
+from .spec import OptionSpec
 
 ConfigT = TypeVar("ConfigT")
 
@@ -46,6 +47,11 @@ class DeclarativeServiceConfig:
     Subclass-configs add their own kind-specific fields (image vs.
     command). All declarations use dataclasses for consistency with
     the rest of ``genesis_worker/contracts``.
+
+    ``option_specs`` mirrors the YAML ``options:`` block so the
+    ``configure`` UI panel can discover ``ui_label`` / ``ui_help`` /
+    ``ui_group`` without re-reading the YAML. Empty for Python
+    services that ship their own ``options.py`` (ADR-036).
     """
 
     name: str
@@ -57,6 +63,7 @@ class DeclarativeServiceConfig:
     options_model: type[BaseModel]
     log_filename: str | None = None
     ui_pages: Sequence[str] = ()
+    option_specs: Mapping[str, OptionSpec] = field(default_factory=dict)
 
 
 class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
