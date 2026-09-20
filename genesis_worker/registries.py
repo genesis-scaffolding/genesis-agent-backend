@@ -300,7 +300,11 @@ class ServiceRegistry(_Registry):
                 "Python services rebuild via their own lifecycle"
             )
         old = self._instances.get(name)
-        if old is not None and old.is_running():
+        # ``_instances`` is typed as ``dict[str, Plugin]`` but the service
+        # registry only ever stores ``InferenceService`` instances; cast
+        # so pyright sees ``is_running`` declared on the contract.
+        old_svc = cast("InferenceService | None", old)
+        if old_svc is not None and old_svc.is_running():
             raise RuntimeError(f"cannot rebuild {name!r} while running — stop the service first")
         from .utils.services import load_service_spec
 
