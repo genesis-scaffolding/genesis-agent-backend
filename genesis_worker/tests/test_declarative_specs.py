@@ -165,7 +165,9 @@ def test_bifrost_identity(tmp_path: Path) -> None:
 
 def test_photoprism_identity(tmp_path: Path) -> None:
     """PhotoPrism's identity / volumes / security_opts / options match the spec."""
-    svc = _load_spec("photoprism.yaml", tmp_path)
+    ctx = service_ctx(tmp_path, name="photoprism")
+    svc = load_service_spec(_DECLARATIVE_DIR / "photoprism.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
     assert svc.name == "photoprism"
     assert svc.display_name == "PhotoPrism"
     assert svc.category.value == "media"
@@ -175,11 +177,13 @@ def test_photoprism_identity(tmp_path: Path) -> None:
     assert svc.image_ref == "photoprism/photoprism:latest"
     assert svc.config.security_opts == ["seccomp=unconfined", "apparmor=unconfined"]
     volumes = svc.config.extra_volumes
-    # ``originals`` is a ``$options.pictures_dir`` reference whose default
-    # is ``$data_dir/..``; the substitution produces the literal
-    # ``<data_dir>/..`` string, which docker normalises to the parent.
+    # ADR-037: ``originals`` is a ``$options.pictures_dir`` reference
+    # whose default is ``$media_vault_path``. The substitution produces
+    # the resolved media vault path — no more ``..`` hack.
     originals_host = volumes["/photoprism/originals"]
-    assert originals_host.endswith("/data/.."), f"expected data_dir parent, got {originals_host}"
+    assert originals_host == str(ctx.media_vault_path), (
+        f"expected media_vault path, got {originals_host}"
+    )
     assert "/photoprism/storage" in volumes
     # Typed knobs land on the options instance with their declared defaults.
     assert svc.options.listen_port == 2342

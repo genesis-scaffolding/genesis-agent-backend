@@ -33,6 +33,9 @@ That system covers the things the YAML author pre-declares as typed options (cra
 The conversation before this ADR settled five open questions. Recording them here so future readers don't re-litigate:
 
 1. **Defaults containing `$variable` markers** (e.g. `default: "$data_dir/.."` for `pictures_dir`): the loader runs `resolve_placeholders` on the dumped options dict **before** the spec walk, so the substitution reaches the final value.
+   > **Superseded by ADR-037 for the photoprism default specifically.**
+   > The new default is `$media_vault_path`; the `$data_dir/..` hack
+   > is gone. The mechanism (second-pass option resolution) is unchanged.
 2. **`ui_group` strings**: free-form section names ("Network", "Storage", "Security", "Advanced"). Friendlier for YAML authors; the form renders the heading as-is.
 3. **Scalar persistence location**: scalars stay in `user-overrides.env` for backward compatibility with bifrost/crawl4ai/sillytavern. Map types (`env_map`, `mount_map`) live in a per-service JSON sidecar.
 4. **Apply-and-restart atomicity**: on failure, the new config persists and the service stays stopped. No rollback. The user explicitly asked for the change; they own the failure.

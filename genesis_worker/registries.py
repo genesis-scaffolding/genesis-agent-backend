@@ -194,6 +194,7 @@ class ServiceRegistry(_Registry):
             name=name,
             repo_root=p.resolved_repo_root,
             vault_path=p.resolved_vault_path,
+            media_vault_path=p.resolved_media_vault_path,
             host_info=collect_host_info(),
             secrets=self._settings.secrets.accessor(),
             options=self._settings.options_for("services", name),

@@ -188,6 +188,11 @@ class GenesisWorker:
                 paths.vault_path or paths.resolved_vault_path,
                 "GENESIS_PATHS__VAULT_PATH",
             ),
+            (
+                "media_vault_path",
+                paths.media_vault_path or paths.resolved_media_vault_path,
+                "GENESIS_PATHS__MEDIA_VAULT_PATH",
+            ),
             ("data_dir", paths.data_dir, "GENESIS_PATHS__DATA_DIR"),
             ("config_dir", paths.config_dir, "GENESIS_PATHS__CONFIG_DIR"),
             ("cache_dir", paths.cache_dir, "GENESIS_PATHS__CACHE_DIR"),
@@ -502,6 +507,7 @@ def _merge_paths_with_overrides(paths: PathsSettings) -> PathsSettings:
     fields = paths.model_dump()
     mapping = {
         "GENESIS_PATHS__VAULT_PATH": "vault_path",
+        "GENESIS_PATHS__MEDIA_VAULT_PATH": "media_vault_path",
         "GENESIS_PATHS__DATA_DIR": "data_dir",
         "GENESIS_PATHS__CONFIG_DIR": "config_dir",
         "GENESIS_PATHS__CACHE_DIR": "cache_dir",

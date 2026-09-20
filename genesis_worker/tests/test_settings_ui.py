@@ -107,6 +107,7 @@ def test_settings_save_calls_refresh_config(
     "env_key,field_name",
     [
         ("GENESIS_PATHS__VAULT_PATH", "vault_path"),
+        ("GENESIS_PATHS__MEDIA_VAULT_PATH", "media_vault_path"),
         ("GENESIS_PATHS__DATA_DIR", "data_dir"),
         ("GENESIS_PATHS__CONFIG_DIR", "config_dir"),
         ("GENESIS_PATHS__CACHE_DIR", "cache_dir"),

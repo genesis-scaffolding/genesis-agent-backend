@@ -31,6 +31,8 @@ def start_comfyui(
     restart_policy: str,
     hostname: str,
     vault_models_dir: Path,
+    media_input_dir: Path,
+    media_output_dir: Path,
 ) -> StartResult:
     """Create and start the ComfyUI container.
 
@@ -40,14 +42,21 @@ def start_comfyui(
     ``vault_models_dir`` is the host directory ComfyUI is told to read
     as ``--models-directory /vault/comfyui``; we ``mkdir`` it here so
     a fresh install (no symlinks yet) still launches.
+    ``media_input_dir`` and ``media_output_dir`` are the host dirs
+    bind-mounted into ComfyUI's input/output (ADR-037); we ``mkdir``
+    them too so docker doesn't initialise them as root.
     """
     if not image_present:
         return StartResult(ok=False, message=f"image not pulled: {image}")
 
     # Idempotent: the bind mount above only guarantees the vault root is
     # visible inside the container, not this specific subdir. ComfyUI's
-    # CLI requires the models directory to exist at startup.
+    # CLI requires the models directory to exist at startup. The input
+    # and output dirs (ADR-037) need the same treatment so docker
+    # doesn't initialise them as root.
     vault_models_dir.mkdir(parents=True, exist_ok=True)
+    for host_dir in (media_input_dir, media_output_dir):
+        host_dir.mkdir(parents=True, exist_ok=True)
 
     container = DockerContainer(container_name)
     return container.run(

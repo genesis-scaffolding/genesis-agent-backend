@@ -30,6 +30,13 @@ class PluginContext:
     ``vault_path`` is the model vault root; lifted from SourceContext so service
     plugins can also see it (ADR-023).
 
+    ``media_vault_path`` is on ``ServiceContext`` only — the root for content
+    produced by services (ComfyUI inputs/outputs, pictures indexed by
+    PhotoPrism, future media peers). It lives on the service context because
+    no source walks user-produced content today; lifting it to
+    ``PluginContext`` is a one-line ADR if a future source ever needs it
+    (ADR-037).
+
     ``host_info`` is the framework-level snapshot of the host (hostname, OS,
     GPU vendors, NVIDIA driver/runtime). Defaults to :meth:`HostInfo.empty`
     so plugin authors who don't care about hardware see no churn; the
@@ -57,7 +64,7 @@ class SourceContext(PluginContext):
 
 @dataclass(frozen=True)
 class ServiceContext(PluginContext):
-    pass
+    media_vault_path: Path = field(default_factory=Path)
 
 
 __all__ = ["PluginContext", "ServiceContext", "SourceContext"]

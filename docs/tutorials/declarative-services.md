@@ -144,6 +144,7 @@ replaced with a concrete value.
 | `$state_dir` | `<xdg-state>/<service-name>` | `target: "$state_dir/api_token"` |
 | `$data_dir` | `<xdg-data>/<service-name>` | `/app/data: "$data_dir/data"` |
 | `$vault_path` | the user's model vault directory | (rarely used; for tools that read the catalog) |
+| `$media_vault_path` | the user's media vault directory (default `~/media`) | `/photoprism/originals: "$media_vault_path"` |
 | `$log_dir` | `<xdg-log>/<service-name>` | `LOG_PATH: "$log_dir/app.log"` |
 | `$cache_dir` | `<xdg-cache>/<service-name>` | `CACHE_PATH: "$cache_dir"` |
 | `$config_dir` | `<xdg-config>/<service-name>` | `CONFIG_FILE: "$config_dir/settings.json"` |
@@ -570,9 +571,9 @@ options:
     ui_group: Network
   pictures_dir:
     type: path
-    default: "$data_dir/.."
+    default: "$media_vault_path"
     ui_label: Pictures directory
-    ui_help: Directory PhotoPrism indexes for photos and videos
+    ui_help: Directory PhotoPrism indexes for photos and videos (defaults to the worker's media vault at ~/media)
     ui_group: Storage
   admin_password:
     type: string

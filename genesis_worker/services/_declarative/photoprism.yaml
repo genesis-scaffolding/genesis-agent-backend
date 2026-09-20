@@ -59,9 +59,9 @@ options:
     ui_group: Network
   pictures_dir:
     type: path
-    default: "$data_dir/.."
+    default: "$media_vault_path"
     ui_label: Pictures directory
-    ui_help: Directory PhotoPrism indexes for photos and videos (the literal "$data_dir/.." means the parent of the data dir)
+    ui_help: Directory PhotoPrism indexes for photos and videos (defaults to the worker's media vault at ~/media)
     ui_group: Storage
   admin_password:
     type: string
