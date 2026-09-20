@@ -186,10 +186,14 @@ def test_photoprism_identity(tmp_path: Path) -> None:
     )
     assert "/photoprism/storage" in volumes
     # Typed knobs land on the options instance with their declared defaults.
-    assert svc.options.listen_port == 2342
-    assert svc.options.upload_nsfw is True
-    assert svc.options.extra_env == {}
-    assert svc.options.extra_mounts == {}
+    # The options model is built dynamically from the YAML's ``options:``
+    # block, so pyright sees ``BaseModel`` and can't resolve the named
+    # fields. The ``# type: ignore[attr-defined]`` markers are scoped
+    # to this assertion block.
+    assert svc.options.listen_port == 2342  # type: ignore[attr-defined]
+    assert svc.options.upload_nsfw is True  # type: ignore[attr-defined]
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+    assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
     # Admin password defaults to a non-empty placeholder so a fresh
     # install creates the admin user out of the box. An empty
     # password would skip admin auto-creation (photoprism's behaviour
@@ -197,7 +201,7 @@ def test_photoprism_identity(tmp_path: Path) -> None:
     # still clear the field via the configure panel if they want to
     # skip the admin account; the YAML default just guarantees a
     # working first-launch.
-    assert svc.options.admin_password == "insecure"
+    assert svc.options.admin_password == "insecure"  # type: ignore[attr-defined]
     assert svc.config.extra_env["PHOTOPRISM_ADMIN_PASSWORD"] == "insecure"
     # Bool env values get stringified to ``true`` / ``false`` for docker.
     assert svc.config.extra_env["PHOTOPRISM_UPLOAD_NSFW"] == "true"

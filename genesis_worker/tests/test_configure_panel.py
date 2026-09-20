@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import cast
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -372,9 +373,16 @@ def test_panel_handles_unknown_option_type_gracefully(
     """An unknown type renders nothing in the dialog; the panel completes."""
     worker = _make_worker(tmp_path)
     svc = worker.service("photoprism")
+    # ``svc.config`` is on ``DeclarativeServiceBase`` (only the YAML
+    # services have it). Photoprism is declarative, so the runtime type
+    # carries the attribute; cast for pyright.
+    from genesis_worker.utils.services import DockerService
     from genesis_worker.utils.services.spec import OptionSpec
 
-    svc.config.__dict__["option_specs"] = {"mystery": OptionSpec(type="weird_type", default="x")}
+    docker_svc = cast("DockerService", svc)
+    docker_svc.config.__dict__["option_specs"] = {
+        "mystery": OptionSpec(type="weird_type", default="x")
+    }
 
     at = _render(worker, "photoprism")
     at.run()
