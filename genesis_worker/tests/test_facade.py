@@ -458,6 +458,7 @@ def test_snapshot_settings_includes_path_knobs(tmp_path: Path) -> None:
     names = {s.name for s in snapshots}
     # Framework knobs:
     assert "paths.vault_path" in names
+    assert "paths.media_vault_path" in names
     assert "paths.data_dir" in names
     assert "paths.config_dir" in names
     assert "paths.cache_dir" in names
@@ -476,3 +477,35 @@ def test_snapshot_settings_marks_user_overrides_source(tmp_path: Path) -> None:
     w.write_user_overrides({"GENESIS_PATHS__VAULT_PATH": "/srv/vault"})
     snapshots = {s.name: s for s in w.snapshot_settings()}
     assert snapshots["paths.vault_path"].source == "user_overrides"
+
+
+def test_snapshot_settings_includes_media_vault_path(tmp_path: Path) -> None:
+    """ADR-037 — ``paths.media_vault_path`` shows up next to ``paths.vault_path``."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    snapshots = {s.name: s for s in w.snapshot_settings()}
+    assert "paths.media_vault_path" in snapshots
+    entry = snapshots["paths.media_vault_path"]
+    assert entry.override_key == "GENESIS_PATHS__MEDIA_VAULT_PATH"
+
+
+def test_snapshot_settings_picks_up_media_vault_override(tmp_path: Path) -> None:
+    """A user-overrides file value for the media vault labels the snapshot source."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    w.write_user_overrides({"GENESIS_PATHS__MEDIA_VAULT_PATH": "/srv/media"})
+    snapshots = {s.name: s for s in w.snapshot_settings()}
+    # Mirror ``paths.vault_path`` behaviour: the override file labels the
+    # source; the resolved value updates only after ``refresh_config``.
+    assert snapshots["paths.media_vault_path"].source == "user_overrides"
+
+
+def test_refresh_config_applies_media_vault_override(tmp_path: Path) -> None:
+    """Writing the override key + ``refresh_config`` updates the resolved media vault path."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    new_media = tmp_path / "media"
+    w.write_user_overrides({"GENESIS_PATHS__MEDIA_VAULT_PATH": str(new_media)})
+    w.refresh_config()
+    assert w.settings.paths.media_vault_path == new_media
+    assert w.settings.paths.resolved_media_vault_path == new_media

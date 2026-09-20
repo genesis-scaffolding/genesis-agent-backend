@@ -100,6 +100,8 @@ def _resolve_placeholder(
         return ctx.data_dir
     if key == "vault_path":
         return ctx.vault_path
+    if key == "media_vault_path":
+        return ctx.media_vault_path
     if key == "log_dir":
         return ctx.log_dir
     if key == "cache_dir":

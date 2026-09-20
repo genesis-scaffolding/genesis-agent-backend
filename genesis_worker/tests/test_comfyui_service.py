@@ -76,14 +76,52 @@ def test_construction_defaults_vault_models_dir(tmp_path: Path) -> None:
 
 
 def test_construction_data_dirs_default_under_data_dir(tmp_path: Path) -> None:
-    # ctx.data_dir is already scoped to the service by the framework;
-    # the service appends its subdirectories directly.
+    """Profiles / python / custom_nodes live under the service-scoped data dir.
+
+    Inputs and outputs land under the media vault (ADR-037) — see the
+    next test. The framework scopes ``ctx.data_dir`` to ``<name>``;
+    the service appends its subdirectories directly.
+    """
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     assert svc._data_python_dir == tmp_path / "data" / "data" / "python"
     assert svc._data_custom_nodes_dir == tmp_path / "data" / "data" / "custom_nodes"
-    assert svc._data_input_dir == tmp_path / "data" / "data" / "input"
-    assert svc._data_output_dir == tmp_path / "data" / "data" / "output"
     assert svc._data_profiles_dir == tmp_path / "data" / "data" / "profiles"
+
+
+def test_construction_input_output_dirs_default_under_media_vault(tmp_path: Path) -> None:
+    """ADR-037: ComfyUI's inputs/outputs land under the media vault by default.
+
+    The factory's default ``media_vault_path`` is ``<root>/media-vault``,
+    so the resolved defaults are ``<root>/media-vault/comfyui/{inputs,outputs}``.
+    Operators who want the legacy layout set ``data_input_dir`` /
+    ``data_output_dir`` explicitly.
+    """
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    assert svc._data_input_dir == tmp_path / "media-vault" / "comfyui" / "inputs"
+    assert svc._data_output_dir == tmp_path / "media-vault" / "comfyui" / "outputs"
+
+
+def test_construction_input_output_dirs_follow_custom_media_vault(tmp_path: Path) -> None:
+    """When ``ctx.media_vault_path`` is non-default, the inputs/outputs follow."""
+    custom_media = tmp_path / "srv" / "media"
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui", media_vault_path=custom_media))
+    assert svc._data_input_dir == custom_media / "comfyui" / "inputs"
+    assert svc._data_output_dir == custom_media / "comfyui" / "outputs"
+
+
+def test_construction_explicit_input_output_dirs_win(tmp_path: Path) -> None:
+    """The ``data_input_dir`` / ``data_output_dir`` options override the media-vault default."""
+    custom_in = tmp_path / "my-inputs"
+    custom_out = tmp_path / "my-outputs"
+    svc = ComfyUiService(
+        service_ctx(
+            tmp_path,
+            name="comfyui",
+            options={"data_input_dir": str(custom_in), "data_output_dir": str(custom_out)},
+        )
+    )
+    assert svc._data_input_dir == custom_in
+    assert svc._data_output_dir == custom_out
 
 
 def test_construction_symlinks_file_default(tmp_path: Path) -> None:
@@ -261,6 +299,9 @@ def test_start_dispatches_to_lifecycle(tmp_path: Path, monkeypatch: pytest.Monke
     assert kwargs["container_name"] == "comfyui"
     assert kwargs["volumes"]["/vault"] == str(svc._vault_models_dir.parent)
     assert kwargs["extra_args"][:2] == ["--models-directory", "/vault/comfyui"]
+    # ADR-037: lifecycle receives the new media-vault input/output dirs.
+    assert kwargs["media_input_dir"] == svc._data_input_dir
+    assert kwargs["media_output_dir"] == svc._data_output_dir
 
 
 def test_start_skips_gpu_args_when_runtime_missing(

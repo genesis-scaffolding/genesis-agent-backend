@@ -108,6 +108,7 @@ class PathsSettings(BaseModel):
     log_dir: Path = Field(default_factory=lambda: xdg_path("STATE", ".local/state", XDG_BASE))
 
     vault_path: Path | None = None
+    media_vault_path: Path | None = None
 
     @property
     def resolved_vault_path(self) -> Path:
@@ -120,6 +121,12 @@ class PathsSettings(BaseModel):
         if legacy is not None:
             return Path(legacy)
         return Path.home() / "models"
+
+    @property
+    def resolved_media_vault_path(self) -> Path:
+        if self.media_vault_path is not None:
+            return self.media_vault_path
+        return Path.home() / "media"
 
     @property
     def resolved_repo_root(self) -> Path:

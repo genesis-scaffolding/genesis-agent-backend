@@ -92,6 +92,12 @@ Three alternatives were considered:
 2. **A `VaultPathMixin` shared by both.** Pure ceremony. Two contexts already share most of their fields via inheritance; a mixin adds a layer without removing one.
 3. **Lift to base (this decision).** One definition. Both contexts expose `ctx.vault_path`. The framework has one helper that populates it. The contract test is unaffected (it walks plugin imports, not contract shape).
 
+> **Note (ADR-037).** The media vault takes the opposite path:
+> `media_vault_path` lives on `ServiceContext` only because no source
+> walks user-produced content today. The same asymmetry argument
+> applies — if a future source ever needs it, lifting to
+> `PluginContext` is a one-line ADR.
+
 ### Backward compatibility
 
 - Existing source plugins that read `ctx.vault_path` keep working: `SourceContext` inherits the field.

@@ -82,6 +82,42 @@ def test_settings_explicit_vault_path_wins_over_models_root(
     assert s.paths.resolved_vault_path == Path("/srv/vault")
 
 
+def test_settings_default_media_vault_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default for the media vault is ``~/media`` (ADR-037).
+
+    Keeps user-produced content visibly separate from the worker's
+    XDG state (``<xdg-data>/genesis-worker/``). The model vault's
+    ``~/models`` default follows the same visible-and-findable
+    precedent.
+    """
+    monkeypatch.delenv("GENESIS_PATHS__MEDIA_VAULT_PATH", raising=False)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.paths.media_vault_path is None
+    assert s.paths.resolved_media_vault_path == Path.home() / "media"
+
+
+def test_settings_resolved_media_vault_path_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GENESIS_PATHS__MEDIA_VAULT_PATH", "/srv/media")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.paths.media_vault_path == Path("/srv/media")
+    assert s.paths.resolved_media_vault_path == Path("/srv/media")
+
+
+def test_settings_resolved_vault_path_unchanged_by_media_vault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adding ``media_vault_path`` must not perturb ``vault_path`` resolution (and vice versa)."""
+    monkeypatch.delenv("GENESIS_PATHS__VAULT_PATH", raising=False)
+    monkeypatch.delenv("MODELS_ROOT", raising=False)
+    monkeypatch.setattr("genesis_worker.settings._read_models_root", lambda: None)
+    monkeypatch.setenv("GENESIS_PATHS__MEDIA_VAULT_PATH", "/srv/media")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.paths.resolved_vault_path == Path.home() / "models"
+    assert s.paths.resolved_media_vault_path == Path("/srv/media")
+
+
 def test_settings_unknown_env_var_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GENESIS_BOGUS", "junk")
     s = Settings()  # must not raise

@@ -48,8 +48,13 @@ class ComfyUiService(InferenceService):
         self._data_custom_nodes_dir = (
             opts.data_custom_nodes_dir or ctx.data_dir / "data" / "custom_nodes"
         )
-        self._data_input_dir = opts.data_input_dir or ctx.data_dir / "data" / "input"
-        self._data_output_dir = opts.data_output_dir or ctx.data_dir / "data" / "output"
+        # Inputs and outputs land under the media vault (ADR-037). The
+        # ``media_vault_path`` is the framework-managed root for content
+        # produced by services; other media-aware services can mount and
+        # index the same root. Operators who want the legacy layout set
+        # ``data_input_dir`` / ``data_output_dir`` explicitly.
+        self._data_input_dir = opts.data_input_dir or ctx.media_vault_path / "comfyui" / "inputs"
+        self._data_output_dir = opts.data_output_dir or ctx.media_vault_path / "comfyui" / "outputs"
         self._data_profiles_dir = opts.data_profiles_dir or ctx.data_dir / "data" / "profiles"
         self._symlinks_file = opts.symlinks_file or ctx.config_dir / "model_symlink.yaml"
         self._log_file = opts.log_file or ctx.log_dir / "comfyui.log"
@@ -208,6 +213,8 @@ class ComfyUiService(InferenceService):
             restart_policy=self._options.restart_policy,
             hostname=self._options.container_name,
             vault_models_dir=self._vault_models_dir,
+            media_input_dir=self._data_input_dir,
+            media_output_dir=self._data_output_dir,
         )
 
     def stop(self) -> StopResult:

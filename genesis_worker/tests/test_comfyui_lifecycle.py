@@ -25,6 +25,8 @@ def _start_kwargs(tmp_path: Path, **overrides):
         "restart_policy": "unless-stopped",
         "hostname": "comfyui",
         "vault_models_dir": tmp_path / "vault" / "comfyui",
+        "media_input_dir": tmp_path / "media-vault" / "comfyui" / "inputs",
+        "media_output_dir": tmp_path / "media-vault" / "comfyui" / "outputs",
     }
     base.update(overrides)
     return base
@@ -97,6 +99,50 @@ def test_start_idempotent_when_vault_models_dir_already_exists(tmp_path: Path) -
     with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel):
         lifecycle.start_comfyui(**_start_kwargs(tmp_path, vault_models_dir=target))
     assert (target / "existing-file").exists()
+
+
+def test_start_creates_media_input_output_dirs_when_missing(tmp_path: Path) -> None:
+    """ADR-037: the media input/output bind-mount targets are pre-created.
+
+    Without pre-creation, docker would initialise them as root, leaving
+    the host user unable to remove the contents.
+    """
+    sentinel = StartResult(ok=True, message="started")
+    inp = tmp_path / "media-vault" / "comfyui" / "inputs"
+    out = tmp_path / "media-vault" / "comfyui" / "outputs"
+    assert not inp.exists()
+    assert not out.exists()
+    with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel):
+        lifecycle.start_comfyui(
+            **_start_kwargs(
+                tmp_path,
+                media_input_dir=inp,
+                media_output_dir=out,
+            )
+        )
+    assert inp.is_dir()
+    assert out.is_dir()
+
+
+def test_start_idempotent_when_media_dirs_already_exist(tmp_path: Path) -> None:
+    """Re-starting with the media dirs already present doesn't raise."""
+    sentinel = StartResult(ok=True, message="started")
+    inp = tmp_path / "media-vault" / "comfyui" / "inputs"
+    out = tmp_path / "media-vault" / "comfyui" / "outputs"
+    inp.mkdir(parents=True)
+    out.mkdir(parents=True)
+    (inp / "existing-input").write_text("keep me")
+    (out / "existing-output").write_text("keep me")
+    with patch.object(lifecycle.DockerContainer, "run", return_value=sentinel):
+        lifecycle.start_comfyui(
+            **_start_kwargs(
+                tmp_path,
+                media_input_dir=inp,
+                media_output_dir=out,
+            )
+        )
+    assert (inp / "existing-input").exists()
+    assert (out / "existing-output").exists()
 
 
 # --- stop -----------------------------------------------------------------

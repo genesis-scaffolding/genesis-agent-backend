@@ -362,6 +362,41 @@ def test_resolve_vault_path_placeholder(tmp_path: Path) -> None:
     assert svc.config.extra_env["MODELS"] == str(ctx.vault_path)
 
 
+def test_resolve_media_vault_path_placeholder(tmp_path: Path) -> None:
+    """``$media_vault_path`` resolves to ``ctx.media_vault_path`` (ADR-037).
+
+    Parallel to ``$vault_path`` — single-placeholder strings return the
+    Path's string form so they fit env dicts without further coercion.
+    """
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"MEDIA": "$media_vault_path"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["MEDIA"] == str(ctx.media_vault_path)
+
+
+def test_resolve_media_vault_path_placeholder_mixed(tmp_path: Path) -> None:
+    """Mixed strings (placeholder + literal) substitute via the regex path."""
+    payload = _copy(DOCKER_BASE)
+    payload["volumes"] = {"/photoprism/originals": "$media_vault_path/photoprism"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+    expected = f"{ctx.media_vault_path}/photoprism"
+    assert svc.config.extra_volumes["/photoprism/originals"] == expected
+
+
+def test_resolve_media_vault_path_placeholder_recursive(tmp_path: Path) -> None:
+    """Placeholder substitution recurses into list values (ADR-036)."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"MEDIA_LIST": ["$media_vault_path"]}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["MEDIA_LIST"] == [str(ctx.media_vault_path)]
+
+
 def test_resolve_options_placeholder(tmp_path: Path) -> None:
     payload = _copy(DOCKER_BASE)
     payload["options"] = {"label": {"type": "string", "default": "hello"}}
