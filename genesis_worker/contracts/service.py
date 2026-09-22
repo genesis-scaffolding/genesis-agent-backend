@@ -82,6 +82,26 @@ class StopResult:
     message: str = ""
 
 
+class ServiceCapabilityError(Exception):
+    """The service cannot perform the requested action.
+
+    Raised by the facade when an endpoint requires a capability the
+    service doesn't have (e.g. ``install`` on a ``can_install=False``
+    service, or a service whose ``installs()`` is empty). The route
+    layer translates this to ``409 Conflict``.
+    """
+
+
+class InstallInProgressError(Exception):
+    """Another caller is mid-install for this service.
+
+    Raised by :meth:`GenesisWorker.install_service` when a per-service
+    install lock is held. The route layer translates this to
+    ``503 Service Unavailable``; the caller should retry once the
+    in-flight install completes.
+    """
+
+
 class InferenceService(Plugin):
     """One inference backend (llama-swap, ComfyUI, vLLM, ...).
 
@@ -94,6 +114,11 @@ class InferenceService(Plugin):
     def __init__(self, ctx: ServiceContext) -> None:
         super().__init__(ctx)
         self._ctx: ServiceContext = ctx
+        # Set by the facade before start() when an orchestrator config was
+        # passed (ADR-038); consumed by the materialize_orchestrator_config
+        # pre-start hook. Cleared in the same facade call. None outside an
+        # active start. Framework-private; do not touch from plugins.
+        self._pending_orchestrator_config: dict | None = None
 
     @abstractmethod
     def is_available(self) -> bool: ...

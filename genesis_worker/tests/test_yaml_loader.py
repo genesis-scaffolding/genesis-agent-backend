@@ -637,3 +637,86 @@ def test_docker_with_pre_start_hook_resolves_state_dir(tmp_path: Path) -> None:
     # ``target`` is resolved at construction; the handler reads an
     # absolute path string.
     assert entry["target"] == str(ctx.state_dir / "api_token")
+
+
+# --- materialize_orchestrator_config hook (ADR-038) ------------------------
+
+
+def test_docker_with_materialize_orchestrator_config_hook_resolves_target(
+    tmp_path: Path,
+) -> None:
+    """The loader substitutes ``$data_dir`` in the hook target at construction.
+
+    The hook handler treats ``target`` as an absolute path string, so the
+    substitution has to happen at YAML-load time (where it already does
+    for the other pre-start hooks).
+    """
+    payload = _copy(DOCKER_BASE)
+    payload["pre_start_hooks"] = [
+        {
+            "kind": "materialize_orchestrator_config",
+            "target": "$data_dir/data/config.json",
+        }
+    ]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+    entry = svc.config.pre_start_hooks[0]
+    assert entry["kind"] == "materialize_orchestrator_config"
+    assert entry["target"] == str(ctx.data_dir / "data" / "config.json")
+
+
+def test_docker_with_materialize_orchestrator_config_yaml_format(
+    tmp_path: Path,
+) -> None:
+    """``format: yaml`` is preserved through the loader — the handler reads it."""
+    payload = _copy(DOCKER_BASE)
+    payload["pre_start_hooks"] = [
+        {
+            "kind": "materialize_orchestrator_config",
+            "target": "$data_dir/config.yaml",
+            "format": "yaml",
+        }
+    ]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+    entry = svc.config.pre_start_hooks[0]
+    assert entry["format"] == "yaml"
+
+
+def test_docker_with_materialize_orchestrator_config_unknown_format_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo in ``format`` (e.g. ``toml``) fails loudly at start time, not silently.
+
+    We monkeypatch the container's ``run`` so the start sequence proceeds
+    all the way to the hook dispatch — we want the ValueError to fire
+    from the hook, not the not-available guard earlier in ``start``.
+    """
+    import json as _json
+
+    from genesis_worker.utils.services.docker_service import DockerContainer
+
+    payload = _copy(DOCKER_BASE)
+    payload["pre_start_hooks"] = [
+        {
+            "kind": "materialize_orchestrator_config",
+            "target": "$data_dir/data/config.json",
+            "format": "toml",
+        }
+    ]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: True))
+    monkeypatch.setattr(
+        DockerContainer,
+        "run",
+        lambda *args, **kwargs: _json.dumps({"ok": True}),
+    )
+    svc._pending_orchestrator_config = {"x": 1}
+
+    with pytest.raises(ValueError, match="unsupported format"):
+        svc.start()

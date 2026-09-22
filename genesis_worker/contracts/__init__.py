@@ -27,7 +27,9 @@ from .plugin import Plugin
 from .secret import NoSecretsAccessor, SecretsAccessor, StaticSecretsAccessor
 from .service import (
     InferenceService,
+    InstallInProgressError,
     ServiceCapabilities,
+    ServiceCapabilityError,
     ServiceCategory,
     ServiceResourceEstimate,
     ServiceState,
@@ -53,6 +55,7 @@ __all__ = [
     "Hardware",
     "HostInfo",
     "InferenceService",
+    "InstallInProgressError",
     "InstallState",
     "InstallVersion",
     "ModelEntry",
@@ -63,6 +66,7 @@ __all__ = [
     "PluginContext",
     "SecretsAccessor",
     "ServiceCapabilities",
+    "ServiceCapabilityError",
     "ServiceCategory",
     "ServiceContext",
     "ServiceInstall",

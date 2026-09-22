@@ -340,6 +340,24 @@ def test_sillytavern_pre_start_hooks_seeded(tmp_path: Path) -> None:
     assert hooks[0]["target"] == expected_target
 
 
+def test_bifrost_pre_start_hooks_includes_materialize_orchestrator_config(
+    tmp_path: Path,
+) -> None:
+    """bifrost declares the orchestrator-config materialisation hook (ADR-038).
+
+    The hook writes ``ctx.service._pending_orchestrator_config`` to the
+    bind-mounted ``/app/data`` volume target — the orchestrator's body
+    is what bifrost reads on container start. The loader resolves the
+    ``$data_dir/data/config.json`` placeholder at construction time.
+    """
+    svc = _load_spec("bifrost.yaml", tmp_path)
+    hooks = list(svc.config.pre_start_hooks)
+    assert len(hooks) == 1
+    assert hooks[0]["kind"] == "materialize_orchestrator_config"
+    expected_target = str(tmp_path / "data" / "data" / "config.json")
+    assert hooks[0]["target"] == expected_target
+
+
 def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:
     """SillyTavern's YAML declares ``container_info`` and ``log_tail``.
 
