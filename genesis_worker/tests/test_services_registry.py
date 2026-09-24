@@ -52,6 +52,8 @@ def test_registry_all_returns_every_service() -> None:
         "sillytavern",
         "crawl4ai",
         "bifrost",
+        "freshrss",
+        "ntfy",
         "photoprism",
     }
 
@@ -74,6 +76,24 @@ def test_crawl4ai_service_is_auto_discovered() -> None:
 
     names = {svc.name for svc in ServiceRegistry(Settings()).all()}
     assert "crawl4ai" in names
+
+
+def test_ntfy_service_is_auto_discovered() -> None:
+    """ntfy is a YAML-declared service; the registry discovers it from
+    ``services/_declarative/ntfy.yaml``.
+    """
+
+    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    assert "ntfy" in names
+
+
+def test_freshrss_service_is_auto_discovered() -> None:
+    """freshrss is a YAML-declared service; the registry discovers it from
+    ``services/_declarative/freshrss.yaml``.
+    """
+
+    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    assert "freshrss" in names
 
 
 def test_abstract_service_cannot_be_instantiated(tmp_path: Path) -> None:

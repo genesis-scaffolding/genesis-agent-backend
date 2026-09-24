@@ -137,6 +137,11 @@ class DockerServiceSpec(BaseModel):
 
     env: dict[str, Any] = Field(default_factory=dict)
     volumes: dict[str, Any] = Field(default_factory=dict)
+    # ``extra_args`` is appended to the image's argv as ``command`` in
+    # ``docker run``. It REPLACES the image's CMD, so a YAML that
+    # declares ``extra_args`` must pass every argument the container
+    # needs (e.g. ``serve`` for an image whose CMD is empty).
+    extra_args: list[str] = Field(default_factory=list)
     pre_start_hooks: list[HookSpec] = Field(default_factory=list)
     auth: AuthSpec | None = None
     ui: UiSpec = Field(default_factory=UiSpec)

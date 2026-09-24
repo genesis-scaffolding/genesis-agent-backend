@@ -230,7 +230,7 @@ def _build_docker_config(
         security_opts=container.get("security_opts"),
         extra_env=dict(resolved.get("env") or {}),
         extra_volumes=dict(resolved.get("volumes") or {}),
-        extra_args=[],
+        extra_args=list(resolved.get("extra_args") or []),
         data_dir_subpath=resolved["data_dir_subpath"],
         pre_start_hooks=tuple(resolved.get("pre_start_hooks") or ()),
         auth=auth_cfg,

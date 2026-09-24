@@ -1,0 +1,89 @@
+# FreshRSS declarative service spec.
+#
+# Self-hosted RSS / Atom feed aggregator (freshrss/freshrss). Apache
+# inside the image listens on port 80; we map host 8081 -> container
+# 80 (avoiding llama-swap's 8080, bifrost's 8090, the worker API's
+# 9090, and ntfy's 8092). Persists feeds, users, and the SQLite
+# database under ``$data_dir/data`` and the optional extensions
+# directory under ``$data_dir/extensions`` so both survive container
+# restarts. The built-in cron is enabled via ``CRON_MIN`` so feeds
+# refresh on a schedule without a separate cron container.
+# See https://github.com/FreshRSS/FreshRSS/blob/edge/Docker/README.md.
+
+version: 1
+kind: docker
+name: freshrss
+display_name: FreshRSS
+description: Self-hosted RSS feed aggregator
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: freshrss/freshrss
+  tag: edge
+  install_name: freshrss
+  source_url: https://hub.docker.com/r/freshrss/freshrss
+
+container:
+  name: freshrss
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 80           # freshrss's default
+  health_probe_path: /
+  web_ui_path: /
+  restart_policy: unless-stopped
+  puid_default: true
+  pgid_default: true
+
+env:
+  TZ: "$options.tz"
+  CRON_MIN: "$options.cron_min"
+
+volumes:
+  /var/www/FreshRSS/data: "$data_dir/data"
+  /var/www/FreshRSS/extensions: "$data_dir/extensions"
+
+options:
+  listen_port:
+    type: port
+    default: 8081
+    ui_label: Web UI port
+    ui_help: Host-side port the FreshRSS web UI listens on
+    ui_group: Network
+  tz:
+    type: string
+    default: "UTC"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Europe/Paris)
+    ui_group: General
+  cron_min:
+    type: string
+    default: "13,43"
+    ui_label: Cron minutes
+    ui_help: Cron minutes at which the built-in refresh job runs (e.g. 13,43 or */20); empty disables cron
+    ui_group: General
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional FreshRSS env vars (see https://github.com/FreshRSS/FreshRSS/blob/edge/Docker/README.md#environment-variables)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host->container bind mounts
+    ui_group: Advanced
