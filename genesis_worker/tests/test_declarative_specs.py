@@ -71,7 +71,14 @@ def test_declarative_dir_has_no_python_modules_other_than_init() -> None:
 # --- built-in YAMLs construct ----------------------------------------------
 
 
-_BUILT_IN_SPECS = ("bifrost.yaml", "crawl4ai.yaml", "sillytavern.yaml", "photoprism.yaml")
+_BUILT_IN_SPECS = (
+    "bifrost.yaml",
+    "crawl4ai.yaml",
+    "freshrss.yaml",
+    "ntfy.yaml",
+    "photoprism.yaml",
+    "sillytavern.yaml",
+)
 
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
@@ -374,6 +381,155 @@ def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:
     assert svc.ui_panels == ("service_info", "container_info", "log_tail", "configure")
 
 
+# --- ntfy-specific --------------------------------------------------------
+
+
+def test_ntfy_identity(tmp_path: Path) -> None:
+    """ntfy's identity / category / description match the spec's surface."""
+    svc = _load_spec("ntfy.yaml", tmp_path)
+    assert svc.name == "ntfy"
+    assert svc.display_name == "ntfy"
+    assert svc.category == ServiceCategory.UTILITY
+    assert svc.description == "Push notification server"
+
+
+def test_ntfy_image_and_container(tmp_path: Path) -> None:
+    """Image ref + container name + port mapping + health probe match upstream."""
+    svc = _load_spec("ntfy.yaml", tmp_path)
+    assert svc.image_ref == "binwiederhier/ntfy:latest"
+    assert svc.container_name == "ntfy"
+    # Host port resolves from ``$options.listen_port`` (default 8092);
+    # ntfy's internal port is 80.
+    assert svc.config.listen_port == 8092
+    assert svc.config.internal_port == 80
+    assert svc.listen_address == "0.0.0.0:8092"
+    # ntfy's dedicated health endpoint returns {"healthy": true} JSON.
+    assert svc.config.health_probe_path == "/v1/health"
+
+
+def test_ntfy_persistent_cache_paths(tmp_path: Path) -> None:
+    """ntfy's cache volume + cache file env vars resolve correctly.
+
+    ``NTFY_CACHE_FILE`` MUST be the *container* path
+    (``/var/cache/ntfy/cache.db``), not the host path. ntfy reads
+    this env var inside the container where only the bind-mount
+    target (``/var/cache/ntfy``) exists — a host path would be a
+    literal string inside the container, ``os.Stat`` would fail, and
+    ntfy would FATAL out with "cache database directory ... does not
+    exist or is not accessible". Verified empirically: running the
+    exact ``docker run`` command the framework constructs with a
+    host-path NTFY_CACHE_FILE reproduces the FATAL, exit_code=1.
+
+    ``NTFY_ATTACHMENT_CACHE_DIR`` is intentionally NOT set by
+    default: ntfy refuses to start if ``attachment-cache-dir`` is
+    set without ``base-url`` (see
+    https://docs.ntfy.sh/config/#message-attachments), and
+    ``base_url`` defaults to "" for self-hosted setups that don't
+    yet have a public hostname. The typed ``attachment_cache_dir``
+    option stays empty by default; ntfy treats an empty string env
+    var the same as "not set".
+    """
+    ctx = service_ctx(tmp_path, name="ntfy")
+    svc = load_service_spec(_DECLARATIVE_DIR / "ntfy.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    volumes = svc.config.extra_volumes
+    # The bind mount maps ``$data_dir/cache`` on the host to
+    # ``/var/cache/ntfy`` in the container. ``NTFY_CACHE_FILE`` is
+    # the CONTAINER path; the bind mount makes the two equivalent
+    # from ntfy's perspective.
+    assert volumes["/var/cache/ntfy"] == str(ctx.data_dir / "cache")
+    assert svc.config.extra_env["NTFY_CACHE_FILE"] == "/var/cache/ntfy/cache.db"
+    # Attachment cache is opt-in: empty string means ntfy disables it.
+    assert svc.config.extra_env["NTFY_ATTACHMENT_CACHE_DIR"] == ""
+    assert svc.config.extra_env["NTFY_AUTH_DEFAULT_ACCESS"] == "read-write"
+    # The typed option reflects the same default.
+    assert svc.options.attachment_cache_dir == ""  # type: ignore[attr-defined]
+    assert svc.options.base_url == ""  # type: ignore[attr-defined]
+
+
+def test_ntfy_pins_serve_subcommand(tmp_path: Path) -> None:
+    """ntfy's image has ``ENTRYPOINT=[ntfy]`` and an empty ``CMD``.
+
+    Without an explicit subcommand ``docker run`` would invoke
+    ``ntfy`` (no args), print help, and exit without starting the
+    server. Pinning ``extra_args: ["serve"]`` makes the container
+    run ``ntfy serve`` so the web UI and HTTP API actually come up.
+    All other ntfy config (cache file, base URL, etc.) flows through
+    ``NTFY_*`` env vars and doesn't need to be duplicated here.
+    """
+    ctx = service_ctx(tmp_path, name="ntfy")
+    svc = load_service_spec(_DECLARATIVE_DIR / "ntfy.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.extra_args == ["serve"]
+
+
+def test_ntfy_options_have_configure_panel(tmp_path: Path) -> None:
+    """ntfy declares an ``options:`` block so ``configure`` auto-includes (ADR-036)."""
+    svc = _load_spec("ntfy.yaml", tmp_path)
+    assert svc.options.listen_port == 8092  # type: ignore[attr-defined]
+    assert svc.options.tz == "UTC"  # type: ignore[attr-defined]
+    assert svc.options.base_url == ""  # type: ignore[attr-defined]
+    assert svc.options.attachment_cache_dir == ""  # type: ignore[attr-defined]
+    assert svc.options.auth_default_access == "read-write"  # type: ignore[attr-defined]
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+    assert "configure" in svc.ui_panels
+
+
+# --- freshrss-specific ----------------------------------------------------
+
+
+def test_freshrss_identity(tmp_path: Path) -> None:
+    """FreshRSS's identity / category / description match the spec's surface."""
+    svc = _load_spec("freshrss.yaml", tmp_path)
+    assert svc.name == "freshrss"
+    assert svc.display_name == "FreshRSS"
+    assert svc.category == ServiceCategory.UTILITY
+    assert svc.description == "Self-hosted RSS feed aggregator"
+
+
+def test_freshrss_image_and_container(tmp_path: Path) -> None:
+    """Image ref + container name + port mapping match upstream defaults."""
+    svc = _load_spec("freshrss.yaml", tmp_path)
+    assert svc.image_ref == "freshrss/freshrss:edge"
+    assert svc.container_name == "freshrss"
+    # Host port resolves from ``$options.listen_port`` (default 8081);
+    # Apache inside the container listens on 80.
+    assert svc.config.listen_port == 8081
+    assert svc.config.internal_port == 80
+    assert svc.listen_address == "0.0.0.0:8081"
+
+
+def test_freshrss_persistent_volumes(tmp_path: Path) -> None:
+    """FreshRSS's data + extensions volumes resolve against ``ctx.data_dir``.
+
+    The Apache ``www-data`` UID inside the container writes feeds and
+    SQLite into ``/var/www/FreshRSS/data``; the bind-mount maps that
+    to ``$data_dir/data`` on the host so user accounts, feed state,
+    and configuration survive container restarts. ``extensions``
+    follows the same pattern for third-party extensions.
+    """
+    ctx = service_ctx(tmp_path, name="freshrss")
+    svc = load_service_spec(_DECLARATIVE_DIR / "freshrss.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    volumes = svc.config.extra_volumes
+    assert volumes["/var/www/FreshRSS/data"] == str(ctx.data_dir / "data")
+    assert volumes["/var/www/FreshRSS/extensions"] == str(ctx.data_dir / "extensions")
+    # CRON_MIN drives the built-in feed-refresh cron; default is the
+    # recommended "13,43" cadence from the upstream docs.
+    assert svc.config.extra_env["CRON_MIN"] == "13,43"
+
+
+def test_freshrss_options_have_configure_panel(tmp_path: Path) -> None:
+    """FreshRSS declares an ``options:`` block so ``configure`` auto-includes."""
+    svc = _load_spec("freshrss.yaml", tmp_path)
+    assert svc.options.listen_port == 8081  # type: ignore[attr-defined]
+    assert svc.options.tz == "UTC"  # type: ignore[attr-defined]
+    assert svc.options.cron_min == "13,43"  # type: ignore[attr-defined]
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+    assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
+    assert "configure" in svc.ui_panels
+
+
 # --- registry discovers YAMLs ---------------------------------------------
 
 
@@ -395,6 +551,13 @@ def test_service_registry_discovers_declarative_specs(tmp_path: Path) -> None:
     # Both should be the framework's DockerService, not the old Python plugins.
     assert isinstance(crawl4ai, DockerService)
     assert isinstance(sillytavern, DockerService)
+    # ntfy + freshrss also reachable through the YAML discovery path.
+    ntfy = registry.get("ntfy")
+    freshrss = registry.get("freshrss")
+    assert ntfy.name == "ntfy"
+    assert freshrss.name == "freshrss"
+    assert isinstance(ntfy, DockerService)
+    assert isinstance(freshrss, DockerService)
 
 
 def test_no_python_crawl4ai_or_sillytavern_modules() -> None:
