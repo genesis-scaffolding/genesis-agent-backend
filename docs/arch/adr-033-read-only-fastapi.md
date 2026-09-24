@@ -168,7 +168,8 @@ Neutral:
 
 ## Out of scope (deferred)
 
-- Write endpoints.
+- Write endpoints. Implemented by [ADR-038](adr-038-orchestrator-service-control.md)
+  for orchestrator-driven service control (install / start / stop / restart).
 - Auth (bearer token or otherwise).
 - CORS.
 - Pagination / filtering on `/v1/catalog`.

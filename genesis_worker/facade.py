@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import shutil
+import threading
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .catalog import CatalogService
-from .contracts import AcquireSession, Catalog, InferenceService, ModelSource, SecretsAccessor
+from .contracts import (
+    AcquireSession,
+    AcquireStateKind,
+    Catalog,
+    InferenceService,
+    InstallInProgressError,
+    InstallState,
+    ModelSource,
+    SecretsAccessor,
+    ServiceCapabilityError,
+)
 from .registries import ServiceRegistry, SourceRegistry
 from .utils.config_overrides import read_user_overrides, write_user_overrides
 from .utils.models import ServiceInfo, SettingSnapshot, SourceInfo
@@ -59,6 +70,12 @@ class GenesisWorker:
         # the facade also tracks them centrally so other surfaces (the
         # session_list page, the CLI) can list and cancel them.
         self._sessions: dict[str, tuple[str, AcquireSession]] = {}
+
+        # Per-service install locks for ADR-038. Process-local — sufficient
+        # under ADR-033's single-uvicorn-worker rule. ``install_service``
+        # acquires non-blocking; a second caller gets
+        # :class:`InstallInProgressError` immediately rather than queueing.
+        self._install_locks: dict[str, threading.Lock] = {}
 
     # --- Settings -----------------------------------------------------------
 
@@ -416,11 +433,118 @@ class GenesisWorker:
             if svc.name in enabled
         ]
 
-    def start_service(self, name: str):
-        return self._service_registry.get(name).start()
+    def start_service(self, name: str, *, config: dict | None = None):
+        """Start the service, materialising ``config`` first when present.
+
+        ADR-038. Behaviour:
+
+        - Not installed → delegate to ``install_service()`` first.
+        - Running → stop, then start.
+        - Not running → start.
+        - ``config`` non-None → set
+          ``svc._pending_orchestrator_config = config`` before invoking
+          ``start()``; the ``materialize_orchestrator_config`` pre-start
+          hook (if declared) consumes it during the start sequence.
+          Cleared in a ``finally`` block so a single failed start
+          doesn't leave state on the service instance.
+        - Start failure after materialisation raises ``RuntimeError``;
+          the on-disk config has been written and the service is
+          stopped. The route layer translates this to ``500``.
+        """
+        svc = self._service_registry.get(name)  # KeyError → 404
+
+        if not svc.is_available():
+            self.install_service(name)
+
+        if svc.is_running():
+            stop_result = svc.stop()
+            if not stop_result.ok:
+                from .contracts import StartResult as _SR
+
+                return _SR(
+                    ok=False,
+                    message=f"failed to stop before start: {stop_result.message}",
+                )
+
+        svc._pending_orchestrator_config = config
+        try:
+            return svc.start()
+        finally:
+            svc._pending_orchestrator_config = None
+
+    def restart_service(self, name: str, *, config: dict | None = None):
+        """Convenience for start with optional config.
+
+        ADR-038. Implemented as ``start_service(name, config=config)``;
+        the orchestrator can issue stop + start separately if it wants
+        tighter control. The file lands on disk during the start hook;
+        the freshly-started container picks it up on boot.
+        """
+        return self.start_service(name, config=config)
 
     def stop_service(self, name: str):
         return self._service_registry.get(name).stop()
+
+    def install_service(self, name: str) -> dict:
+        """Run the service's primary installable to completion.
+
+        ADR-038. Idempotent: returns
+        ``{"installed": True, "version": ...}`` if the installable is
+        already present, with the resolved version.
+
+        Raises:
+            KeyError: ``name`` is not a registered service (route → 404).
+            ServiceCapabilityError: ``can_install`` is False or
+                ``installs()`` is empty (route → 409).
+            InstallInProgressError: another caller is mid-install for
+                this service (route → 503). Caller should retry.
+            RuntimeError: the underlying acquire session reached a
+                terminal ``failed`` or ``cancelled`` state (route → 500).
+        """
+        svc = self._service_registry.get(name)  # KeyError → 404
+        caps = svc.capabilities()
+        installables = svc.installs()
+        if not caps.can_install or not installables:
+            raise ServiceCapabilityError(f"service {name!r} cannot be installed")
+
+        installable = svc.primary_installable()
+        if installable is None:
+            raise ServiceCapabilityError(f"service {name!r} has no primary installable")
+
+        if installable.state() == InstallState.INSTALLED:
+            return {
+                "installed": True,
+                "version": installable.installed_version(),
+            }
+
+        # Per-service install lock. Process-local — sufficient under
+        # ADR-033's single-uvicorn-worker rule. Held across the wait so
+        # a second caller gets 503 immediately rather than queueing.
+        lock = self._install_lock_for(name)
+        if not lock.acquire(blocking=False):
+            raise InstallInProgressError(f"install already in progress for {name!r}")
+
+        try:
+            session = installable.install()
+            final = session.wait()
+            if final.kind == AcquireStateKind.FAILED:
+                raise RuntimeError(f"install failed: {final.error or 'unknown error'}")
+            if final.kind == AcquireStateKind.CANCELLED:
+                raise RuntimeError("install cancelled")
+            return {
+                "installed": True,
+                "version": installable.installed_version(),
+            }
+        finally:
+            lock.release()
+
+    def _install_lock_for(self, name: str) -> threading.Lock:
+        """Return the per-service install lock, creating on first call."""
+        lock = self._install_locks.get(name)
+        if lock is None:
+            lock = threading.Lock()
+            self._install_locks[name] = lock
+        return lock
 
     def service_status(self, name: str):
         return self._service_registry.get(name).status()

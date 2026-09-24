@@ -293,7 +293,7 @@ the container so the new config takes effect immediately (ADR-036).
 
 Hooks fire after image-pull and before container start, in YAML-declared
 order. The framework dispatches each entry by `kind` to a registered handler
-in `genesis_worker/utils/services/hooks.py`. Two handlers ship in v1:
+in `genesis_worker/utils/services/hooks.py`. Three handlers ship today:
 
 ```yaml
 pre_start_hooks:
@@ -307,12 +307,25 @@ pre_start_hooks:
     key: whitelist
     extras: [100.64.0.0/10]
     disable_docker_hosts: true
+
+  - kind: materialize_orchestrator_config
+    target: "$data_dir/data/config.json"
+    # format: json   # default; 'yaml' also supported
 ```
 
 `ensure_persistent_token` reads-or-creates a token file. Idempotent.
 `seed_yaml_whitelist` writes a YAML whitelist key with loopback + docker
 bridge gateway + host LAN subnets + Tailscale CGNAT + user entries. Also
 idempotent — if the file already has a correct whitelist, it's a no-op.
+
+`materialize_orchestrator_config` (ADR-038) writes the
+`config` body the orchestrator POSTed to
+`/v1/services/{name}/start` (or `/restart`) into the declared target
+before the container boots. When no body is passed the hook is a no-op
+and the service starts with its on-disk config (today's behaviour). The
+freshly-started container reads the new file on launch. Bind-mount the
+target into the container (e.g. `volumes: { /app/data: "$data_dir/data" }`)
+so the service sees the freshly-written config.
 
 The hook target is `$variable`-resolved at construction time, so the runtime
 handler just reads an absolute path string. No `ctx.data_dir` /

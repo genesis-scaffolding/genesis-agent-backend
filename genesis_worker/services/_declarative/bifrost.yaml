@@ -50,6 +50,16 @@ env:
 volumes:
   /app/data: "$data_dir/data"
 
+# Orchestrator-driven config materialisation (ADR-038). When the
+# orchestrator POSTs a config body to /v1/services/bifrost/start (or
+# /restart), the framework writes it to ``/app/data/config.json``
+# inside the container — the bind-mount maps that to
+# ``$data_dir/data`` on the host. bifrost reads ``config.json`` on
+# container start.
+pre_start_hooks:
+  - kind: materialize_orchestrator_config
+    target: "$data_dir/data/config.json"
+
 options:
   log_level:
     type: string

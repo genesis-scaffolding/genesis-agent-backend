@@ -7,23 +7,32 @@ don't need to know about placeholders. ``ctx.state_dir`` /
 ``ctx.data_dir`` are still carried for hooks that want to derive
 paths dynamically.
 
-Two handlers ship in v1:
+Three handlers ship today:
 
 - ``seed_yaml_whitelist`` -- lifted from ``services/sillytavern/config.py``;
   idempotently seeds a YAML whitelist key (loopback + docker bridge gateway
   + host LAN subnets + Tailscale CGNAT + user entries).
 - ``ensure_persistent_token`` -- read-or-create a token file using
   :func:`genesis_worker.utils.services.ensure_persistent_file.ensure_persistent_file`.
+- ``materialize_orchestrator_config`` (ADR-038) -- write the
+  orchestrator-supplied config blob (``ctx.service._pending_orchestrator_config``)
+  to ``entry["target"]`` before the container starts. No-op when no
+  config was passed. Atomic write; JSON by default, YAML supported.
 
 Adding a new hook kind is one function in this module + a registered name.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .ensure_persistent_file import (
     ensure_persistent_file,
@@ -124,6 +133,53 @@ def _ensure_persistent_token(entry: dict, ctx: PreStartHookContext) -> None:
             f"unknown token generator {generator_name!r}; registered: {sorted(_GENERATORS)}"
         )
     ensure_persistent_file(target, mode=mode, generator=generator)
+
+
+@register("materialize_orchestrator_config")
+def _materialize_orchestrator_config(entry: dict, ctx: PreStartHookContext) -> None:
+    """Write the orchestrator-supplied config to ``entry["target"]`` before start.
+
+    ADR-038. The facade sets ``ctx.service._pending_orchestrator_config``
+    before invoking ``start()``; this hook consumes it. No-op when the
+    attribute is ``None`` — start was called without an orchestrator
+    config, so the service uses its on-disk config (today's behaviour).
+
+    Atomic write via tmp file + ``os.replace``, mirroring
+    ``seed_yaml_whitelist``. Stale tmp artifacts from a prior crashed
+    write are dropped so the ``os.replace`` doesn't trip on a
+    half-written file.
+
+    ``format`` defaults to ``json``; ``yaml`` is also supported. Unknown
+    formats raise ``ValueError`` so a typo in the YAML fails loudly at
+    start time rather than silently writing the wrong shape.
+    """
+    config = getattr(ctx.service, "_pending_orchestrator_config", None)
+    if config is None:
+        return
+
+    target = Path(entry["target"])
+    fmt = entry.get("format", "json")
+    if fmt not in ("json", "yaml"):
+        raise ValueError(
+            f"materialize_orchestrator_config: unsupported format {fmt!r}; "
+            "expected 'json' or 'yaml'"
+        )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for stale in target.parent.glob(f"{target.name}.tmp.*"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+    tmp = target.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    if fmt == "json":
+        with tmp.open("w") as f:
+            json.dump(config, f, indent=2, sort_keys=False)
+    else:
+        with tmp.open("w") as f:
+            yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+    os.replace(tmp, target)
 
 
 __all__ = [

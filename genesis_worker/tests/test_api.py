@@ -188,6 +188,260 @@ def test_service_unknown_returns_404(client: TestClient) -> None:
     assert client.get("/v1/services/nope/status").status_code == 404
 
 
+# --- /v1/services POST endpoints (ADR-038) ---------------------------------
+
+
+def _stub_install_response() -> dict:
+    """Canonical install payload the route layer returns on success."""
+    return {"installed": True, "version": "v1"}
+
+
+def test_post_install_happy_path(client: TestClient, monkeypatch) -> None:
+    """POST /install returns 200 + the install payload on success."""
+    from genesis_worker import GenesisWorker
+
+    monkeypatch.setattr(
+        GenesisWorker,
+        "install_service",
+        lambda self, name: _stub_install_response(),
+    )
+    r = client.post("/v1/services/llama_swap/install")
+    assert r.status_code == 200
+    assert r.json() == {"installed": True, "version": "v1"}
+
+
+def test_post_install_404_unknown_service(client: TestClient, monkeypatch) -> None:
+    """Unknown service name → 404 (facade raises KeyError → route translates)."""
+    from genesis_worker import GenesisWorker
+
+    def _raise(self, name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(GenesisWorker, "install_service", _raise)
+    r = client.post("/v1/services/nope/install")
+    assert r.status_code == 404
+    assert "unknown service" in r.json()["detail"]
+
+
+def test_post_install_409_capability_refused(client: TestClient, monkeypatch) -> None:
+    """ServiceCapabilityError → 409 Conflict."""
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import ServiceCapabilityError
+
+    def _raise(self, name):
+        raise ServiceCapabilityError("service 'x' cannot be installed")
+
+    monkeypatch.setattr(GenesisWorker, "install_service", _raise)
+    r = client.post("/v1/services/x/install")
+    assert r.status_code == 409
+    assert "cannot be installed" in r.json()["detail"]
+
+
+def test_post_install_503_when_in_progress(client: TestClient, monkeypatch) -> None:
+    """InstallInProgressError → 503 Service Unavailable."""
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import InstallInProgressError
+
+    def _raise(self, name):
+        raise InstallInProgressError("install already in progress for 'x'")
+
+    monkeypatch.setattr(GenesisWorker, "install_service", _raise)
+    r = client.post("/v1/services/x/install")
+    assert r.status_code == 503
+    assert "already in progress" in r.json()["detail"]
+
+
+def test_post_install_idempotent_re_call(client: TestClient, monkeypatch) -> None:
+    """A second call returns the same shape — the facade is idempotent."""
+    from genesis_worker import GenesisWorker
+
+    monkeypatch.setattr(
+        GenesisWorker, "install_service", lambda self, name: _stub_install_response()
+    )
+    r1 = client.post("/v1/services/llama_swap/install")
+    r2 = client.post("/v1/services/llama_swap/install")
+    assert r1.status_code == r2.status_code == 200
+    assert r1.json() == r2.json() == {"installed": True, "version": "v1"}
+
+
+def test_post_start_happy_path_with_no_body(client: TestClient, monkeypatch) -> None:
+    """Empty body (no config) → 200 + StartResult-shaped body."""
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import StartResult
+
+    captured: dict = {}
+
+    def _stub(self, name, *, config=None):
+        captured["name"] = name
+        captured["config"] = config
+        return StartResult(ok=True, message="started", pid=4242)
+
+    monkeypatch.setattr(GenesisWorker, "start_service", _stub)
+    r = client.post("/v1/services/llama_swap/start")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "message": "started", "pid": 4242}
+    assert captured == {"name": "llama_swap", "config": None}
+
+
+def test_post_start_with_config_passes_through_to_facade(client: TestClient, monkeypatch) -> None:
+    """Body ``{"config": {...}}`` is forwarded to ``start_service(name, config=...)``."""
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import StartResult
+
+    captured: dict = {}
+
+    def _stub(self, name, *, config=None):
+        captured["name"] = name
+        captured["config"] = config
+        return StartResult(ok=True, message="started")
+
+    monkeypatch.setattr(GenesisWorker, "start_service", _stub)
+    body = {"config": {"providers": {"openai": {"keys": [{"name": "k"}]}}}}
+    r = client.post("/v1/services/bifrost/start", json=body)
+    assert r.status_code == 200
+    assert captured["name"] == "bifrost"
+    assert captured["config"] == body["config"]
+
+
+def test_post_start_404_unknown_service(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+
+    def _raise(self, name, *, config=None):
+        raise KeyError(name)
+
+    monkeypatch.setattr(GenesisWorker, "start_service", _raise)
+    r = client.post("/v1/services/nope/start")
+    assert r.status_code == 404
+
+
+def test_post_start_500_when_facade_raises_runtime(client: TestClient, monkeypatch) -> None:
+    """A start failure after materialisation → 500 with the message in ``detail``.
+
+    Per the orchestrator's contract: 500 means the on-disk config has
+    been written and the service is stopped. The caller surfaces
+    ``detail`` and does not retry blindly.
+    """
+    from genesis_worker import GenesisWorker
+
+    def _raise(self, name, *, config=None):
+        raise RuntimeError("container exited before health probe")
+
+    monkeypatch.setattr(GenesisWorker, "start_service", _raise)
+    r = client.post("/v1/services/bifrost/start", json={"config": {"x": 1}})
+    assert r.status_code == 500
+    assert "container exited" in r.json()["detail"]
+
+
+def test_post_start_409_capability_refused(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import ServiceCapabilityError
+
+    def _raise(self, name, *, config=None):
+        raise ServiceCapabilityError("binary missing")
+
+    monkeypatch.setattr(GenesisWorker, "start_service", _raise)
+    r = client.post("/v1/services/x/start")
+    assert r.status_code == 409
+    assert "binary missing" in r.json()["detail"]
+
+
+def test_post_stop_happy_path(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import StopResult
+
+    monkeypatch.setattr(
+        GenesisWorker, "stop_service", lambda self, name: StopResult(ok=True, message="stopped")
+    )
+    r = client.post("/v1/services/llama_swap/stop")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "message": "stopped"}
+
+
+def test_post_stop_idempotent_when_not_running(client: TestClient, monkeypatch) -> None:
+    """Stop on a non-running service is a no-op success (facade returns ok=True)."""
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import StopResult
+
+    monkeypatch.setattr(
+        GenesisWorker,
+        "stop_service",
+        lambda self, name: StopResult(ok=True, message="not running"),
+    )
+    r = client.post("/v1/services/llama_swap/stop")
+    assert r.status_code == 200
+    assert "not running" in r.json()["message"]
+
+
+def test_post_stop_404_unknown_service(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+
+    def _raise(self, name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(GenesisWorker, "stop_service", _raise)
+    r = client.post("/v1/services/nope/stop")
+    assert r.status_code == 404
+
+
+def test_post_restart_happy_path(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import StartResult
+
+    captured: dict = {}
+
+    def _stub(self, name, *, config=None):
+        captured["name"] = name
+        captured["config"] = config
+        return StartResult(ok=True, message="restarted", pid=1234)
+
+    monkeypatch.setattr(GenesisWorker, "restart_service", _stub)
+    r = client.post("/v1/services/llama_swap/restart")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "message": "restarted", "pid": 1234}
+    assert captured == {"name": "llama_swap", "config": None}
+
+
+def test_post_restart_with_config_passes_through(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+    from genesis_worker.contracts import StartResult
+
+    captured: dict = {}
+
+    def _stub(self, name, *, config=None):
+        captured["name"] = name
+        captured["config"] = config
+        return StartResult(ok=True, message="restarted")
+
+    monkeypatch.setattr(GenesisWorker, "restart_service", _stub)
+    body = {"config": {"providers": {"yoga": {"keys": []}}}}
+    r = client.post("/v1/services/bifrost/restart", json=body)
+    assert r.status_code == 200
+    assert captured == {"name": "bifrost", "config": body["config"]}
+
+
+def test_post_restart_500_when_facade_raises_runtime(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+
+    def _raise(self, name, *, config=None):
+        raise RuntimeError("restart failed")
+
+    monkeypatch.setattr(GenesisWorker, "restart_service", _raise)
+    r = client.post("/v1/services/x/restart")
+    assert r.status_code == 500
+    assert "restart failed" in r.json()["detail"]
+
+
+def test_post_restart_404_unknown_service(client: TestClient, monkeypatch) -> None:
+    from genesis_worker import GenesisWorker
+
+    def _raise(self, name, *, config=None):
+        raise KeyError(name)
+
+    monkeypatch.setattr(GenesisWorker, "restart_service", _raise)
+    r = client.post("/v1/services/nope/restart")
+    assert r.status_code == 404
+
+
 # --- /v1/catalog -------------------------------------------------------------
 
 

@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from genesis_worker import GenesisWorker
 from genesis_worker.contracts import (
+    AcquireState,
+    AcquireStateKind,
+    AcquireView,
+    InstallInProgressError,
+    InstallState,
     ServiceCapabilities,
+    ServiceCapabilityError,
+    ServiceInstall,
     ServiceState,
     ServiceStatus,
     StartResult,
@@ -509,3 +518,425 @@ def test_refresh_config_applies_media_vault_override(tmp_path: Path) -> None:
     w.refresh_config()
     assert w.settings.paths.media_vault_path == new_media
     assert w.settings.paths.resolved_media_vault_path == new_media
+
+
+# --- install / start / restart (ADR-038) -----------------------------------
+
+
+def _stub_installable_with_acquire(state: InstallState, final_kind: AcquireStateKind):
+    """Build a minimal ``ServiceInstall`` stub for facade install tests.
+
+    Returns a ``(installable, session_factory)`` pair. The session
+    factory builds a fresh AcquireSession-shaped object on each
+    ``install()`` call so each test owns its own session state.
+    """
+    from genesis_worker.contracts import AcquireSession
+
+    class _StubInstallable(ServiceInstall):
+        name = "stub-installable"
+
+        def state(self) -> InstallState:
+            return state
+
+        def installed_version(self) -> str | None:
+            # The facade reads installed_version() *after* a successful install.
+            # The stub doesn't mutate state on install — it just returns the
+            # session's terminal view — so always report v1 once the facade
+            # has called install() at least once.
+            return "v1"
+
+        def available_versions(self):  # type: ignore[override]
+            return []
+
+        def binary_path(self):  # type: ignore[override]
+            return None
+
+        def install(self, *, version: str | None = None):
+            class _StubSession(AcquireSession):
+                source_name = "stub"
+
+                @property
+                def repo_id(self) -> str:
+                    return "stub/repo"
+
+                @property
+                def state(self) -> AcquireState:
+                    return AcquireState(kind=final_kind, repo_id="stub/repo")
+
+                def view(self) -> AcquireView:
+                    return AcquireView(kind=final_kind, title="done", can_cancel=False)
+
+                def submit(self, choice) -> None:
+                    return None
+
+                def cancel(self) -> None:
+                    return None
+
+                def wait(self) -> AcquireView:
+                    return AcquireView(kind=final_kind, title="done", can_cancel=False)
+
+            return _StubSession()
+
+        def uninstall(self, *, version: str | None = None) -> None:
+            return None
+
+    return _StubInstallable()
+
+
+def test_install_service_idempotent_when_already_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Calling install on a service whose primary installable is already present
+    is a no-op that returns the existing version."""
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    stub = _stub_installable_with_acquire(InstallState.INSTALLED, AcquireStateKind.COMPLETE)
+    monkeypatch.setattr(LlamaSwapService, "installs", lambda self: [stub])
+    monkeypatch.setattr(LlamaSwapService, "primary_installable", lambda self: stub)
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    result = w.install_service("llama_swap")
+    assert result == {"installed": True, "version": "v1"}
+
+
+def test_install_service_runs_primary_installable_to_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A not-yet-installed service runs the installable; the facade returns the resolved version."""
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    stub = _stub_installable_with_acquire(InstallState.NOT_INSTALLED, AcquireStateKind.COMPLETE)
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "installs", lambda self: [stub])
+    monkeypatch.setattr(LlamaSwapService, "primary_installable", lambda self: stub)
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    result = w.install_service("llama_swap")
+    assert result == {"installed": True, "version": "v1"}
+
+
+def test_install_service_raises_capability_error_when_can_install_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pytest
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    # Default can_install is True on llama-swap, so override capabilities.
+    monkeypatch.setattr(
+        LlamaSwapService,
+        "capabilities",
+        lambda self: ServiceCapabilities(
+            can_generate_config=False,
+            can_export_for_agent=False,
+            can_serve_llm=True,
+            can_serve_image=False,
+            can_train_models=False,
+            has_web_ui=False,
+            can_install=False,
+        ),
+    )
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(ServiceCapabilityError, match="cannot be installed"):
+        w.install_service("llama_swap")
+
+
+def test_install_service_raises_capability_error_when_installs_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pytest
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    monkeypatch.setattr(LlamaSwapService, "installs", lambda self: [])
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(ServiceCapabilityError, match="cannot be installed"):
+        w.install_service("llama_swap")
+
+
+def test_install_service_raises_in_progress_when_lock_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second concurrent caller gets InstallInProgressError immediately."""
+    import pytest
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    stub = _stub_installable_with_acquire(InstallState.NOT_INSTALLED, AcquireStateKind.COMPLETE)
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "installs", lambda self: [stub])
+    monkeypatch.setattr(LlamaSwapService, "primary_installable", lambda self: stub)
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    # Externally hold the lock — simulates a second caller arriving
+    # before the first finishes.
+    w._install_lock_for("llama_swap").acquire()
+    try:
+        with pytest.raises(InstallInProgressError, match="already in progress"):
+            w.install_service("llama_swap")
+    finally:
+        w._install_lock_for("llama_swap").release()
+
+
+def test_install_service_raises_runtime_when_acquire_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route layer translates ``RuntimeError`` from a failed acquire to ``500``."""
+    import pytest
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    stub = _stub_installable_with_acquire(InstallState.NOT_INSTALLED, AcquireStateKind.FAILED)
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "installs", lambda self: [stub])
+    monkeypatch.setattr(LlamaSwapService, "primary_installable", lambda self: stub)
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(RuntimeError, match="install failed"):
+        w.install_service("llama_swap")
+
+
+def test_install_service_raises_runtime_when_acquire_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pytest
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    stub = _stub_installable_with_acquire(InstallState.NOT_INSTALLED, AcquireStateKind.CANCELLED)
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "installs", lambda self: [stub])
+    monkeypatch.setattr(LlamaSwapService, "primary_installable", lambda self: stub)
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(RuntimeError, match="install cancelled"):
+        w.install_service("llama_swap")
+
+
+def test_start_service_with_config_sets_pending_attribute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orchestrator's config body flows into the service's transient attribute.
+
+    The materialize_orchestrator_config hook reads this attribute
+    during start; here we just verify the facade sets it correctly.
+    """
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    captured: dict = {}
+
+    def _capture(self) -> StartResult:
+        captured["pending"] = self._pending_orchestrator_config
+        return StartResult(ok=True, message="mock-start")
+
+    monkeypatch.setattr(LlamaSwapService, "start", _capture)
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    cfg = {"providers": {"openai": {"keys": [{"name": "k"}]}}}
+    result = w.start_service("llama_swap", config=cfg)
+    assert result.ok is True
+    assert captured["pending"] == cfg
+
+
+def test_start_service_clears_pending_attribute_after_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The transient attribute is cleared in a ``finally`` block — no leakage."""
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    monkeypatch.setattr(
+        LlamaSwapService, "start", lambda self: StartResult(ok=True, message="mock-start")
+    )
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    w.start_service("llama_swap", config={"x": 1})
+    svc = w.service("llama_swap")
+    assert svc._pending_orchestrator_config is None
+
+
+def test_start_service_clears_pending_attribute_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed start still clears the attribute — no leakage on the error path."""
+    import pytest
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    def _raise(self) -> StartResult:
+        raise RuntimeError("start exploded")
+
+    monkeypatch.setattr(LlamaSwapService, "start", _raise)
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(RuntimeError):
+        w.start_service("llama_swap", config={"x": 1})
+    svc = w.service("llama_swap")
+    assert svc._pending_orchestrator_config is None
+
+
+def test_start_service_without_config_leaves_pending_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing call sites that omit ``config`` see ``_pending_orchestrator_config=None``.
+
+    Source-compatible: every existing caller (Streamlit UI, CLI,
+    configure panel) calls ``worker.start_service(name)`` and expects
+    no orchestrator config to be materialised.
+    """
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    captured: dict = {}
+
+    def _capture(self) -> StartResult:
+        captured["pending"] = self._pending_orchestrator_config
+        return StartResult(ok=True, message="mock-start")
+
+    monkeypatch.setattr(LlamaSwapService, "start", _capture)
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    w.start_service("llama_swap")
+    assert captured["pending"] is None
+
+
+def test_start_service_runs_install_first_when_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unavailable service delegates to ``install_service`` before ``start``.
+
+    The orchestrator's contract: "Not installed → install first
+    (delegates to the install path; may take minutes)." We don't run a
+    real install — we verify the delegation order.
+    """
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    call_order: list[str] = []
+
+    def _install(self, name: str) -> dict:
+        call_order.append("install")
+        return {"installed": True, "version": "v1"}
+
+    def _start(self) -> StartResult:
+        call_order.append("start")
+        return StartResult(ok=True, message="mock-start")
+
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "start", _start)
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    # Monkeypatch the facade method to record the call.
+    monkeypatch.setattr(w, "install_service", lambda name: _install(w, name))
+    w.start_service("llama_swap")
+    assert call_order == ["install", "start"]
+
+
+def test_start_service_stops_before_starting_when_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running service is stopped first; start follows with the new config."""
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    call_order: list[str] = []
+
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: True)
+    monkeypatch.setattr(
+        LlamaSwapService,
+        "stop",
+        lambda self: (call_order.append("stop"), StopResult(ok=True, message="mock"))[1],
+    )
+    monkeypatch.setattr(
+        LlamaSwapService,
+        "start",
+        lambda self: (call_order.append("start"), StartResult(ok=True, message="mock"))[1],
+    )
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    w.start_service("llama_swap", config={"x": 1})
+    assert call_order == ["stop", "start"]
+
+
+def test_start_service_returns_failed_result_when_stop_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the pre-stop fails, the facade returns a failed StartResult — it does not retry blindly."""
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: True)
+    monkeypatch.setattr(
+        LlamaSwapService, "stop", lambda self: StopResult(ok=False, message="container stuck")
+    )
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    result = w.start_service("llama_swap", config={"x": 1})
+    assert result.ok is False
+    assert "failed to stop before start" in result.message
+
+
+def test_restart_service_delegates_to_start_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``restart_service`` is a thin wrapper over ``start_service(config=...)``."""
+
+    from genesis_worker.services.llama_swap import LlamaSwapService
+
+    monkeypatch.setattr(
+        LlamaSwapService, "start", lambda self: StartResult(ok=True, message="mock-start")
+    )
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    seen: dict = {}
+    real_start = w.start_service
+
+    def _capture(name, *, config=None):
+        seen["name"] = name
+        seen["config"] = config
+        return real_start(name, config=config)
+
+    monkeypatch.setattr(w, "start_service", _capture)
+    cfg = {"providers": {}}
+    w.restart_service("llama_swap", config=cfg)
+    assert seen == {"name": "llama_swap", "config": cfg}
+
+
+def test_install_service_unknown_service_raises_keyerror(
+    tmp_path: Path,
+) -> None:
+    """An unknown service name surfaces as ``KeyError`` (route → 404)."""
+    import pytest
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    with pytest.raises(KeyError):
+        w.install_service("does-not-exist")
+
+
+def test_install_lock_lazy_creates_per_service(tmp_path: Path) -> None:
+    """Two distinct service names get two distinct locks, both created lazily."""
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    lock_a = w._install_lock_for("a")
+    lock_b = w._install_lock_for("b")
+    assert lock_a is not lock_b
+    # Same name returns the same lock.
+    assert w._install_lock_for("a") is lock_a

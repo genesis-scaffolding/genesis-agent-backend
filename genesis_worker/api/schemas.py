@@ -387,13 +387,74 @@ class SessionSummarySchema(BaseModel):
     state: str
 
 
+# --- service-control request/response (ADR-038) ---------------------------
+
+
+class ConfigMaterialiseRequest(BaseModel):
+    """Optional body for ``POST /v1/services/{name}/start`` and ``/restart``.
+
+    ``config`` is forwarded verbatim to the per-service materialisation
+    path. The framework does not interpret it — the worker's
+    ``materialize_orchestrator_config`` hook receives whatever shape
+    the orchestrator built. Empty / omitted body means "use the
+    service's on-disk config" (today's behaviour).
+    """
+
+    config: dict[str, Any] | None = None
+
+
+class InstallResponseSchema(BaseModel):
+    """Body for ``POST /v1/services/{name}/install``.
+
+    ``installed`` is always True on success — the facade short-circuits
+    already-installed services and returns the same shape. ``version``
+    is the resolved installable's selected version, or ``None`` when
+    the installable doesn't track one (rare; most do).
+    """
+
+    installed: bool
+    version: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: dict) -> InstallResponseSchema:
+        return cls(
+            installed=bool(payload.get("installed")),
+            version=payload.get("version"),
+        )
+
+
+class StartResultSchema(BaseModel):
+    """Body for ``POST /v1/services/{name}/start`` and ``/restart``."""
+
+    ok: bool
+    message: str = ""
+    pid: int | None = None
+
+    @classmethod
+    def from_dataclass(cls, r: Any) -> StartResultSchema:
+        return cls(ok=bool(r.ok), message=str(r.message), pid=r.pid)
+
+
+class StopResultSchema(BaseModel):
+    """Body for ``POST /v1/services/{name}/stop``."""
+
+    ok: bool
+    message: str = ""
+
+    @classmethod
+    def from_dataclass(cls, r: Any) -> StopResultSchema:
+        return cls(ok=bool(r.ok), message=str(r.message))
+
+
 __all__ = [
     "AcquireProgressSchema",
     "AcquireViewSchema",
     "CatalogBySourceSchema",
     "CatalogSchema",
+    "ConfigMaterialiseRequest",
     "HardwareSchema",
     "HostInfoSchema",
+    "InstallResponseSchema",
     "MetricsSchema",
     "ModelEntrySchema",
     "ModelPieceSchema",
@@ -404,4 +465,6 @@ __all__ = [
     "ServiceSummarySchema",
     "SessionSummarySchema",
     "SourceSummarySchema",
+    "StartResultSchema",
+    "StopResultSchema",
 ]
