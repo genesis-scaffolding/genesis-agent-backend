@@ -559,13 +559,15 @@ def _gpu_ctx(tmp_path: Path, *, devices):
     )
 
 
-def test_default_gpu_none_preserves_cascade(tmp_path: Path) -> None:
-    """No default_gpu → today's cascade (NVIDIA → cuda → vulkan → cpu)."""
+def test_default_gpu_none_uses_smart_pick(tmp_path: Path) -> None:
+    """default_gpu=None → smart auto-pick (NVIDIA 0) → cuda binary forced."""
     from genesis_worker.contracts.host import GpuDevice
 
     nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
     svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(nvidia,)))
     binary = _install_variant(svc, "llama-server-cuda")
+    # The smart pick (NVIDIA 0) drives the variant selection.
+    assert svc.effective_default_gpu == nvidia
     assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
 
 
@@ -669,6 +671,92 @@ def test_host_info_property_exposes_snapshot(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path, host_info=info))
     assert svc.host_info is info
     assert svc.host_info.hardware.devices == (nvidia,)
+
+
+# ---------------------------------------------------------------------------
+# smart_default_gpu + effective_default_gpu (deterministic framework pick)
+# ---------------------------------------------------------------------------
+
+
+def test_smart_default_picks_nvidia_zero() -> None:
+    """NVIDIA present → index 0 wins, regardless of other vendor order."""
+    from genesis_worker.contracts.host import GpuDevice
+    from genesis_worker.services.llama_swap.service import smart_default_gpu
+
+    intel = GpuDevice(vendor="intel", index=0, label="iGPU")
+    nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    nvidia2 = GpuDevice(vendor="nvidia", index=1, label="A4000")
+    assert smart_default_gpu((intel, nvidia, nvidia2)) == nvidia
+
+
+def test_smart_default_picks_amd_zero_when_no_nvidia() -> None:
+    from genesis_worker.contracts.host import GpuDevice
+    from genesis_worker.services.llama_swap.service import smart_default_gpu
+
+    amd = GpuDevice(vendor="amd", index=0, label="Radeon")
+    amd2 = GpuDevice(vendor="amd", index=1, label="Radeon 2")
+    intel = GpuDevice(vendor="intel", index=0, label="iGPU")
+    assert smart_default_gpu((intel, amd, amd2)) == amd
+
+
+def test_smart_default_picks_intel_zero_when_only_intel() -> None:
+    from genesis_worker.contracts.host import GpuDevice
+    from genesis_worker.services.llama_swap.service import smart_default_gpu
+
+    intel = GpuDevice(vendor="intel", index=0, label="iGPU")
+    intel2 = GpuDevice(vendor="intel", index=1, label="iGPU 2")
+    assert smart_default_gpu((intel, intel2)) == intel
+
+
+def test_smart_default_none_when_no_devices() -> None:
+    from genesis_worker.services.llama_swap.service import smart_default_gpu
+
+    assert smart_default_gpu(()) is None
+
+
+def test_effective_default_gpu_returns_persisted_when_set(tmp_path: Path) -> None:
+    """Persisted default_gpu wins over the smart pick."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    nvidia0 = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    nvidia1 = GpuDevice(vendor="nvidia", index=1, label="A4000")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(nvidia0, nvidia1)))
+    svc.set_default_gpu(nvidia1)
+    assert svc.effective_default_gpu == nvidia1
+    assert svc.default_gpu == nvidia1  # raw persisted value still available
+
+
+def test_effective_default_gpu_falls_back_to_smart_pick(tmp_path: Path) -> None:
+    """Persisted default_gpu=None → smart pick from host snapshot."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    intel = GpuDevice(vendor="intel", index=0, label="iGPU")
+    nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(intel, nvidia)))
+    assert svc.default_gpu is None
+    assert svc.effective_default_gpu == nvidia  # NVIDIA wins over Intel
+
+
+def test_effective_default_gpu_none_when_no_devices(tmp_path: Path) -> None:
+    """Host with zero GPUs → effective_default_gpu is None, not a stub."""
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=()))
+    assert svc.effective_default_gpu is None
+
+
+def test_smart_default_drives_variant_when_no_persisted_gpu(tmp_path: Path) -> None:
+    """No explicit default_gpu but AMD in host snapshot → vulkan binary chosen."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    amd = GpuDevice(vendor="amd", index=0, label="Radeon")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(amd,)))
+    assert svc.default_gpu is None
+    # Smart pick (AMD 0) forces variant=vulkan; cpu is also installed
+    # but vulkan wins because it matches the smart-picked vendor.
+    vk = _install_variant(svc, "llama-server-vulkan")
+    cpu = _install_variant(svc, "llama-server-cpu")
+    assert svc._default_llama_server_binary() == str(vk)  # noqa: SLF001
+    # Sanity: CPU is installed but the smart pick wins.
+    assert svc._variant_binary("llama-server-cpu") == str(cpu)  # noqa: SLF001
 
 
 def test_evaluate_model_config_uses_framework_binary_for_qwen_recipe(

@@ -116,14 +116,15 @@ with st.container(border=True):
 
 
 # --- Default GPU ----------------------------------------------------------
-# Per-machine device pin (ADR-039). When set, the matching variant binary
-# is required; the service fails loud at config-regen time if it is
-# missing (the cascade is bypassed, not silently fallen-back). The
-# dropdown reads the host snapshot at every render — freshly plugged-in
-# devices appear after a worker restart.
+# Per-machine device pin (ADR-039). When ``default_gpu`` is unset, the
+# framework auto-picks deterministically (NVIDIA 0 → AMD 0 → Intel 0);
+# when set, that specific device is pinned and the matching variant
+# binary is required (fail loud at config-regen time). The dropdown
+# shows real devices only — no "use cascade" deflect — and the smart
+# pick is the pre-selected default.
 def _on_default_gpu_change() -> None:
     raw = st.session_state["status-default-gpu"]
-    gpu = None if raw == "(use cascade)" else _coerce_gpu(raw)
+    gpu = _coerce_gpu(raw)
     svc.set_default_gpu(gpu)
     worker.regenerate_service_config(SERVICE_NAME)
 
@@ -134,11 +135,11 @@ with st.container(border=True):
     if not devices:
         st.info("No GPUs detected on this host.")
     else:
-        gpu_labels = ["(use cascade)"] + [_gpu_choice_label(d) for d in devices]
-        # Allow the current value to be selected even if its label is
-        # built from a dict (e.g. after a worker restart with the same
-        # persisted default_gpu).
-        current_gpu = svc.default_gpu
+        gpu_labels = [_gpu_choice_label(d) for d in devices]
+        # Smart default = the framework's deterministic pick. Shown as
+        # the dropdown's pre-selected value when no explicit default_gpu
+        # is persisted.
+        current_gpu = svc.effective_default_gpu
         if current_gpu is None:
             current_idx = 0
         else:
@@ -150,19 +151,17 @@ with st.container(border=True):
             index=current_idx,
             key="status-default-gpu",
             on_change=_on_default_gpu_change,
-            disabled=len(devices) == 0,
         )
-        if choice != "(use cascade)":
-            chosen = next(
-                (d for d in devices if _gpu_choice_label(d) == choice),
-                None,
+        chosen = next(
+            (d for d in devices if _gpu_choice_label(d) == choice),
+            None,
+        )
+        if chosen is not None:
+            variant = "cuda" if chosen.vendor == "nvidia" else "vulkan"
+            st.caption(
+                f"Pinned to {chosen.vendor} idx {chosen.index}. "
+                f"Requires `llama-server-{variant}` to be installed."
             )
-            if chosen is not None:
-                variant = "cuda" if chosen.vendor == "nvidia" else "vulkan"
-                st.caption(
-                    f"Pinned to {chosen.vendor} idx {chosen.index}. "
-                    f"Requires `llama-server-{variant}` to be installed."
-                )
 
 
 # --- Binaries --------------------------------------------------------------
