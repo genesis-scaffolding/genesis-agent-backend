@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 
-from ...contracts import Catalog, GpuDevice, ModelEntry
+from ...contracts import Catalog, ComputeDevice, ModelEntry
 from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
@@ -76,40 +76,25 @@ class BuildOptions:
     default_binary_rel: str = DEFAULT_BINARY_REL
     default_binary: str | None = None
     binary_variant: str | None = None
-    # Service-level default GPU. ``None`` means "no service default";
-    # ``effective_default_gpu()`` (the persisted value or the smart
+    # Service-level default device. ``None`` means "no service default";
+    # ``effective_default_device()`` (the persisted value or the smart
     # auto-pick) is what flows here. The per-model cascade falls back
-    # to this when no recipe / override sets ``gpu`` explicitly
+    # to this when no recipe / override sets ``device`` explicitly
     # (ADR-039 §3).
-    service_default_gpu: GpuDevice | None = None
+    service_default_device: ComputeDevice | None = None
 
 
-# Map ``(binary_variant, gpu.vendor)`` → the env var llama.cpp reads to
-# pick a device. Single seam for future backends (ADR-039 §4):
-# adding ROCm → one tuple; adding OpenVINO → one tuple.
-_ENV_VAR_FOR: dict[tuple[str, str], str] = {
-    ("cuda", "nvidia"): "CUDA_VISIBLE_DEVICES",
-    ("vulkan", "amd"): "GGML_VK_VISIBLE_DEVICES",
-    ("vulkan", "intel"): "GGML_VK_VISIBLE_DEVICES",
-}
-
-
-def _env_for(binary_variant: str | None, gpu: GpuDevice | None) -> tuple[str, ...]:
+def _env_for(binary_variant: str | None, device: ComputeDevice | None) -> tuple[str, ...]:
     """Env-var entries for the child process, or empty when not applicable.
 
-    Returns a tuple of ``"NAME=value"`` strings ready for the
-    ``models.*.env`` YAML field that llama-swap injects into the
-    command's environment before exec (see llama-swap docs:
-    ``kb/guides/model-runtime/writing-cmd.md``). Empty tuple when no
-    gpu is selected or the (variant, vendor) combo is unknown — silent
-    no-op, matching the prior prefix-based behaviour.
+    Delegates to :meth:`ComputeDevice.env_entry` — each subclass owns
+    its own variant/env-var mapping. No lookup table here; the table
+    is replaced by the class hierarchy (ADR-039 §4 amendment).
     """
-    if binary_variant is None or gpu is None:
+    if binary_variant is None or device is None:
         return ()
-    env_var = _ENV_VAR_FOR.get((binary_variant, gpu.vendor))
-    if env_var is None:
-        return ()
-    return (f"{env_var}={gpu.index}",)
+    entry = device.env_entry(binary_variant)
+    return (entry,) if entry is not None else ()
 
 
 @dataclass(frozen=True)
@@ -168,10 +153,10 @@ class EvaluatedConfig:
 
     extra_flags: tuple[str, ...] = ()
     ctx_size: int | None = None
-    gpu: GpuDevice | None = None
+    device: ComputeDevice | None = None
     # Env-var entries to set on the child process. Populated from
-    # ``gpu`` via :func:`_env_for`. Emitted to ``models.*.env`` in the
-    # YAML payload; llama-swap injects them before exec'ing ``cmd``
+    # ``device`` via :func:`_env_for`. Emitted to ``models.*.env`` in
+    # the YAML payload; llama-swap injects them before exec'ing ``cmd``
     # (ADR-039 §4).
     env: tuple[str, ...] = ()
     hardcoded_flags: tuple[str, ...] = (
@@ -512,15 +497,22 @@ def evaluate_recipe(
     if not extra_flags and default_recipe:
         extra_flags = list(default_recipe.extra_flags)
 
-    # --- gpu with full cascade (override > recipe > default_recipe >
-    # service_default_gpu > None). The service-level default sits
+    # --- device with full cascade (override > recipe > default_recipe >
+    # service_default_device > None). The service-level default sits
     # between the recipe-default and "no pin" so it acts as the
-    # head honcho for models without explicit gpu values.
-    gpu = ovr.get("gpu", recipe.gpu)
-    if gpu is None and default_recipe:
-        gpu = default_recipe.gpu
-    if gpu is None:
-        gpu = options.service_default_gpu
+    # head honcho for models without explicit device values.
+    # Backward-compat: read the legacy ``gpu`` key as an alias for
+    # ``device`` so operators with pre-refactor overrides.yaml still
+    # see their pin honoured.
+    device = ovr.get("device")
+    if device is None:
+        device = ovr.get("gpu")  # legacy alias
+    if device is None:
+        device = recipe.device
+    if device is None and default_recipe:
+        device = default_recipe.device
+    if device is None:
+        device = options.service_default_device
 
     provenance: dict[str, FieldSource] = {
         "binary": binary_source,
@@ -538,7 +530,14 @@ def evaluate_recipe(
         "sampling": _source_recipe_only(ovr, recipe, "sampling"),
         "chat_template_kwargs": _source_recipe_only(ovr, recipe, "chat_template_kwargs"),
         "extra_flags": _source_recipe_only(ovr, recipe, "extra_flags"),
-        "gpu": _source_simple(ovr, recipe, default_recipe, "gpu"),
+        # ``device`` reads from the ``device`` key (canonical) or the
+        # legacy ``gpu`` key (alias) — both count as OVERRIDE for
+        # provenance.
+        "device": (
+            FieldSource.OVERRIDE
+            if "device" in ovr or "gpu" in ovr
+            else _source_simple(ovr, recipe, default_recipe, "device")
+        ),
     }
 
     cmd = cmd_from_evaluated_dict(
@@ -557,7 +556,7 @@ def evaluate_recipe(
         chat_template_kwargs=chat_template_kwargs,
         extra_flags=tuple(extra_flags),
         provenance=provenance,
-        gpu=gpu,
+        device=device,
         binary_variant=options.binary_variant,
     )
 
@@ -580,8 +579,8 @@ def evaluate_recipe(
         chat_template_kwargs=chat_template_kwargs,
         provenance=provenance,
         cmd=cmd,
-        gpu=gpu,
-        env=_env_for(options.binary_variant, gpu),
+        device=device,
+        env=_env_for(options.binary_variant, device),
     )
 
 
@@ -602,7 +601,7 @@ def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
         sampling=evaluated.sampling,
         chat_template_kwargs=evaluated.chat_template_kwargs,
         provenance=evaluated.provenance,
-        gpu=evaluated.gpu,
+        device=evaluated.device,
         binary_variant=None,  # legacy path; evaluate_recipe threads the real value
     )
 
@@ -624,7 +623,7 @@ def cmd_from_evaluated_dict(
     chat_template_kwargs: dict[str, Any] | None,
     provenance: dict[str, FieldSource] | None = None,
     extra_flags: tuple[str, ...] = (),
-    gpu: GpuDevice | None = None,
+    device: ComputeDevice | None = None,
     binary_variant: str | None = None,
 ) -> str:
     """Format the llama-server cmd string from resolved fields.
@@ -632,9 +631,10 @@ def cmd_from_evaluated_dict(
     Reads the structured fields directly (no re-resolution). Conditional
     emission depends on the files (``--no-mmproj-offload`` only when an
     mmproj is present; ``--spec-type draft-mtp`` only when files indicate
-    MTP support) and on the device selection (``CUDA_VISIBLE_DEVICES`` /
-    ``GGML_VK_VISIBLE_DEVICES`` only when the (variant, vendor) pair is
-    known; ADR-039 §4).
+    MTP support). Device-selection env vars are emitted separately via
+    :func:`_env_for` and surfaced through ``EvaluatedConfig.env``;
+    ``device`` / ``binary_variant`` are accepted here for caller
+    convenience but not consumed by this function.
     """
     sections: list[str] = []
     sections.append(f"{binary} \\")
@@ -791,7 +791,7 @@ def build_entry(
         "resolved_from": evaluated.matched_recipe,
     }
     # Only emit ``env`` when there is something to inject. Empty list
-    # clutters the rendered YAML and is the default for the no-gpu
+    # clutters the rendered YAML and is the default for the no-device
     # case (every host without GPUs, every cpu binary).
     if evaluated.env:
         payload["env"] = list(evaluated.env)

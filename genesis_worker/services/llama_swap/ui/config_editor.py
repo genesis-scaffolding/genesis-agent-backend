@@ -13,7 +13,7 @@ from typing import Any
 
 import streamlit as st
 
-from genesis_worker.contracts.host import GpuDevice
+from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
 from genesis_worker.services.llama_swap.generate_config import EvaluatedConfig, FieldSource
 
 SERVICE_NAME = "llama_swap"
@@ -22,21 +22,31 @@ worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
 
 
-def _gpu_choice_label(device: GpuDevice) -> str:
-    return f"{device.label}  ({device.vendor}, idx {device.index})"
+def _device_choice_label(device: ComputeDevice) -> str:
+    if isinstance(device, CpuDevice):
+        return "CPU (no GPU)"
+    if isinstance(device, GpuDevice):
+        return f"{device.label}  ({device.vendor}, idx {device.index})"
+    raise TypeError(f"unknown device type: {type(device)}")
 
 
-def _coerce_gpu(raw: Any) -> GpuDevice | None:
-    """Hydrate an overrides-style dict into a GpuDevice, or return None."""
+def _coerce_device(raw: Any) -> ComputeDevice | None:
+    """Hydrate an overrides-style dict into a ComputeDevice, or return None.
+
+    Discriminator: presence of ``vendor`` → GpuDevice; otherwise
+    CpuDevice (the empty-dict case from yaml roundtrip).
+    """
     if raw is None:
         return None
-    if isinstance(raw, GpuDevice):
+    if isinstance(raw, ComputeDevice):
         return raw
     if isinstance(raw, dict):
-        try:
-            return GpuDevice(**raw)
-        except (TypeError, ValueError):
-            return None
+        if "vendor" in raw:
+            try:
+                return GpuDevice(**raw)
+            except (TypeError, ValueError):
+                return None
+        return CpuDevice()
     return None
 
 
@@ -118,12 +128,12 @@ def _render_effective(cfg: EvaluatedConfig) -> None:
                 _badge(cfg.provenance["extra_flags"]),
             )
         )
-    if cfg.gpu is not None:
+    if cfg.device is not None:
         rows.append(
             (
-                "GPU",
-                f"{cfg.gpu.label} ({cfg.gpu.vendor}, idx {cfg.gpu.index})",
-                _badge(cfg.provenance["gpu"]),
+                "Device",
+                _device_choice_label(cfg.device),
+                _badge(cfg.provenance["device"]),
             )
         )
     if cfg.env:
@@ -191,44 +201,47 @@ def _render_override_form(
                 idx = variant_options.index(choice)
                 new_overrides["binary"] = variant_values[idx]
 
-        # --- GPU ---
-        # Per-model device pin (ADR-039 §3). ``None`` = inherit from
-        # the service-level ``effective_default_gpu`` (the persisted
-        # value or the smart auto-pick). The dropdown reads the live
-        # host snapshot so freshly plugged-in devices appear after a
-        # worker restart. "(use service default)" is the explicit None
-        # option so operators can revert to the head honcho; the
-        # current selection previews what that resolves to so the
-        # operator sees the effective pick even when it is implicit.
+        # --- Device ---
+        # Per-model compute device pin (ADR-039 §3). ``None`` = inherit
+        # from the service-level ``effective_default_device`` (the
+        # persisted value or the smart auto-pick). The dropdown reads
+        # the live host snapshot so freshly plugged-in devices appear
+        # after a worker restart. "(use service default)" is the
+        # explicit None option so operators can revert to the head
+        # honcho; the current selection previews what that resolves to
+        # so the operator sees the effective pick even when it is
+        # implicit.
         devices = svc.host_info.hardware.devices
         if devices:
-            gpu_labels = ["(use service default)"] + [_gpu_choice_label(d) for d in devices]
-            current_gpu = _coerce_gpu(current_overrides.get("gpu"))
-            if current_gpu is None:
-                current_gpu_idx = 0
-                # Show what the service default resolves to so the
-                # operator can see the effective pin.
-                effective = svc.effective_default_gpu
-                if effective is not None:
-                    st.caption(f"Service default resolves to: {_gpu_choice_label(effective)}")
-            else:
-                current_label = _gpu_choice_label(current_gpu)
-                current_gpu_idx = (
-                    gpu_labels.index(current_label) if current_label in gpu_labels else 0
-                )
-            gpu_choice = st.selectbox(
-                "GPU",
-                gpu_labels,
-                index=current_gpu_idx,
-                key=f"ov-{entry_id}-gpu",
+            device_labels = ["(use service default)"] + [_device_choice_label(d) for d in devices]
+            # Read the canonical ``device`` key first, fall back to
+            # the legacy ``gpu`` alias for backward compat with
+            # pre-refactor overrides.yaml.
+            current_device = _coerce_device(
+                current_overrides.get("device") or current_overrides.get("gpu")
             )
-            if gpu_choice != "(use service default)":
-                chosen_gpu = next(
-                    (d for d in devices if _gpu_choice_label(d) == gpu_choice),
+            if current_device is None:
+                current_device_idx = 0
+                effective = svc.effective_default_device
+                st.caption(f"Service default resolves to: {_device_choice_label(effective)}")
+            else:
+                current_label = _device_choice_label(current_device)
+                current_device_idx = (
+                    device_labels.index(current_label) if current_label in device_labels else 0
+                )
+            device_choice = st.selectbox(
+                "Device",
+                device_labels,
+                index=current_device_idx,
+                key=f"ov-{entry_id}-device",
+            )
+            if device_choice != "(use service default)":
+                chosen_device = next(
+                    (d for d in devices if _device_choice_label(d) == device_choice),
                     None,
                 )
-                if chosen_gpu is not None:
-                    new_overrides["gpu"] = chosen_gpu
+                if chosen_device is not None:
+                    new_overrides["device"] = chosen_device
 
         # --- KV Cache ---
         kv_val = st.text_input(

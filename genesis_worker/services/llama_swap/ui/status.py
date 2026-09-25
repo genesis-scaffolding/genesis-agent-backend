@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from genesis_worker.contracts.host import GpuDevice
+from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
 from genesis_worker.utils.ui._nav import to_relative
 from genesis_worker.utils.ui._service_controls import render_service_controls
 from genesis_worker.utils.ui._tail_log import render_tail_log
@@ -17,22 +17,33 @@ worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
 
 
-def _gpu_choice_label(device: GpuDevice) -> str:
-    """Display label for a device in a selectbox."""
-    return f"{device.label}  ({device.vendor}, idx {device.index})"
+def _device_choice_label(device: ComputeDevice) -> str:
+    """Display label for a compute device in a selectbox."""
+    if isinstance(device, CpuDevice):
+        return "CPU (no GPU)"
+    if isinstance(device, GpuDevice):
+        return f"{device.label}  ({device.vendor}, idx {device.index})"
+    raise TypeError(f"unknown device type: {type(device)}")
 
 
-def _coerce_gpu(raw: Any) -> GpuDevice | None:
-    """Hydrate an overrides-style dict into a GpuDevice, or return None."""
+def _coerce_device(raw: Any) -> ComputeDevice | None:
+    """Hydrate an overrides-style dict into a ComputeDevice, or return None.
+
+    Discriminator: presence of ``vendor`` → GpuDevice; otherwise
+    CpuDevice (the empty-dict case from yaml roundtrip).
+    """
     if raw is None:
         return None
-    if isinstance(raw, GpuDevice):
+    if isinstance(raw, ComputeDevice):
         return raw
     if isinstance(raw, dict):
-        try:
-            return GpuDevice(**raw)
-        except (TypeError, ValueError):
-            return None
+        if "vendor" in raw:
+            try:
+                return GpuDevice(**raw)
+            except (TypeError, ValueError):
+                return None
+        # No vendor → CPU.
+        return CpuDevice()
     return None
 
 
@@ -115,49 +126,49 @@ with st.container(border=True):
             st.error("No llama-server binary available. Install a variant via the Binaries page.")
 
 
-# --- Default GPU ----------------------------------------------------------
-# Per-machine device pin (ADR-039). When ``default_gpu`` is unset, the
-# framework auto-picks deterministically (NVIDIA 0 → AMD 0 → Intel 0);
-# when set, that specific device is pinned and the matching variant
-# binary is required (fail loud at config-regen time). The dropdown
-# shows real devices only — no "use cascade" deflect — and the smart
-# pick is the pre-selected default.
-def _on_default_gpu_change() -> None:
-    raw = st.session_state["status-default-gpu"]
-    gpu = _coerce_gpu(raw)
-    svc.set_default_gpu(gpu)
+# --- Default device --------------------------------------------------------
+# Per-machine device pin (ADR-039). When ``default_device`` is unset,
+# the framework auto-picks deterministically (NVIDIA 0 → AMD 0 → Intel 0
+# → CPU); when set, that specific device is pinned and the matching
+# variant binary is required (fail loud at config-regen time). The
+# dropdown shows real devices only — no "use cascade" deflect — and the
+# smart pick is the pre-selected default.
+def _on_default_device_change() -> None:
+    raw = st.session_state["status-default-device"]
+    device = _coerce_device(raw)
+    svc.set_default_device(device)
     worker.regenerate_service_config(SERVICE_NAME)
 
 
 with st.container(border=True):
-    st.subheader("Default GPU")
+    st.subheader("Default device")
     devices = svc.host_info.hardware.devices
     if not devices:
-        st.info("No GPUs detected on this host.")
+        st.info("No GPUs detected on this host — the framework uses CPU.")
     else:
-        gpu_labels = [_gpu_choice_label(d) for d in devices]
+        device_labels = [_device_choice_label(d) for d in devices]
         # Smart default = the framework's deterministic pick. Shown as
-        # the dropdown's pre-selected value when no explicit default_gpu
+        # the dropdown's pre-selected value when no explicit default_device
         # is persisted.
-        current_gpu = svc.effective_default_gpu
-        if current_gpu is None:
-            current_idx = 0
+        current_device = svc.effective_default_device
+        current_label = _device_choice_label(current_device)
+        if current_label in device_labels:
+            current_idx = device_labels.index(current_label)
         else:
-            current_label = _gpu_choice_label(current_gpu)
-            current_idx = gpu_labels.index(current_label) if current_label in gpu_labels else 0
+            current_idx = 0
         choice = st.selectbox(
-            "default GPU",
-            gpu_labels,
+            "default device",
+            device_labels,
             index=current_idx,
-            key="status-default-gpu",
-            on_change=_on_default_gpu_change,
+            key="status-default-device",
+            on_change=_on_default_device_change,
         )
         chosen = next(
-            (d for d in devices if _gpu_choice_label(d) == choice),
+            (d for d in devices if _device_choice_label(d) == choice),
             None,
         )
         if chosen is not None:
-            variant = "cuda" if chosen.vendor == "nvidia" else "vulkan"
+            variant = chosen.variant
             st.caption(
                 f"Pinned to {chosen.vendor} idx {chosen.index}. "
                 f"Requires `llama-server-{variant}` to be installed."

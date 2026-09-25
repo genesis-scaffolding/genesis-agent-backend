@@ -21,7 +21,7 @@ from .classify import (
     role_sort_key,
 )
 from .context import PluginContext, ServiceContext, SourceContext
-from .host import GpuDevice, Hardware, HostInfo
+from .host import ComputeDevice, CpuDevice, GpuDevice, Hardware, HostInfo
 from .install import InstallState, InstallVersion, ServiceInstall
 from .plugin import Plugin
 from .secret import NoSecretsAccessor, SecretsAccessor, StaticSecretsAccessor
@@ -51,6 +51,8 @@ __all__ = [
     "AcquireStateKind",
     "AcquireView",
     "Catalog",
+    "ComputeDevice",
+    "CpuDevice",
     "DiscoveredModel",
     "GpuDevice",
     "Hardware",

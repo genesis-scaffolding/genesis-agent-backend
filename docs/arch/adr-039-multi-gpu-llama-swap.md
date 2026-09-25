@@ -166,15 +166,17 @@ Positive:
 
 - Single-GPU hosts: zero behaviour change. No new env var, no new option, no new UI field shown unless the operator opens the dropdown.
 - Multi-GPU hosts: operators can pin models to specific devices from the same config surface they already use for ctx size and parallel slots.
-- The `_ENV_VAR_FOR` dict is the single seam for future backend additions. ROCm → one tuple. OpenVINO → one tuple. No new conditional logic.
+- Class hierarchy (`ComputeDevice` → `GpuDevice`, `CpuDevice`, future `NpuDevice`) is the single extensibility seam. Adding a backend = one new subclass. No conditional logic, no lookup tables.
 - Vendor classification stays in one place (`contracts/host.py`). The collector never duplicates the vendor-id-to-name mapping.
+- "Default device" is always a concrete device on a real host — no implicit variant cascade fallback, no "no pin" path to reason about.
 
 Negative:
 
 - The dropdown shows "Vulkan device 0" for AMD/Intel devices, which is opaque to operators. Accepted — `vulkaninfo` is not universally installed, and shipping a Vulkan probe is a dependency we do not want today. When llama.cpp reports "no Vulkan device N" the operator knows to pick a different index.
-- Per-model `gpu` can be set even when the resolved binary does not match the vendor (the override UI does not enforce compatibility — the cmd layer silently no-ops on an unknown `(variant, vendor)` pair). Documented; not a footgun because the cmd just runs without the env var.
-- `default_gpu` is a *named device position*, not a stable identity. If the operator swaps the GPU in slot 0 for a different model, the saved `default_gpu` still points to index 0 — possibly wrong device. We document this; we do not persist UUIDs (no portable way to obtain them across vendors).
-- There is no UI affordance for "no pin" / "unset" on a host with GPUs. The Status page shows only real devices, with the smart default pre-selected. Programmatic `set_default_gpu(None)` is still supported and reverts to the smart pick on the next render, but operators have to reach for the API. This is intentional — "use default" was misleading; one deterministic choice is better than many.
+- Per-model `device` can be set even when the resolved binary does not match the vendor (the override UI does not enforce compatibility — the cmd layer silently no-ops on an unknown `(variant, vendor)` pair). Documented; not a footgun because the cmd just runs without the env var.
+- `default_device` is a *named device position*, not a stable identity. If the operator swaps the GPU in slot 0 for a different model, the saved `default_device` still points to index 0 — possibly wrong device. We document this; we do not persist UUIDs (no portable way to obtain them across vendors).
+- There is no UI affordance for "no pin" / "unset" on a host with GPUs. The Status page shows only real devices, with the smart default pre-selected. Programmatic `set_default_device(None)` is still supported and reverts to the smart pick on the next render, but operators have to reach for the API. This is intentional — "use default" was misleading; one deterministic choice is better than many.
+- Field rename (`gpu` → `device`) breaks any pre-refactor `overrides.yaml` files that used the `gpu:` key. Backward-compat reader accepts both keys for one cycle; the loader migrates `gpu` → `device` on read. One-time deprecation, same pattern used elsewhere in the framework.
 
 Neutral:
 

@@ -12,8 +12,37 @@ from typing import Literal
 
 
 @dataclass(frozen=True)
-class GpuDevice:
-    """One detected GPU device.
+class ComputeDevice:
+    """Base class for any device that can run llama.cpp inference.
+
+    Each subclass declares the llama-server variant binary it needs
+    and the env entry (if any) used to pin the runtime to a specific
+    instance. Adding a new backend (NPU, FPGA, ...) means a new
+    subclass — no edits to lookup tables. The framework calls
+    :meth:`variant` and :meth:`env_entry` polymorphically.
+
+    Frozen dataclass so pydantic can introspect ``ComputeDevice | None``
+    annotations cleanly across the framework.
+    """
+
+    @property
+    def variant(self) -> str:
+        """The llama-server variant binary this device needs."""
+        raise NotImplementedError
+
+    def env_entry(self, binary_variant: str) -> str | None:
+        """``"NAME=value"`` env entry for the child process, or ``None``.
+
+        Returning ``None`` means the device has nothing to set for this
+        binary variant (CPU is the common case; also returned for
+        vendor-mismatched GPU+variant combos).
+        """
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class GpuDevice(ComputeDevice):
+    """A discrete or integrated GPU detected on the host.
 
     ``vendor`` is the framework-level classification. ``index`` is
     runtime-meaningful (zero-based device index for
@@ -28,6 +57,42 @@ class GpuDevice:
     index: int
     label: str
 
+    @property
+    def variant(self) -> str:
+        if self.vendor == "nvidia":
+            return "cuda"
+        if self.vendor in ("amd", "intel"):
+            return "vulkan"
+        raise ValueError(f"unknown gpu vendor {self.vendor!r}")
+
+    def env_entry(self, binary_variant: str) -> str | None:
+        if binary_variant != self.variant:
+            return None
+        env_var = {
+            "nvidia": "CUDA_VISIBLE_DEVICES",
+            "amd": "GGML_VK_VISIBLE_DEVICES",
+            "intel": "GGML_VK_VISIBLE_DEVICES",
+        }[self.vendor]
+        return f"{env_var}={self.index}"
+
+
+@dataclass(frozen=True)
+class CpuDevice(ComputeDevice):
+    """The CPU as a compute device. Always available; no env vars to set.
+
+    The collector never produces a ``CpuDevice`` — CPUs aren't
+    "detected", they're a constant. Instances appear only as the
+    smart-pick fallback (``smart_default_compute_device``) when no
+    GPUs are detected.
+    """
+
+    @property
+    def variant(self) -> str:
+        return "cpu"
+
+    def env_entry(self, binary_variant: str) -> str | None:
+        return None
+
 
 @dataclass(frozen=True)
 class Hardware:
@@ -39,10 +104,12 @@ class Hardware:
     detected, not a measurement of installed devices.
 
     ``devices`` is the per-device enumeration consumed by selection
-    UI (per-model GPU override, service-level default). The booleans
-    and counts stay because they are cheap O(1) checks consumed in
-    many places; the list is the structured surface. Device order
-    follows the collector (NVIDIA, then AMD, then Intel).
+    UI (per-model device override, service-level default). It only
+    contains physical devices (GpuDevice); CPU is implicit and never
+    appears here. The booleans and counts stay because they are cheap
+    O(1) checks consumed in many places; the list is the structured
+    surface. Device order follows the collector (NVIDIA, then AMD,
+    then Intel).
     """
 
     nvidia: bool = False
@@ -58,7 +125,7 @@ class Hardware:
     intel_igpu: bool = False
     intel_count: int = 0
 
-    devices: tuple[GpuDevice, ...] = ()
+    devices: tuple[ComputeDevice, ...] = ()
 
     @classmethod
     def empty(cls) -> Hardware:
@@ -106,4 +173,4 @@ class HostInfo:
         )
 
 
-__all__ = ["GpuDevice", "Hardware", "HostInfo"]
+__all__ = ["ComputeDevice", "CpuDevice", "GpuDevice", "Hardware", "HostInfo"]

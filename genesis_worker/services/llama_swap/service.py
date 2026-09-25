@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ...contracts import (
     Catalog,
-    GpuDevice,
+    ComputeDevice,
     HostInfo,
     InferenceService,
     ServiceCapabilities,
@@ -162,32 +162,36 @@ class LlamaSwapService(InferenceService):
     # config-regen time if the binary is missing (ADR-039 Q3).
 
     @property
-    def default_gpu(self) -> GpuDevice | None:
-        return self._options.default_gpu
+    def default_device(self) -> ComputeDevice | None:
+        return self._options.default_device
 
-    def set_default_gpu(self, gpu: GpuDevice | None) -> None:
+    def set_default_device(self, device: ComputeDevice | None) -> None:
         """UI write path. ``None`` reverts to the smart auto-pick.
 
-        When ``gpu`` is set, it must appear in
-        ``self._ctx.host_info.hardware.devices``. Stale entries (from
-        a previous worker run when the device was hot-plugged out) are
-        rejected up front so the UI cannot persist a non-existent
-        device.
+        When ``device`` is set and is a :class:`GpuDevice`, it must
+        appear in ``self._ctx.host_info.hardware.devices`` — stale
+        entries (from a previous worker run when the device was
+        hot-plugged out) are rejected up front so the UI cannot
+        persist a non-existent device. ``CpuDevice`` always passes
+        (CPU is always available).
         """
-        if gpu is not None and gpu not in self._ctx.host_info.hardware.devices:
-            raise ValueError(f"GPU {gpu!r} not in host_info.hardware.devices — stale snapshot?")
-        self._options.default_gpu = gpu
+        from ...contracts import GpuDevice
+
+        if isinstance(device, GpuDevice) and device not in self._ctx.host_info.hardware.devices:
+            raise ValueError(f"GPU {device!r} not in host_info.hardware.devices — stale snapshot?")
+        self._options.default_device = device
 
     @property
-    def effective_default_gpu(self) -> GpuDevice | None:
-        """The default GPU used everywhere downstream.
+    def effective_default_device(self) -> ComputeDevice:
+        """The default device used everywhere downstream.
 
-        Returns the persisted ``default_gpu`` if set, else the smart
-        auto-pick from the host snapshot (NVIDIA 0 if any, else AMD 0,
-        else Intel 0). On a host with no GPUs, returns ``None`` and the
-        service falls back to the variant cascade without a device pin.
+        Returns the persisted ``default_device`` if set, else the smart
+        auto-pick from the host snapshot (NVIDIA 0 → AMD 0 → Intel 0 →
+        CPU). Always returns a concrete device on a real host.
         """
-        return self._options.default_gpu or smart_default_gpu(self._ctx.host_info.hardware.devices)
+        return self._options.default_device or smart_default_compute_device(
+            self._ctx.host_info.hardware.devices
+        )
 
     @property
     def host_info(self) -> HostInfo:
@@ -208,40 +212,24 @@ class LlamaSwapService(InferenceService):
         return self._variant_binary(f"llama-server-{variant}")
 
     def _auto_resolve(self) -> str | None:
-        """Priority: ``effective_default_gpu`` → NVIDIA+cuda → vulkan → cpu.
+        """Force the variant that matches :attr:`effective_default_device`.
 
-        ``effective_default_gpu`` is the persisted ``default_gpu`` if
-        set, else the smart auto-pick (NVIDIA 0 → AMD 0 → Intel 0).
-        Either way it resolves to a real device, so the matching
-        variant is forced and the binary is required — the service
-        fails loud at config-regen time rather than silently falling
-        back. On a host with no GPUs the function falls through to the
-        variant cascade (cuda → vulkan → cpu) without a device pin.
+        ``effective_default_device`` always returns a concrete device
+        (the persisted ``default_device`` if set, else the smart
+        auto-pick: NVIDIA 0 → AMD 0 → Intel 0 → CPU). The matching
+        variant binary is required; the service fails loud at
+        config-regen time rather than silently falling back. No more
+        implicit variant cascade — the framework commits.
         """
-        requested = self.effective_default_gpu
-        if requested is not None:
-            variant = _variant_for_vendor(requested.vendor)
-            if variant is None:
-                raise RuntimeError(
-                    f"no framework-managed llama-server variant for GPU vendor "
-                    f"{requested.vendor!r}; install one via the Binaries page"
-                )
-            binary = self._variant_binary(f"llama-server-{variant}")
-            if binary is None:
-                raise RuntimeError(
-                    f"default_gpu is {requested.label!r} (vendor={requested.vendor!r}) "
-                    f"but llama-server-{variant} is not installed — install it via the "
-                    f"Binaries page or clear default_gpu in the service config"
-                )
-            return binary
-        if self._ctx.host_info.hardware.nvidia:
-            binary = self._variant_binary("llama-server-cuda")
-            if binary is not None:
-                return binary
-        binary = self._variant_binary("llama-server-vulkan")
-        if binary is not None:
-            return binary
-        return self._variant_binary("llama-server-cpu")
+        requested = self.effective_default_device
+        variant = requested.variant
+        binary = self._variant_binary(f"llama-server-{variant}")
+        if binary is None:
+            raise RuntimeError(
+                f"default device requires llama-server-{variant} but it is not "
+                f"installed — install it via the Binaries page"
+            )
+        return binary
 
     def _variant_binary(self, name: str) -> str | None:
         """Look up an installed variant by its installable name."""
@@ -284,7 +272,7 @@ class LlamaSwapService(InferenceService):
             default_binary=self._default_llama_server_binary(),
             default_binary_rel=self._options.default_binary_rel,
             binary_variant=resolved_variant,
-            service_default_gpu=self.effective_default_gpu,
+            service_default_device=self.effective_default_device,
         )
 
     def is_ready_to_serve(self) -> bool:
@@ -537,33 +525,25 @@ class LlamaSwapService(InferenceService):
         ]
 
 
-def _variant_for_vendor(vendor: str) -> str | None:
-    """Map a ``GpuDevice.vendor`` to a framework-managed llama-server variant.
-
-    Single seam for the vendor → binary mapping. Adding ROCm later
-    means adding ``"rocm" → "rocm"`` here (ADR-039 extensibility).
-    """
-    if vendor == "nvidia":
-        return "cuda"
-    if vendor in ("amd", "intel"):
-        return "vulkan"
-    return None
-
-
-def smart_default_gpu(devices: tuple[GpuDevice, ...]) -> GpuDevice | None:
+def smart_default_compute_device(
+    devices: tuple[ComputeDevice, ...],
+) -> ComputeDevice:
     """Deterministic framework-side default device.
 
-    Priority: NVIDIA index 0 if any NVIDIA device is present, else AMD
-    index 0 if any AMD, else Intel index 0 if any Intel, else ``None``
-    (host has no GPUs). The collector enumerates devices in vendor order
-    (NVIDIA first, then AMD, then Intel) so ``devices[0]`` of the first
-    matching vendor is index 0 by construction.
+    Priority: NVIDIA index 0 if any NVIDIA is present, else AMD index
+    0, else Intel index 0, else :class:`CpuDevice` (CPU is the
+    universal fallback — always available, never "detected" by the
+    collector). The collector enumerates devices in vendor order so
+    ``devices[0]`` of the first matching vendor is index 0 by
+    construction.
     """
+    from ...contracts import CpuDevice, GpuDevice
+
     for vendor in ("nvidia", "amd", "intel"):
         for d in devices:
-            if d.vendor == vendor:
+            if isinstance(d, GpuDevice) and d.vendor == vendor:
                 return d
-    return None
+    return CpuDevice()
 
 
 def _variant_for_binary_path(
