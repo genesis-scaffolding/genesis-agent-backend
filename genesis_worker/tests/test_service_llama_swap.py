@@ -534,6 +534,143 @@ def test_set_llama_server_variant_rejects_unknown(tmp_path: Path) -> None:
         svc.set_llama_server_variant("metaverse")
 
 
+# ---------------------------------------------------------------------------
+# default_gpu: per-machine device pin
+# ---------------------------------------------------------------------------
+
+
+def _gpu_ctx(tmp_path: Path, *, devices):
+    """ServiceContext with host_info.hardware.devices pre-populated."""
+    from dataclasses import replace
+
+    hw = Hardware(
+        nvidia=any(d.vendor == "nvidia" for d in devices),
+        nvidia_count=sum(1 for d in devices if d.vendor == "nvidia"),
+        amd=any(d.vendor == "amd" for d in devices),
+        amd_count=sum(1 for d in devices if d.vendor == "amd"),
+        intel_igpu=any(d.vendor == "intel" for d in devices),
+        intel_count=sum(1 for d in devices if d.vendor == "intel"),
+        devices=devices,
+    )
+    return service_ctx(
+        tmp_path,
+        options={"llama_server_variant": "auto"},
+        host_info=replace(HostInfo.empty(), hardware=hw),
+    )
+
+
+def test_default_gpu_none_preserves_cascade(tmp_path: Path) -> None:
+    """No default_gpu → today's cascade (NVIDIA → cuda → vulkan → cpu)."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(nvidia,)))
+    binary = _install_variant(svc, "llama-server-cuda")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_default_gpu_nvidia_forces_cuda(tmp_path: Path) -> None:
+    from genesis_worker.contracts.host import GpuDevice
+
+    nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    svc = LlamaSwapService(
+        _gpu_ctx(
+            tmp_path,
+            devices=(nvidia,),
+        )
+    )
+    svc.set_default_gpu(nvidia)
+    binary = _install_variant(svc, "llama-server-cuda")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_default_gpu_intel_forces_vulkan(tmp_path: Path) -> None:
+    from genesis_worker.contracts.host import GpuDevice
+
+    intel = GpuDevice(vendor="intel", index=0, label="Vulkan device 0")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(intel,)))
+    svc.set_default_gpu(intel)
+    binary = _install_variant(svc, "llama-server-vulkan")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_default_gpu_amd_forces_vulkan(tmp_path: Path) -> None:
+    from genesis_worker.contracts.host import GpuDevice
+
+    amd = GpuDevice(vendor="amd", index=0, label="Vulkan device 0")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(amd,)))
+    svc.set_default_gpu(amd)
+    binary = _install_variant(svc, "llama-server-vulkan")
+    assert svc._default_llama_server_binary() == str(binary)  # noqa: SLF001
+
+
+def test_default_gpu_fails_loud_when_binary_missing(tmp_path: Path) -> None:
+    """ADR-039 Q3: silent fallback would mask misconfiguration."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(nvidia,)))
+    svc.set_default_gpu(nvidia)
+    # Only CPU installed — cuda is required by default_gpu=nvidia.
+    _install_variant(svc, "llama-server-cpu")
+    with pytest.raises(RuntimeError, match="llama-server-cuda is not installed"):
+        svc._default_llama_server_binary()  # noqa: SLF001
+
+
+def test_default_gpu_fails_loud_for_unmapped_vendor(tmp_path: Path) -> None:
+    """A vendor with no framework-managed variant raises explicitly."""
+    # Bypass GpuDevice validation by constructing directly.
+    from genesis_worker.contracts.host import GpuDevice
+
+    bogus = GpuDevice(vendor="amd", index=0, label="x")  # amd is mapped, so use real
+    # To test unmapped vendor, we have to bypass Literal typing:
+    gpu = GpuDevice.__new__(GpuDevice)
+    object.__setattr__(gpu, "vendor", "rocm-unmapped")
+    object.__setattr__(gpu, "index", 0)
+    object.__setattr__(gpu, "label", "future device")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(bogus,)))
+    # Direct write into the option (bypasses set_default_gpu's host check).
+    svc._options.default_gpu = gpu  # noqa: SLF001
+    with pytest.raises(RuntimeError, match="no framework-managed llama-server variant"):
+        svc._default_llama_server_binary()  # noqa: SLF001
+
+
+def test_set_default_gpu_rejects_stale_device(tmp_path: Path) -> None:
+    """A device not in host_info.hardware.devices is rejected up front."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    real = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    stale = GpuDevice(vendor="nvidia", index=1, label="ghost")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(real,)))
+    with pytest.raises(ValueError, match="not in host_info.hardware.devices"):
+        svc.set_default_gpu(stale)
+
+
+def test_set_default_gpu_round_trips(tmp_path: Path) -> None:
+    from genesis_worker.contracts.host import GpuDevice
+
+    real = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    svc = LlamaSwapService(_gpu_ctx(tmp_path, devices=(real,)))
+    assert svc.default_gpu is None
+    svc.set_default_gpu(real)
+    assert svc.default_gpu == real
+    svc.set_default_gpu(None)
+    assert svc.default_gpu is None
+
+
+def test_host_info_property_exposes_snapshot(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from genesis_worker.contracts.host import GpuDevice
+
+    nvidia = GpuDevice(vendor="nvidia", index=0, label="RTX 2060")
+    hw = Hardware(nvidia=True, nvidia_count=1, devices=(nvidia,))
+    info = replace(HostInfo.empty(), hardware=hw)
+    svc = LlamaSwapService(service_ctx(tmp_path, host_info=info))
+    assert svc.host_info is info
+    assert svc.host_info.hardware.devices == (nvidia,)
+
+
 def test_evaluate_model_config_uses_framework_binary_for_qwen_recipe(
     tmp_path: Path, monkeypatch
 ) -> None:

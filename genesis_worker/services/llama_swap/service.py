@@ -7,6 +7,8 @@ from pathlib import Path
 
 from ...contracts import (
     Catalog,
+    GpuDevice,
+    HostInfo,
     InferenceService,
     ServiceCapabilities,
     ServiceCategory,
@@ -154,6 +156,37 @@ class LlamaSwapService(InferenceService):
             raise ValueError(f"unknown variant {variant!r}; expected auto/cuda/cpu/vulkan or None")
         self._options.llama_server_variant = variant  # type: ignore[assignment]
 
+    # --- default GPU -------------------------------------------------------
+    # Per-machine override of the variant auto-resolve. When set, the
+    # matching variant binary is required and the service fails loud at
+    # config-regen time if the binary is missing (ADR-039 Q3).
+
+    @property
+    def default_gpu(self) -> GpuDevice | None:
+        return self._options.default_gpu
+
+    def set_default_gpu(self, gpu: GpuDevice | None) -> None:
+        """UI write path. ``None`` reverts to the variant cascade.
+
+        When ``gpu`` is set, it must appear in
+        ``self._ctx.host_info.hardware.devices``. Stale entries (from
+        a previous worker run when the device was hot-plugged out) are
+        rejected up front so the UI cannot persist a non-existent
+        device.
+        """
+        if gpu is not None and gpu not in self._ctx.host_info.hardware.devices:
+            raise ValueError(f"GPU {gpu!r} not in host_info.hardware.devices — stale snapshot?")
+        self._options.default_gpu = gpu
+
+    @property
+    def host_info(self) -> HostInfo:
+        """Read-through to the framework-level host snapshot.
+
+        Exposed so UI pages can populate device dropdowns without
+        reaching into the private context.
+        """
+        return self._ctx.host_info
+
     def _default_llama_server_binary(self) -> str | None:
         """Resolve the configured variant to an installed binary path."""
         variant = self.llama_server_variant
@@ -164,14 +197,30 @@ class LlamaSwapService(InferenceService):
         return self._variant_binary(f"llama-server-{variant}")
 
     def _auto_resolve(self) -> str | None:
-        """Priority: NVIDIA + cuda installed → cuda; else vulkan; else cpu.
+        """Priority: ``default_gpu`` (if set) → NVIDIA+cuda → vulkan → cpu.
 
-        Hardware presence comes from the framework-level snapshot
-        (``ctx.host_info.hardware``); no per-service nvidia-smi probe
-        needed. AMD-only hosts naturally land on vulkan because ROCm
-        surfaces through Vulkan — that's the right answer for both
-        AMD APUs and discrete Radeon cards.
+        When ``default_gpu`` is set, the matching variant is forced and
+        the binary is required — the service fails loud at config-regen
+        time rather than silently falling back. AMD-only hosts naturally
+        land on vulkan because ROCm surfaces through Vulkan — that is
+        the right answer for both AMD APUs and discrete Radeon cards.
         """
+        requested = self._options.default_gpu
+        if requested is not None:
+            variant = _variant_for_vendor(requested.vendor)
+            if variant is None:
+                raise RuntimeError(
+                    f"no framework-managed llama-server variant for GPU vendor "
+                    f"{requested.vendor!r}; install one via the Binaries page"
+                )
+            binary = self._variant_binary(f"llama-server-{variant}")
+            if binary is None:
+                raise RuntimeError(
+                    f"default_gpu is {requested.label!r} (vendor={requested.vendor!r}) "
+                    f"but llama-server-{variant} is not installed — install it via the "
+                    f"Binaries page or clear default_gpu in the service config"
+                )
+            return binary
         if self._ctx.host_info.hardware.nvidia:
             binary = self._variant_binary("llama-server-cuda")
             if binary is not None:
@@ -452,6 +501,19 @@ class LlamaSwapService(InferenceService):
             UiPage("Recipes view", ":material/menu_book:", ui_dir / "recipes_view.py"),
             UiPage("Pi export", ":material/download:", ui_dir / "pi_export.py"),
         ]
+
+
+def _variant_for_vendor(vendor: str) -> str | None:
+    """Map a ``GpuDevice.vendor`` to a framework-managed llama-server variant.
+
+    Single seam for the vendor → binary mapping. Adding ROCm later
+    means adding ``"rocm" → "rocm"`` here (ADR-039 extensibility).
+    """
+    if vendor == "nvidia":
+        return "cuda"
+    if vendor in ("amd", "intel"):
+        return "vulkan"
+    return None
 
 
 __all__ = ["LlamaSwapService"]
