@@ -539,3 +539,179 @@ def test_cmd_c_flag_only_when_both_fit_ctx_and_ctx_size_set(
     evaluated = _evaluate(recipe, options)
     assert "--fit-ctx 131072" in evaluated.cmd
     assert "-c 40960" in evaluated.cmd
+
+
+# ---------------------------------------------------------------------------
+# gpu field + env-var cmd prefix (ADR-039 §3, §4)
+# ---------------------------------------------------------------------------
+
+
+def _gpu(vendor: str = "nvidia", index: int = 0, label: str = "Test Card"):
+    from genesis_worker.contracts.host import GpuDevice
+
+    return GpuDevice(vendor=vendor, index=index, label=label)
+
+
+def test_evaluate_recipe_gpu_unset_propagates_none(options: BuildOptions) -> None:
+    """No gpu anywhere → no env prefix in the cmd."""
+    evaluated = _evaluate(_recipe(), options)
+    assert evaluated.gpu is None
+    # The cmd's first line should start with the binary path, not an
+    # env-var prefix. ``default_binary_rel`` is the legacy fallback,
+    # resolved relative to ``repo_root``.
+    first_line = evaluated.cmd.splitlines()[0]
+    assert not first_line.startswith("CUDA_VISIBLE_DEVICES")
+    assert not first_line.startswith("GGML_VK_VISIBLE_DEVICES")
+
+
+def test_cmd_no_env_prefix_when_gpu_unset(options: BuildOptions) -> None:
+    """Single-GPU hosts that leave gpu unset keep a byte-identical cmd."""
+    evaluated = _evaluate(_recipe(), options)
+    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
+    assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
+
+
+def test_cmd_emits_cuda_visible_devices_for_cuda_binary(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    """binary_variant=cuda + gpu=nvidia → CUDA_VISIBLE_DEVICES=N prefix."""
+    cuda_binary = tmp_path / "cuda-llama-server"
+    cuda_binary.write_text("#!/bin/sh\n")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cuda_binary),
+        binary_variant="cuda",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 0, "RTX 2060")})
+    assert evaluated.gpu is not None
+    assert evaluated.gpu.vendor == "nvidia"
+    assert evaluated.cmd.startswith(f"CUDA_VISIBLE_DEVICES=0 {cuda_binary} \\")
+
+
+def test_cmd_emits_vk_visible_devices_for_vulkan_amd(options: BuildOptions, tmp_path: Path) -> None:
+    """binary_variant=vulkan + gpu=amd → GGML_VK_VISIBLE_DEVICES=N prefix."""
+    vk_binary = tmp_path / "vk-llama-server"
+    vk_binary.write_text("#!/bin/sh\n")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(vk_binary),
+        binary_variant="vulkan",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("amd", 0, "Vulkan device 0")})
+    assert evaluated.cmd.startswith(f"GGML_VK_VISIBLE_DEVICES=0 {vk_binary} \\")
+
+
+def test_cmd_emits_vk_visible_devices_for_vulkan_intel(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    vk_binary = tmp_path / "vk-llama-server"
+    vk_binary.write_text("#!/bin/sh\n")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(vk_binary),
+        binary_variant="vulkan",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("intel", 0, "Vulkan device 0")})
+    assert evaluated.cmd.startswith(f"GGML_VK_VISIBLE_DEVICES=0 {vk_binary} \\")
+
+
+def test_cmd_emits_uses_specific_index_not_always_zero(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    """Index 2 → CUDA_VISIBLE_DEVICES=2."""
+    cuda_binary = tmp_path / "cuda-llama-server"
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cuda_binary),
+        binary_variant="cuda",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 2, "third card")})
+    assert evaluated.cmd.startswith(f"CUDA_VISIBLE_DEVICES=2 {cuda_binary} \\")
+
+
+def test_cmd_no_prefix_when_variant_legacy(options: BuildOptions) -> None:
+    """binary_variant=None (legacy fallback) → no env prefix regardless of gpu."""
+    evaluated = _evaluate(_recipe(), options, overrides={"gpu": _gpu()})
+    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
+    assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
+
+
+def test_cmd_no_prefix_when_vendor_mismatch(options: BuildOptions, tmp_path: Path) -> None:
+    """gpu=amd but binary is cuda → unknown combo, no prefix (silent no-op)."""
+    cuda_binary = tmp_path / "cuda-llama-server"
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cuda_binary),
+        binary_variant="cuda",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("amd", 0, "mismatched")})
+    # Should fall back to no prefix (the cmd layer does not crash on
+    # unknown (variant, vendor) pairs; the service layer is the place
+    # that fails loud if the binary doesn't match the gpu vendor).
+    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
+    assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
+    # The cmd still works (no prefix, just the binary).
+    assert evaluated.cmd.startswith(f"{cuda_binary} \\")
+
+
+def test_cmd_no_prefix_when_cpu_binary(options: BuildOptions, tmp_path: Path) -> None:
+    """binary_variant=cpu + any gpu → no prefix (CPU doesn't honor either env var)."""
+    cpu_binary = tmp_path / "cpu-llama-server"
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cpu_binary),
+        binary_variant="cpu",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 0, "ignored")})
+    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
+
+
+def test_gpu_override_wins_over_recipe(options: BuildOptions) -> None:
+    """Per-model override beats recipe's gpu field."""
+    recipe_gpu = _gpu("nvidia", 1, "recipe device")
+    override_gpu = _gpu("nvidia", 0, "override device")
+    recipe = _recipe()
+    recipe.gpu = recipe_gpu
+    evaluated = _evaluate(recipe, options, overrides={"gpu": override_gpu})
+    assert evaluated.gpu == override_gpu
+    assert evaluated.provenance["gpu"] == FieldSource.OVERRIDE
+
+
+def test_gpu_recipe_wins_over_default_recipe(options: BuildOptions, tmp_path: Path) -> None:
+    default_gpu = _gpu("nvidia", 2, "default device")
+    recipe_gpu = _gpu("nvidia", 1, "recipe device")
+    recipe = _recipe()
+    recipe.gpu = recipe_gpu
+    default_recipe = Recipe(name="default", gpu=default_gpu)
+    evaluated = evaluate_recipe(
+        recipe,
+        detect_file_sets(_entry())[0],
+        entry_id="test",
+        name="Test",
+        options=options,
+        default_recipe=default_recipe,
+    )
+    assert evaluated.gpu == recipe_gpu
+    assert evaluated.provenance["gpu"] == FieldSource.RECIPE
+
+
+def test_gpu_default_recipe_used_when_recipe_unset(options: BuildOptions, tmp_path: Path) -> None:
+    default_gpu = _gpu("amd", 0, "default device")
+    default_recipe = Recipe(name="default", gpu=default_gpu)
+    evaluated = evaluate_recipe(
+        _recipe(),
+        detect_file_sets(_entry())[0],
+        entry_id="test",
+        name="Test",
+        options=options,
+        default_recipe=default_recipe,
+    )
+    assert evaluated.gpu == default_gpu
+    assert evaluated.provenance["gpu"] == FieldSource.DEFAULT
+
+
+def test_gpu_computed_when_nothing_set(options: BuildOptions) -> None:
+    """No override, recipe, or default_recipe has gpu → COMPUTED."""
+    evaluated = _evaluate(_recipe(), options)
+    assert evaluated.gpu is None
+    assert evaluated.provenance["gpu"] == FieldSource.COMPUTED

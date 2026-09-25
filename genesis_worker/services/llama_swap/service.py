@@ -244,13 +244,33 @@ class LlamaSwapService(InferenceService):
 
         Re-resolved on every call so newly installed variants are picked
         up on the next config regen without restarting the worker.
+
+        ``binary_variant`` is the resolved variant name when a framework-
+        managed binary is in play (``"cuda" / "vulkan" / "cpu"``). It is
+        ``None`` when the legacy ``default_binary_rel`` fallback is the
+        resolved path, so the cmd renderer does not emit any env-var
+        prefix for legacy binaries (we do not know what backend they
+        use).
         """
+        variant = self.llama_server_variant
+        resolved_variant: str | None
+        if variant is None:
+            resolved_variant = None
+        elif variant == "auto":
+            # ``auto`` resolves to one of cuda/vulkan/cpu via
+            # ``_default_llama_server_binary``. Map the resolved binary
+            # path back to the variant by checking the installable name.
+            binary_path = self._default_llama_server_binary()
+            resolved_variant = _variant_for_binary_path(self.installs(), binary_path)
+        else:
+            resolved_variant = variant
         return BuildOptions(
             repo_root=self._ctx.repo_root,
             kv_quant_over=self._options.kv_quant_over_bytes,
             mmproj_offload_over=self._options.mmproj_offload_over_bytes,
             default_binary=self._default_llama_server_binary(),
             default_binary_rel=self._options.default_binary_rel,
+            binary_variant=resolved_variant,
         )
 
     def is_ready_to_serve(self) -> bool:
@@ -513,6 +533,27 @@ def _variant_for_vendor(vendor: str) -> str | None:
         return "cuda"
     if vendor in ("amd", "intel"):
         return "vulkan"
+    return None
+
+
+def _variant_for_binary_path(
+    installables: list[ServiceInstall], binary_path: str | None
+) -> str | None:
+    """Reverse-lookup: which variant produced ``binary_path``?
+
+    Walks the installable list and returns the variant suffix of the
+    installable whose ``binary_path()`` matches. Returns ``None`` for
+    the legacy fallback (no installable owns the path).
+    """
+    if binary_path is None:
+        return None
+    for installable in installables:
+        bp = installable.binary_path()
+        if bp is not None and str(bp) == binary_path:
+            name = installable.name
+            if name.startswith("llama-server-"):
+                return name[len("llama-server-") :]
+            return None
     return None
 
 
