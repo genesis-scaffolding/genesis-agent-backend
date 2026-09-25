@@ -48,42 +48,48 @@ The collector populates `devices` from one source per vendor:
 
 `LlamaSwapOptions` gains `default_gpu: GpuDevice | None = None`. Persistence follows the existing `LlamaSwapOptions` pattern — flat key under `Settings.services.llama_swap`, so `GENESIS_SERVICES__LLAMA_SWAP__DEFAULT_GPU` works.
 
+**`None` is the smart-auto-pick state.** When `default_gpu` is unset, the framework computes the smart default deterministically from `host_info.hardware.devices`: NVIDIA index 0 if any NVIDIA is present, else AMD index 0 if any AMD, else Intel index 0 if any Intel. The collector enumerates devices in vendor order (NVIDIA first, then AMD, then Intel), so the smart pick is reproducible across worker restarts. When `default_gpu` is set, that specific device is pinned and the smart pick is bypassed.
+
+`LlamaSwapService.effective_default_gpu` is the single value everything downstream consumes: persisted `default_gpu` if set, else the smart pick. The UI dropdown displays real devices only — no "use cascade" / "use default" deflect — and the smart default is pre-selected on first render. The API still exposes `set_default_gpu(None)` for programmatic "revert to smart pick", but the Status page offers no affordance for it.
+
 `LlamaSwapService._auto_resolve()` becomes:
 
 ```python
 def _auto_resolve(self) -> str | None:
-    requested = self._options.default_gpu
-    if requested is None:
-        # Today's cascade: NVIDIA → cuda, anything → vulkan, else cpu.
-        if self._ctx.host_info.hardware.nvidia:
-            binary = self._variant_binary("llama-server-cuda")
-            if binary is not None:
-                return binary
-        binary = self._variant_binary("llama-server-vulkan")
+    requested = self.effective_default_gpu
+    if requested is not None:
+        # Honour the (persisted or smart-picked) device. Force the
+        # matching variant, fail loud if the binary is missing.
+        variant = _variant_for_vendor(requested.vendor)
+        if variant is None:
+            raise RuntimeError(...)
+        binary = self._variant_binary(f"llama-server-{variant}")
+        if binary is None:
+            raise RuntimeError(...)
+        return binary
+    # No devices detected on this host → fall back to the variant
+    # cascade without a device pin (CPU-only worker, CI, etc.).
+    if self._ctx.host_info.hardware.nvidia:
+        binary = self._variant_binary("llama-server-cuda")
         if binary is not None:
             return binary
-        return self._variant_binary("llama-server-cpu")
-    # default_gpu is set: honour it, fail loud if the binary is missing.
-    variant = _variant_for_vendor(requested.vendor)  # "cuda" | "vulkan" | None
-    if variant is None:
-        raise RuntimeError(
-            f"no framework-managed variant for GPU vendor {requested.vendor!r}"
-        )
-    binary = self._variant_binary(f"llama-server-{variant}")
-    if binary is None:
-        raise RuntimeError(
-            f"default_gpu is {requested.label!r} (vendor={requested.vendor!r}) but "
-            f"llama-server-{variant} is not installed — install it via the Binaries page "
-            f"or clear default_gpu in the service config"
-        )
-    return binary
+    binary = self._variant_binary("llama-server-vulkan")
+    if binary is not None:
+        return binary
+    return self._variant_binary("llama-server-cpu")
 ```
 
 `LlamaSwapService.set_default_gpu(gpu: GpuDevice | None)` mirrors `set_llama_server_variant` for the UI write path. When `gpu is not None`, it must appear in `ctx.host_info.hardware.devices` — the validation prevents the UI from persisting a stale device that no longer exists on this host.
 
 ### 3. Per-model override `gpu`
 
-`Recipe` gains `gpu: GpuDevice | None = None`. `EvaluatedConfig` gains the same field. The cascade in `evaluate_recipe` is `override > recipe > default_recipe > None` — same shape as `parallel`, `ctx_min`, `ctx_size`, etc. Provenance is tracked in the existing `provenance: dict[str, FieldSource]` under the key `"gpu"`.
+`Recipe` gains `gpu: GpuDevice | None = None`. `EvaluatedConfig` gains the same field. The cascade in `evaluate_recipe` is
+
+```
+override > recipe > default_recipe > service_default_gpu > None
+```
+
+The **service-level `default_gpu` is part of the cascade**, sitting between the recipe-default and "no pin". This is what makes the service-level option the head honcho: every model that doesn't explicitly override inherits the effective service default (persisted or smart-picked). Provenance is tracked in the existing `provenance: dict[str, FieldSource]` under the key `"gpu"`.
 
 Per-model overrides continue to flow through `OverridesStore` (unstructured dict). No schema change to the storage format.
 
@@ -151,6 +157,7 @@ Negative:
 - The dropdown shows "Vulkan device 0" for AMD/Intel devices, which is opaque to operators. Accepted — `vulkaninfo` is not universally installed, and shipping a Vulkan probe is a dependency we do not want today. When llama.cpp reports "no Vulkan device N" the operator knows to pick a different index.
 - Per-model `gpu` can be set even when the resolved binary does not match the vendor (the override UI does not enforce compatibility — the cmd layer silently no-ops on an unknown `(variant, vendor)` pair). Documented; not a footgun because the cmd just runs without the env var.
 - `default_gpu` is a *named device position*, not a stable identity. If the operator swaps the GPU in slot 0 for a different model, the saved `default_gpu` still points to index 0 — possibly wrong device. We document this; we do not persist UUIDs (no portable way to obtain them across vendors).
+- There is no UI affordance for "no pin" / "unset" on a host with GPUs. The Status page shows only real devices, with the smart default pre-selected. Programmatic `set_default_gpu(None)` is still supported and reverts to the smart pick on the next render, but operators have to reach for the API. This is intentional — "use default" was misleading; one deterministic choice is better than many.
 
 Neutral:
 

@@ -166,7 +166,7 @@ class LlamaSwapService(InferenceService):
         return self._options.default_gpu
 
     def set_default_gpu(self, gpu: GpuDevice | None) -> None:
-        """UI write path. ``None`` reverts to the variant cascade.
+        """UI write path. ``None`` reverts to the smart auto-pick.
 
         When ``gpu`` is set, it must appear in
         ``self._ctx.host_info.hardware.devices``. Stale entries (from
@@ -177,6 +177,17 @@ class LlamaSwapService(InferenceService):
         if gpu is not None and gpu not in self._ctx.host_info.hardware.devices:
             raise ValueError(f"GPU {gpu!r} not in host_info.hardware.devices — stale snapshot?")
         self._options.default_gpu = gpu
+
+    @property
+    def effective_default_gpu(self) -> GpuDevice | None:
+        """The default GPU used everywhere downstream.
+
+        Returns the persisted ``default_gpu`` if set, else the smart
+        auto-pick from the host snapshot (NVIDIA 0 if any, else AMD 0,
+        else Intel 0). On a host with no GPUs, returns ``None`` and the
+        service falls back to the variant cascade without a device pin.
+        """
+        return self._options.default_gpu or smart_default_gpu(self._ctx.host_info.hardware.devices)
 
     @property
     def host_info(self) -> HostInfo:
@@ -197,15 +208,17 @@ class LlamaSwapService(InferenceService):
         return self._variant_binary(f"llama-server-{variant}")
 
     def _auto_resolve(self) -> str | None:
-        """Priority: ``default_gpu`` (if set) → NVIDIA+cuda → vulkan → cpu.
+        """Priority: ``effective_default_gpu`` → NVIDIA+cuda → vulkan → cpu.
 
-        When ``default_gpu`` is set, the matching variant is forced and
-        the binary is required — the service fails loud at config-regen
-        time rather than silently falling back. AMD-only hosts naturally
-        land on vulkan because ROCm surfaces through Vulkan — that is
-        the right answer for both AMD APUs and discrete Radeon cards.
+        ``effective_default_gpu`` is the persisted ``default_gpu`` if
+        set, else the smart auto-pick (NVIDIA 0 → AMD 0 → Intel 0).
+        Either way it resolves to a real device, so the matching
+        variant is forced and the binary is required — the service
+        fails loud at config-regen time rather than silently falling
+        back. On a host with no GPUs the function falls through to the
+        variant cascade (cuda → vulkan → cpu) without a device pin.
         """
-        requested = self._options.default_gpu
+        requested = self.effective_default_gpu
         if requested is not None:
             variant = _variant_for_vendor(requested.vendor)
             if variant is None:
@@ -271,6 +284,7 @@ class LlamaSwapService(InferenceService):
             default_binary=self._default_llama_server_binary(),
             default_binary_rel=self._options.default_binary_rel,
             binary_variant=resolved_variant,
+            service_default_gpu=self.effective_default_gpu,
         )
 
     def is_ready_to_serve(self) -> bool:
@@ -533,6 +547,22 @@ def _variant_for_vendor(vendor: str) -> str | None:
         return "cuda"
     if vendor in ("amd", "intel"):
         return "vulkan"
+    return None
+
+
+def smart_default_gpu(devices: tuple[GpuDevice, ...]) -> GpuDevice | None:
+    """Deterministic framework-side default device.
+
+    Priority: NVIDIA index 0 if any NVIDIA device is present, else AMD
+    index 0 if any AMD, else Intel index 0 if any Intel, else ``None``
+    (host has no GPUs). The collector enumerates devices in vendor order
+    (NVIDIA first, then AMD, then Intel) so ``devices[0]`` of the first
+    matching vendor is index 0 by construction.
+    """
+    for vendor in ("nvidia", "amd", "intel"):
+        for d in devices:
+            if d.vendor == vendor:
+                return d
     return None
 
 

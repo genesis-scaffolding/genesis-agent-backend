@@ -76,6 +76,12 @@ class BuildOptions:
     default_binary_rel: str = DEFAULT_BINARY_REL
     default_binary: str | None = None
     binary_variant: str | None = None
+    # Service-level default GPU. ``None`` means "no service default";
+    # ``effective_default_gpu()`` (the persisted value or the smart
+    # auto-pick) is what flows here. The per-model cascade falls back
+    # to this when no recipe / override sets ``gpu`` explicitly
+    # (ADR-039 §3).
+    service_default_gpu: GpuDevice | None = None
 
 
 # Map ``(binary_variant, gpu.vendor)`` → the env var llama.cpp reads to
@@ -493,10 +499,15 @@ def evaluate_recipe(
     if not extra_flags and default_recipe:
         extra_flags = list(default_recipe.extra_flags)
 
-    # --- gpu with standard cascade (override > recipe > default > None) ---
+    # --- gpu with full cascade (override > recipe > default_recipe >
+    # service_default_gpu > None). The service-level default sits
+    # between the recipe-default and "no pin" so it acts as the
+    # head honcho for models without explicit gpu values.
     gpu = ovr.get("gpu", recipe.gpu)
     if gpu is None and default_recipe:
         gpu = default_recipe.gpu
+    if gpu is None:
+        gpu = options.service_default_gpu
 
     provenance: dict[str, FieldSource] = {
         "binary": binary_source,

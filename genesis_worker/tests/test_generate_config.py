@@ -715,3 +715,58 @@ def test_gpu_computed_when_nothing_set(options: BuildOptions) -> None:
     evaluated = _evaluate(_recipe(), options)
     assert evaluated.gpu is None
     assert evaluated.provenance["gpu"] == FieldSource.COMPUTED
+
+
+def test_service_default_gpu_cascades_into_per_model_resolution(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    """service_default_gpu sits in the cascade between default_recipe and None.
+
+    The service-level option is the head honcho: every model that
+    doesn't explicitly override inherits the service default. With no
+    override, recipe, or default_recipe value, the cascade lands on
+    options.service_default_gpu.
+    """
+    service_gpu = _gpu("nvidia", 0, "RTX 2060")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        service_default_gpu=service_gpu,
+    )
+    evaluated = _evaluate(_recipe(), opts)
+    assert evaluated.gpu == service_gpu
+    # Provenance reflects the cascade level.
+    assert evaluated.provenance["gpu"] == FieldSource.COMPUTED
+
+
+def test_per_model_override_beats_service_default_gpu(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    service_gpu = _gpu("nvidia", 0, "RTX 2060")
+    override_gpu = _gpu("nvidia", 1, "A4000")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        service_default_gpu=service_gpu,
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": override_gpu})
+    assert evaluated.gpu == override_gpu
+    assert evaluated.provenance["gpu"] == FieldSource.OVERRIDE
+
+
+def test_recipe_default_beats_service_default_gpu(options: BuildOptions, tmp_path: Path) -> None:
+    service_gpu = _gpu("nvidia", 0, "RTX 2060")
+    recipe_default_gpu = _gpu("amd", 0, "Radeon")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        service_default_gpu=service_gpu,
+    )
+    default_recipe = Recipe(name="default", gpu=recipe_default_gpu)
+    evaluated = evaluate_recipe(
+        _recipe(),
+        detect_file_sets(_entry())[0],
+        entry_id="test",
+        name="Test",
+        options=opts,
+        default_recipe=default_recipe,
+    )
+    assert evaluated.gpu == recipe_default_gpu
+    assert evaluated.provenance["gpu"] == FieldSource.DEFAULT

@@ -189,15 +189,24 @@ def _render_override_form(
 
         # --- GPU ---
         # Per-model device pin (ADR-039 §3). ``None`` = inherit from
-        # the service-level ``default_gpu`` (or the variant cascade).
-        # The dropdown reads the live host snapshot so freshly
-        # plugged-in devices appear after a worker restart.
+        # the service-level ``effective_default_gpu`` (the persisted
+        # value or the smart auto-pick). The dropdown reads the live
+        # host snapshot so freshly plugged-in devices appear after a
+        # worker restart. "(use service default)" is the explicit None
+        # option so operators can revert to the head honcho; the
+        # current selection previews what that resolves to so the
+        # operator sees the effective pick even when it is implicit.
         devices = svc.host_info.hardware.devices
         if devices:
             gpu_labels = ["(use service default)"] + [_gpu_choice_label(d) for d in devices]
             current_gpu = _coerce_gpu(current_overrides.get("gpu"))
             if current_gpu is None:
                 current_gpu_idx = 0
+                # Show what the service default resolves to so the
+                # operator can see the effective pin.
+                effective = svc.effective_default_gpu
+                if effective is not None:
+                    st.caption(f"Service default resolves to: {_gpu_choice_label(effective)}")
             else:
                 current_label = _gpu_choice_label(current_gpu)
                 current_gpu_idx = (
