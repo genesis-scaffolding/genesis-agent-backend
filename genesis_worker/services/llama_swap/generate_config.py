@@ -503,10 +503,22 @@ def evaluate_recipe(
     # head honcho for models without explicit device values.
     # Backward-compat: read the legacy ``gpu`` key as an alias for
     # ``device`` so operators with pre-refactor overrides.yaml still
-    # see their pin honoured.
-    device = ovr.get("device")
-    if device is None:
-        device = ovr.get("gpu")  # legacy alias
+    # see their pin honoured. After the yaml roundtrip, ``device``
+    # arrives as a plain dict (``{"vendor": ...}`` for GpuDevice,
+    # ``{}`` for CpuDevice); coerce back to a ComputeDevice here so
+    # the downstream ``_env_for`` and ``EvaluatedConfig`` see a
+    # polymorphic value, not a dict.
+    raw_device = ovr.get("device")
+    if raw_device is None:
+        raw_device = ovr.get("gpu")  # legacy alias
+    if isinstance(raw_device, dict):
+        from ...contracts.host import CpuDevice, GpuDevice
+
+        if "vendor" in raw_device:
+            raw_device = GpuDevice(**raw_device)
+        else:
+            raw_device = CpuDevice()
+    device = raw_device
     if device is None:
         device = recipe.device
     if device is None and default_recipe:

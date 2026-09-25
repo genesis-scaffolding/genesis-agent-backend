@@ -791,6 +791,51 @@ def test_legacy_gpu_override_key_still_works(options: BuildOptions, tmp_path: Pa
     assert evaluated.provenance["device"] == FieldSource.OVERRIDE
 
 
+def test_yaml_roundtrip_dict_coerces_to_compute_device(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    """Overrides loaded from yaml arrive as plain dicts; cascade coerces.
+
+    Regression: before this fix, the cascade passed a dict straight
+    into :func:`_env_for` which then crashed on ``dict.env_entry``.
+    The cascade now detects a dict under ``device`` / ``gpu`` and
+    reconstructs a :class:`GpuDevice` (or :class:`CpuDevice` for the
+    empty-dict case).
+    """
+    vk_binary = tmp_path / "vk-llama-server"
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(vk_binary),
+        binary_variant="vulkan",
+    )
+    # The shape produced by ``OverridesStore.save`` after a GpuDevice
+    # is round-tripped through yaml: a plain dict with a ``vendor`` key.
+    yaml_shape = {"vendor": "intel", "index": 0, "label": "Vulkan device 0"}
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": yaml_shape})
+    assert evaluated.device == _device("intel", 0, "Vulkan device 0")
+    assert evaluated.device.vendor == "intel"
+    # Env emission still works after the coercion.
+    assert evaluated.env == ("GGML_VK_VISIBLE_DEVICES=0",)
+
+
+def test_yaml_roundtrip_empty_dict_coerces_to_cpu_device(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    """CpuDevice's yaml shape is ``{}``; cascade reconstructs the instance."""
+    from genesis_worker.contracts.host import CpuDevice
+
+    cuda_binary = tmp_path / "cuda-llama-server"
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cuda_binary),
+        binary_variant="cuda",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": {}})
+    assert isinstance(evaluated.device, CpuDevice)
+    # CPU → no env entry, no variant match, no crash.
+    assert evaluated.env == ()
+
+
 def test_env_empty_when_no_device(options: BuildOptions) -> None:
     """No device at all → env is empty tuple, no entries emitted."""
     evaluated = _evaluate(_recipe(), options)
