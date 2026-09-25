@@ -130,9 +130,17 @@ with st.container(border=True):
 # Per-machine device pin (ADR-039). When ``default_device`` is unset,
 # the framework auto-picks deterministically (NVIDIA 0 → AMD 0 → Intel 0
 # → CPU); when set, that specific device is pinned and the matching
-# variant binary is required (fail loud at config-regen time). The
-# dropdown shows real devices only — no "use cascade" deflect — and the
-# smart pick is the pre-selected default.
+# variant binary is required (fail loud at config-regen time).
+#
+# CPU is *always* a selectable entry in the dropdown, synthesised from
+# ``CpuDevice()``. Hosts with no GPUs get a single-entry dropdown;
+# hosts with GPUs see the GPUs *and* CPU — picking CPU is an explicit
+# override of the GPU smart pick. CPU isn't a "detected device" so it
+# doesn't live in ``Hardware.devices``; the dropdown injects it here.
+def _dropdown_devices(devices: tuple) -> tuple:
+    return (*devices, CpuDevice())
+
+
 def _on_default_device_change() -> None:
     raw = st.session_state["status-default-device"]
     device = _coerce_device(raw)
@@ -142,36 +150,30 @@ def _on_default_device_change() -> None:
 
 with st.container(border=True):
     st.subheader("Default device")
-    devices = svc.host_info.hardware.devices
-    if not devices:
-        st.info("No GPUs detected on this host — the framework uses CPU.")
-    else:
-        device_labels = [_device_choice_label(d) for d in devices]
-        # Smart default = the framework's deterministic pick. Shown as
-        # the dropdown's pre-selected value when no explicit default_device
-        # is persisted.
-        current_device = svc.effective_default_device
-        current_label = _device_choice_label(current_device)
-        if current_label in device_labels:
-            current_idx = device_labels.index(current_label)
+    gpus = svc.host_info.hardware.devices
+    choices = _dropdown_devices(gpus)
+    device_labels = [_device_choice_label(d) for d in choices]
+    current_device = svc.effective_default_device
+    current_label = _device_choice_label(current_device)
+    current_idx = device_labels.index(current_label) if current_label in device_labels else 0
+    choice = st.selectbox(
+        "default device",
+        device_labels,
+        index=current_idx,
+        key="status-default-device",
+        on_change=_on_default_device_change,
+    )
+    chosen = next(
+        (d for d in choices if _device_choice_label(d) == choice),
+        None,
+    )
+    if chosen is not None:
+        if isinstance(chosen, CpuDevice):
+            st.caption("Pinned to CPU. Requires `llama-server-cpu` to be installed.")
         else:
-            current_idx = 0
-        choice = st.selectbox(
-            "default device",
-            device_labels,
-            index=current_idx,
-            key="status-default-device",
-            on_change=_on_default_device_change,
-        )
-        chosen = next(
-            (d for d in devices if _device_choice_label(d) == choice),
-            None,
-        )
-        if chosen is not None:
-            variant = chosen.variant
             st.caption(
                 f"Pinned to {chosen.vendor} idx {chosen.index}. "
-                f"Requires `llama-server-{variant}` to be installed."
+                f"Requires `llama-server-{chosen.variant}` to be installed."
             )
 
 

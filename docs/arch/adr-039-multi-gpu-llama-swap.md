@@ -145,14 +145,14 @@ The `_ENV_VAR_FOR` dict is the single seam for future backends. Adding ROCm = on
 
 ### 5. UI surfaces
 
-**Service-level default** (`services/llama_swap/ui/status.py`) gains a "Default GPU" container mirroring the existing "Variant" container:
+**Service-level default** (`services/llama_swap/ui/status.py`) gains a "Default device" container mirroring the existing "Variant" container:
 
-- Dropdown of `ctx.host_info.hardware.devices` (no "use cascade" deflect — every entry is a real device).
-- On change, calls `svc.set_default_gpu(value)` then `worker.regenerate_service_config(SERVICE_NAME)`.
+- Dropdown shows detected GPUs **plus** `CpuDevice` (synthesised entry, since CPU isn't a "detected device" but is always a valid choice). On a host with no GPUs, the dropdown collapses to a single CPU entry. On a host with GPUs, picking CPU is an explicit override of the GPU smart pick — no separate detour through the Variant dropdown required.
+- On change, calls `svc.set_default_device(value)` then `worker.regenerate_service_config(SERVICE_NAME)`.
 
-**Per-model override** (`services/llama_swap/ui/config_editor.py`) gains a "GPU" dropdown in `_render_override_form`:
+**Per-model override** (`services/llama_swap/ui/config_editor.py`) gains a "Device" dropdown in `_render_override_form`:
 
-- Dropdown of all `ctx.host_info.hardware.devices`, prefixed with "(use service default)" (= `None`).
+- Same composition as the service-level dropdown: GPUs + `CpuDevice`, prefixed with "(use service default)" (= `None`).
 - Save path unchanged (`svc.save_overrides_for_entry(entry_id, new_overrides)`).
 
 The service exposes `host_info` as a read-through property so the UI does not reach into the private context.
