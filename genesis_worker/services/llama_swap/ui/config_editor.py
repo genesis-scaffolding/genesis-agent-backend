@@ -126,6 +126,10 @@ def _render_effective(cfg: EvaluatedConfig) -> None:
                 _badge(cfg.provenance["gpu"]),
             )
         )
+    if cfg.env:
+        rows.append(
+            ("Env (per-model)", "\n".join(cfg.env), ""),
+        )
 
     rows.append(("Hardcoded flags (always)", " ".join(cfg.hardcoded_flags), ""))
 
@@ -474,5 +478,9 @@ with st.container(border=True):
 
             st.divider()
 
-            with st.expander("Raw cmd"):
+            with st.expander("Raw cmd + env"):
                 st.code(cfg.cmd)
+                if cfg.env:
+                    st.markdown("**Env (injected before exec):**")
+                    for entry in cfg.env:
+                        st.code(entry, language="bash")
