@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 
-from ...contracts import Catalog, ModelEntry
+from ...contracts import Catalog, GpuDevice, ModelEntry
 from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
@@ -62,6 +62,12 @@ class BuildOptions:
     bundled ``binary`` field but loses to per-model recipe ``binary`` overrides
     (e.g. bonsai → prism-llama.cpp). ``default_binary_rel`` stays as the final
     safety net for users who haven't migrated to the variant workflow.
+
+    ``binary_variant`` is the variant name (``"cuda" / "vulkan" / "cpu"``) that
+    produced ``default_binary``, or ``None`` for the legacy fallback path. The
+    cmd renderer uses it to pick the right device-selector env var
+    (``CUDA_VISIBLE_DEVICES`` vs ``GGML_VK_VISIBLE_DEVICES``). None means
+    ``default_binary_rel`` is in play and the renderer emits no env prefix.
     """
 
     repo_root: Path
@@ -69,6 +75,27 @@ class BuildOptions:
     mmproj_offload_over: int = DEFAULT_MMPROJ_OFFLOAD_OVER
     default_binary_rel: str = DEFAULT_BINARY_REL
     default_binary: str | None = None
+    binary_variant: str | None = None
+
+
+# Map ``(binary_variant, gpu.vendor)`` → the env var llama.cpp reads to
+# pick a device. Single seam for future backends (ADR-039 §4):
+# adding ROCm → one tuple; adding OpenVINO → one tuple.
+_ENV_VAR_FOR: dict[tuple[str, str], str] = {
+    ("cuda", "nvidia"): "CUDA_VISIBLE_DEVICES",
+    ("vulkan", "amd"): "GGML_VK_VISIBLE_DEVICES",
+    ("vulkan", "intel"): "GGML_VK_VISIBLE_DEVICES",
+}
+
+
+def _env_prefix(binary_variant: str | None, gpu: GpuDevice | None) -> str:
+    """Shell-style env-var prefix for the cmd, or empty when not applicable."""
+    if binary_variant is None or gpu is None:
+        return ""
+    env_var = _ENV_VAR_FOR.get((binary_variant, gpu.vendor))
+    if env_var is None:
+        return ""
+    return f"{env_var}={gpu.index} "
 
 
 @dataclass(frozen=True)
@@ -127,6 +154,7 @@ class EvaluatedConfig:
 
     extra_flags: tuple[str, ...] = ()
     ctx_size: int | None = None
+    gpu: GpuDevice | None = None
     hardcoded_flags: tuple[str, ...] = (
         "--kv-unified",
         "--jinja",
@@ -465,6 +493,11 @@ def evaluate_recipe(
     if not extra_flags and default_recipe:
         extra_flags = list(default_recipe.extra_flags)
 
+    # --- gpu with standard cascade (override > recipe > default > None) ---
+    gpu = ovr.get("gpu", recipe.gpu)
+    if gpu is None and default_recipe:
+        gpu = default_recipe.gpu
+
     provenance: dict[str, FieldSource] = {
         "binary": binary_source,
         "kv_cache": _source_simple(ovr, recipe, default_recipe, "kv_cache"),
@@ -481,6 +514,7 @@ def evaluate_recipe(
         "sampling": _source_recipe_only(ovr, recipe, "sampling"),
         "chat_template_kwargs": _source_recipe_only(ovr, recipe, "chat_template_kwargs"),
         "extra_flags": _source_recipe_only(ovr, recipe, "extra_flags"),
+        "gpu": _source_simple(ovr, recipe, default_recipe, "gpu"),
     }
 
     cmd = cmd_from_evaluated_dict(
@@ -499,6 +533,8 @@ def evaluate_recipe(
         chat_template_kwargs=chat_template_kwargs,
         extra_flags=tuple(extra_flags),
         provenance=provenance,
+        gpu=gpu,
+        binary_variant=options.binary_variant,
     )
 
     return EvaluatedConfig(
@@ -520,6 +556,7 @@ def evaluate_recipe(
         chat_template_kwargs=chat_template_kwargs,
         provenance=provenance,
         cmd=cmd,
+        gpu=gpu,
     )
 
 
@@ -540,6 +577,8 @@ def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
         sampling=evaluated.sampling,
         chat_template_kwargs=evaluated.chat_template_kwargs,
         provenance=evaluated.provenance,
+        gpu=evaluated.gpu,
+        binary_variant=None,  # legacy path; evaluate_recipe threads the real value
     )
 
 
@@ -560,16 +599,21 @@ def cmd_from_evaluated_dict(
     chat_template_kwargs: dict[str, Any] | None,
     provenance: dict[str, FieldSource] | None = None,
     extra_flags: tuple[str, ...] = (),
+    gpu: GpuDevice | None = None,
+    binary_variant: str | None = None,
 ) -> str:
     """Format the llama-server cmd string from resolved fields.
 
     Reads the structured fields directly (no re-resolution). Conditional
     emission depends on the files (``--no-mmproj-offload`` only when an
     mmproj is present; ``--spec-type draft-mtp`` only when files indicate
-    MTP support).
+    MTP support) and on the device selection (``CUDA_VISIBLE_DEVICES`` /
+    ``GGML_VK_VISIBLE_DEVICES`` only when the (variant, vendor) pair is
+    known; ADR-039 §4).
     """
     sections: list[str] = []
-    sections.append(f"{binary} \\")
+    prefix = _env_prefix(binary_variant, gpu)
+    sections.append(f"{prefix}{binary} \\")
     sections.append(f"  --model {files.main} \\")
 
     if files.mmproj:

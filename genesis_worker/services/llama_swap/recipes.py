@@ -14,6 +14,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from ...contracts.host import GpuDevice
+
 BUNDLED_RECIPES_PATH = Path(__file__).parent / "data" / "recipes.yaml"
 
 
@@ -109,6 +111,9 @@ class Recipe(BaseModel):
     ctx_size: int | None = None
     reasoning_budget: int | None = None
     reasoning_budget_message: str | None = None
+    # Pin a detected GPU for this model. ``None`` inherits from the
+    # service-level ``default_gpu`` (or the variant cascade). ADR-039.
+    gpu: GpuDevice | None = None
 
 
 class Recipes(BaseModel):

@@ -51,14 +51,14 @@ def _stub_proc_nvidia(monkeypatch: pytest.MonkeyPatch, exists: bool) -> None:
 
 
 def _stub_nvidia_smi(monkeypatch: pytest.MonkeyPatch, *, count: int, rc: int = 0) -> None:
-    """Stub ``subprocess.run`` for ``nvidia-smi -L``."""
+    """Stub ``subprocess.run`` for ``nvidia-smi --query-gpu=index,name``."""
 
     def fake_run(args: list[str], **kw: Any) -> subprocess.CompletedProcess:
-        if args[:2] == ["nvidia-smi", "-L"]:
+        if args[:2] == ["nvidia-smi", "--query-gpu=index,name"]:
             return subprocess.CompletedProcess(
                 args=args,
                 returncode=rc,
-                stdout="\n".join(f"GPU {i}: Test Card" for i in range(count)) + "\n",
+                stdout="\n".join(f"{i}, Test Card {i}" for i in range(count)) + "\n",
                 stderr="",
             )
         if args[:2] == ["docker", "info"]:
@@ -77,7 +77,7 @@ def _stub_docker_info(monkeypatch: pytest.MonkeyPatch, *, nvidia: bool) -> None:
         if args[:2] == ["docker", "info"]:
             text = "Runtimes: nvidia runc\n" if nvidia else "Runtimes: runc\n"
             return subprocess.CompletedProcess(args=args, returncode=0, stdout=text, stderr="")
-        if args[:2] == ["nvidia-smi", "-L"]:
+        if args[:2] == ["nvidia-smi", "--query-gpu=index,name"]:
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
         raise AssertionError(f"unexpected subprocess call: {args}")
 
@@ -90,7 +90,7 @@ def _stub_docker_info_text(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None
     def fake_run(args: list[str], **kw: Any) -> subprocess.CompletedProcess:
         if args[:2] == ["docker", "info"]:
             return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
-        if args[:2] == ["nvidia-smi", "-L"]:
+        if args[:2] == ["nvidia-smi", "--query-gpu=index,name"]:
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
         raise AssertionError(f"unexpected subprocess call: {args}")
 
@@ -205,6 +205,145 @@ def test_garbage_vendor_id_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert h == Hardware.empty()
 
 
+# --- per-device enumeration ----------------------------------------------
+
+
+def test_devices_empty_when_no_gpus(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=False)
+    _stub_nvidia_smi(monkeypatch, count=0)
+    h = collect_hardware_info()
+    assert h.devices == ()
+
+
+def test_devices_nvidia_multi(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Two NVIDIA cards enumerated by nvidia-smi → two GpuDevice entries with real names."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x10DE), ("card1", 0x10DE)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+    _stub_docker_info(monkeypatch, nvidia=True)
+    _stub_nvidia_smi(monkeypatch, count=2)
+    h = collect_hardware_info()
+    assert h.devices == (
+        GpuDevice(vendor="nvidia", index=0, label="Test Card 0"),
+        GpuDevice(vendor="nvidia", index=1, label="Test Card 1"),
+    )
+
+
+def test_devices_amd_single(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """One AMD card → one device with generic Vulkan-style label."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x1002)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=False)
+    _stub_nvidia_smi(monkeypatch, count=0)
+    _stub_docker_info(monkeypatch, nvidia=False)
+    h = collect_hardware_info()
+    assert h.devices == (GpuDevice(vendor="amd", index=0, label="Vulkan device 0"),)
+
+
+def test_devices_intel_single(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x8086)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=False)
+    _stub_nvidia_smi(monkeypatch, count=0)
+    _stub_docker_info(monkeypatch, nvidia=False)
+    h = collect_hardware_info()
+    assert h.devices == (GpuDevice(vendor="intel", index=0, label="Vulkan device 0"),)
+
+
+def test_devices_mixed_nvidia_intel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Laptop case: NVIDIA discrete + Intel iGPU. NVIDIA first, then Intel."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card1", 0x10DE), ("card2", 0x8086)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+    _stub_docker_info(monkeypatch, nvidia=True)
+    _stub_nvidia_smi(monkeypatch, count=1)
+    h = collect_hardware_info()
+    assert h.devices == (
+        GpuDevice(vendor="nvidia", index=0, label="Test Card 0"),
+        GpuDevice(vendor="intel", index=0, label="Vulkan device 0"),
+    )
+
+
+def test_devices_amd_multi_sequential_indices(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two AMD cards get sequential indices 0, 1."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x1002), ("card1", 0x1002)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=False)
+    _stub_nvidia_smi(monkeypatch, count=0)
+    _stub_docker_info(monkeypatch, nvidia=False)
+    h = collect_hardware_info()
+    assert h.devices == (
+        GpuDevice(vendor="amd", index=0, label="Vulkan device 0"),
+        GpuDevice(vendor="amd", index=1, label="Vulkan device 1"),
+    )
+
+
+def test_devices_nvidia_fills_pci_gap_when_smi_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PCI sees 2 cards but nvidia-smi enumerates 1 → second device gets generic label."""
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x10DE), ("card1", 0x10DE)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+    _stub_docker_info(monkeypatch, nvidia=True)
+    _stub_nvidia_smi(monkeypatch, count=1)
+    h = collect_hardware_info()
+    assert h.devices == (
+        GpuDevice(vendor="nvidia", index=0, label="Test Card 0"),
+        GpuDevice(vendor="nvidia", index=1, label="NVIDIA device 1"),
+    )
+
+
+def test_devices_unparseable_nvidia_smi_falls_back_to_pci_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """nvidia-smi returns unparseable lines → PCI fallback adds a generic-label device.
+
+    The driver is loaded (PCI saw the card), but we cannot enumerate
+    the device properly via nvidia-smi. The collector does not crash;
+    it surfaces one device with a generic label so the operator can
+    still try to select index 0.
+    """
+    from genesis_worker.contracts.host import GpuDevice
+
+    _fake_drm_cards(monkeypatch, tmp_path, [("card0", 0x10DE)])
+    _patch_drm_glob(monkeypatch, tmp_path)
+    _stub_proc_nvidia(monkeypatch, exists=True)
+
+    def fake_run(args: list[str], **kw: Any) -> subprocess.CompletedProcess:
+        if args[:2] == ["nvidia-smi", "--query-gpu=index,name"]:
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="not-a-number, name\nbroken-line\n",
+                stderr="",
+            )
+        if args[:2] == ["docker", "info"]:
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout="Runtimes: runc\n", stderr=""
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hardware.subprocess, "run", fake_run)
+    h = collect_hardware_info()
+    assert h.devices == (GpuDevice(vendor="nvidia", index=0, label="NVIDIA device 0"),)
+
+
 # --- nvidia-smi interaction ----------------------------------------------
 
 
@@ -217,7 +356,7 @@ def test_nvidia_smi_missing_binary_treated_as_zero(
     _stub_proc_nvidia(monkeypatch, exists=False)
 
     def fake_run(args: list[str], **kw: Any) -> subprocess.CompletedProcess:
-        if args[:2] == ["nvidia-smi", "-L"]:
+        if args[:2] == ["nvidia-smi", "--query-gpu=index,name"]:
             raise FileNotFoundError("nvidia-smi not on PATH")
         if args[:2] == ["docker", "info"]:
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")

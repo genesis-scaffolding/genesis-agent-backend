@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
+from genesis_worker.contracts.host import GpuDevice
 from genesis_worker.utils.ui._nav import to_relative
 from genesis_worker.utils.ui._service_controls import render_service_controls
 from genesis_worker.utils.ui._tail_log import render_tail_log
@@ -12,6 +15,26 @@ SERVICE_NAME = "llama_swap"
 
 worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
+
+
+def _gpu_choice_label(device: GpuDevice) -> str:
+    """Display label for a device in a selectbox."""
+    return f"{device.label}  ({device.vendor}, idx {device.index})"
+
+
+def _coerce_gpu(raw: Any) -> GpuDevice | None:
+    """Hydrate an overrides-style dict into a GpuDevice, or return None."""
+    if raw is None:
+        return None
+    if isinstance(raw, GpuDevice):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            return GpuDevice(**raw)
+        except (TypeError, ValueError):
+            return None
+    return None
+
 
 st.title(svc.display_name)
 
@@ -90,6 +113,56 @@ with st.container(border=True):
             st.warning(f"No variant matched. Falling back to legacy: `{legacy}`")
         else:
             st.error("No llama-server binary available. Install a variant via the Binaries page.")
+
+
+# --- Default GPU ----------------------------------------------------------
+# Per-machine device pin (ADR-039). When set, the matching variant binary
+# is required; the service fails loud at config-regen time if it is
+# missing (the cascade is bypassed, not silently fallen-back). The
+# dropdown reads the host snapshot at every render — freshly plugged-in
+# devices appear after a worker restart.
+def _on_default_gpu_change() -> None:
+    raw = st.session_state["status-default-gpu"]
+    gpu = None if raw == "(use cascade)" else _coerce_gpu(raw)
+    svc.set_default_gpu(gpu)
+    worker.regenerate_service_config(SERVICE_NAME)
+
+
+with st.container(border=True):
+    st.subheader("Default GPU")
+    devices = svc.host_info.hardware.devices
+    if not devices:
+        st.info("No GPUs detected on this host.")
+    else:
+        gpu_labels = ["(use cascade)"] + [_gpu_choice_label(d) for d in devices]
+        # Allow the current value to be selected even if its label is
+        # built from a dict (e.g. after a worker restart with the same
+        # persisted default_gpu).
+        current_gpu = svc.default_gpu
+        if current_gpu is None:
+            current_idx = 0
+        else:
+            current_label = _gpu_choice_label(current_gpu)
+            current_idx = gpu_labels.index(current_label) if current_label in gpu_labels else 0
+        choice = st.selectbox(
+            "default GPU",
+            gpu_labels,
+            index=current_idx,
+            key="status-default-gpu",
+            on_change=_on_default_gpu_change,
+            disabled=len(devices) == 0,
+        )
+        if choice != "(use cascade)":
+            chosen = next(
+                (d for d in devices if _gpu_choice_label(d) == choice),
+                None,
+            )
+            if chosen is not None:
+                variant = "cuda" if chosen.vendor == "nvidia" else "vulkan"
+                st.caption(
+                    f"Pinned to {chosen.vendor} idx {chosen.index}. "
+                    f"Requires `llama-server-{variant}` to be installed."
+                )
 
 
 # --- Binaries --------------------------------------------------------------
