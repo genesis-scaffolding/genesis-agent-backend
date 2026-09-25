@@ -36,7 +36,7 @@ import glob
 import os
 import subprocess
 
-from ...contracts.host import Hardware
+from ...contracts.host import GpuDevice, Hardware
 
 _VENDOR_NVIDIA = 0x10DE
 _VENDOR_AMD = 0x1002
@@ -91,27 +91,56 @@ def _enumerate_pci_vendors() -> tuple[int, int, int]:
     return n, a, i
 
 
-def _nvidia_smi_count() -> int:
-    """Run ``nvidia-smi -L`` and count the GPU entries.
+def _nvidia_smi_devices() -> tuple[GpuDevice, ...]:
+    """Query ``nvidia-smi`` for per-device index + name.
 
-    Returns 0 on any failure (binary missing, daemon unreachable,
-    timeout, non-zero exit). The string ``"GPU "`` is the standard
-    prefix on each list line; counting occurrences is more robust
-    than splitting lines because some drivers emit extra blank lines.
+    Returns an empty tuple on any failure (binary missing, daemon
+    unreachable, timeout, non-zero exit). Lines that fail to parse
+    are skipped, not raised — the collector never throws.
     """
     try:
         result = subprocess.run(
-            ["nvidia-smi", "-L"],
+            ["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
             timeout=_NVSMILIST_TIMEOUT_S,
             check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return 0
+        return ()
     if result.returncode != 0:
-        return 0
-    return sum(1 for line in result.stdout.splitlines() if line.startswith("GPU "))
+        return ()
+    devices: list[GpuDevice] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split(",", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            idx = int(parts[0].strip())
+        except ValueError:
+            continue
+        name = parts[1].strip() or f"NVIDIA device {idx}"
+        devices.append(GpuDevice(vendor="nvidia", index=idx, label=name))
+    return tuple(devices)
+
+
+def _pci_devices(amd_count: int, intel_count: int) -> tuple[GpuDevice, ...]:
+    """Build AMD/Intel device list from PCI enumeration counts.
+
+    Sequential per-vendor indices (``amd_count`` AMD devices indexed
+    0..amd_count-1, then Intel). Labels are generic
+    ``"Vulkan device {i}"`` — we do not ship a Vulkan enumeration
+    probe; the operator learns the real mapping from llama.cpp errors.
+    """
+    devices: list[GpuDevice] = []
+    for i in range(amd_count):
+        devices.append(GpuDevice(vendor="amd", index=i, label=f"Vulkan device {i}"))
+    for i in range(intel_count):
+        devices.append(GpuDevice(vendor="intel", index=i, label=f"Vulkan device {i}"))
+    return tuple(devices)
 
 
 def _docker_info_lines() -> list[str] | None:
@@ -174,12 +203,12 @@ def _nvidia_cdi_available(lines: list[str] | None = None) -> bool:
 def collect_hardware_info() -> Hardware:
     """One-shot hardware snapshot. Cached for the lifetime of the process."""
     nvidia_count_pci, amd_count_pci, intel_count = _enumerate_pci_vendors()
-    nvidia_count_smi = _nvidia_smi_count()
+    nvidia_devices_smi = _nvidia_smi_devices()
     # Trust nvidia-smi's count when both agree on presence; otherwise
     # the higher of the two (PCI enumeration finds every card, nvidia-smi
     # only reports cards the driver is talking to). Falls back to PCI
     # count when nvidia-smi is missing.
-    nvidia_count = max(nvidia_count_pci, nvidia_count_smi)
+    nvidia_count = max(nvidia_count_pci, len(nvidia_devices_smi))
     nvidia = nvidia_count > 0
     driver_loaded = os.path.exists(_PROC_NVIDIA_DRIVER)
     if nvidia:
@@ -189,6 +218,16 @@ def collect_hardware_info() -> Hardware:
     else:
         runtime = False
         cdi = False
+
+    # Build the per-device list. Order: NVIDIA first (real names from
+    # nvidia-smi), then PCI-detected AMD/Intel. If PCI saw more NVIDIA
+    # cards than nvidia-smi enumerated, fill the gap with generic labels.
+    devices: list[GpuDevice] = list(nvidia_devices_smi)
+    if nvidia_count_pci > len(nvidia_devices_smi):
+        for i in range(len(nvidia_devices_smi), nvidia_count_pci):
+            devices.append(GpuDevice(vendor="nvidia", index=i, label=f"NVIDIA device {i}"))
+    devices.extend(_pci_devices(amd_count_pci, intel_count))
+
     return Hardware(
         nvidia=nvidia,
         nvidia_count=nvidia_count,
@@ -200,6 +239,7 @@ def collect_hardware_info() -> Hardware:
         amd_vendor_id_present=amd_count_pci > 0,
         intel_igpu=intel_count > 0,
         intel_count=intel_count,
+        devices=tuple(devices),
     )
 
 
