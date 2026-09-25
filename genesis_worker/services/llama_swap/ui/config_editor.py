@@ -204,44 +204,50 @@ def _render_override_form(
         # --- Device ---
         # Per-model compute device pin (ADR-039 §3). ``None`` = inherit
         # from the service-level ``effective_default_device`` (the
-        # persisted value or the smart auto-pick). The dropdown reads
-        # the live host snapshot so freshly plugged-in devices appear
-        # after a worker restart. "(use service default)" is the
-        # explicit None option so operators can revert to the head
-        # honcho; the current selection previews what that resolves to
-        # so the operator sees the effective pick even when it is
-        # implicit.
-        devices = svc.host_info.hardware.devices
-        if devices:
-            device_labels = ["(use service default)"] + [_device_choice_label(d) for d in devices]
-            # Read the canonical ``device`` key first, fall back to
-            # the legacy ``gpu`` alias for backward compat with
-            # pre-refactor overrides.yaml.
-            current_device = _coerce_device(
-                current_overrides.get("device") or current_overrides.get("gpu")
+        # persisted value or the smart auto-pick). The dropdown shows
+        # detected GPUs *and* ``CpuDevice`` (synthesised, since CPU
+        # isn't a "detected device" but is always a valid choice).
+        # "(use service default)" is the explicit None option so
+        # operators can revert to the head honcho; the current
+        # selection previews what that resolves to so the operator
+        # sees the effective pick even when it is implicit.
+        gpus = svc.host_info.hardware.devices
+        # Always include CPU as a selectable entry, even when GPUs are
+        # present. CPU isn't in ``Hardware.devices`` so we inject it
+        # here; the user can pick it as an explicit override of the
+        # GPU smart pick (or as the only option on a device-less host).
+        dropdown_choices: tuple = (*gpus, CpuDevice())
+        device_labels = ["(use service default)"] + [
+            _device_choice_label(d) for d in dropdown_choices
+        ]
+        # Read the canonical ``device`` key first, fall back to the
+        # legacy ``gpu`` alias for backward compat with pre-refactor
+        # overrides.yaml.
+        current_device = _coerce_device(
+            current_overrides.get("device") or current_overrides.get("gpu")
+        )
+        if current_device is None:
+            current_device_idx = 0
+            effective = svc.effective_default_device
+            st.caption(f"Service default resolves to: {_device_choice_label(effective)}")
+        else:
+            current_label = _device_choice_label(current_device)
+            current_device_idx = (
+                device_labels.index(current_label) if current_label in device_labels else 0
             )
-            if current_device is None:
-                current_device_idx = 0
-                effective = svc.effective_default_device
-                st.caption(f"Service default resolves to: {_device_choice_label(effective)}")
-            else:
-                current_label = _device_choice_label(current_device)
-                current_device_idx = (
-                    device_labels.index(current_label) if current_label in device_labels else 0
-                )
-            device_choice = st.selectbox(
-                "Device",
-                device_labels,
-                index=current_device_idx,
-                key=f"ov-{entry_id}-device",
+        device_choice = st.selectbox(
+            "Device",
+            device_labels,
+            index=current_device_idx,
+            key=f"ov-{entry_id}-device",
+        )
+        if device_choice != "(use service default)":
+            chosen_device = next(
+                (d for d in dropdown_choices if _device_choice_label(d) == device_choice),
+                None,
             )
-            if device_choice != "(use service default)":
-                chosen_device = next(
-                    (d for d in devices if _device_choice_label(d) == device_choice),
-                    None,
-                )
-                if chosen_device is not None:
-                    new_overrides["device"] = chosen_device
+            if chosen_device is not None:
+                new_overrides["device"] = chosen_device
 
         # --- KV Cache ---
         kv_val = st.text_input(
