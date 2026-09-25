@@ -94,14 +94,22 @@ _ENV_VAR_FOR: dict[tuple[str, str], str] = {
 }
 
 
-def _env_prefix(binary_variant: str | None, gpu: GpuDevice | None) -> str:
-    """Shell-style env-var prefix for the cmd, or empty when not applicable."""
+def _env_for(binary_variant: str | None, gpu: GpuDevice | None) -> tuple[str, ...]:
+    """Env-var entries for the child process, or empty when not applicable.
+
+    Returns a tuple of ``"NAME=value"`` strings ready for the
+    ``models.*.env`` YAML field that llama-swap injects into the
+    command's environment before exec (see llama-swap docs:
+    ``kb/guides/model-runtime/writing-cmd.md``). Empty tuple when no
+    gpu is selected or the (variant, vendor) combo is unknown — silent
+    no-op, matching the prior prefix-based behaviour.
+    """
     if binary_variant is None or gpu is None:
-        return ""
+        return ()
     env_var = _ENV_VAR_FOR.get((binary_variant, gpu.vendor))
     if env_var is None:
-        return ""
-    return f"{env_var}={gpu.index} "
+        return ()
+    return (f"{env_var}={gpu.index}",)
 
 
 @dataclass(frozen=True)
@@ -161,6 +169,11 @@ class EvaluatedConfig:
     extra_flags: tuple[str, ...] = ()
     ctx_size: int | None = None
     gpu: GpuDevice | None = None
+    # Env-var entries to set on the child process. Populated from
+    # ``gpu`` via :func:`_env_for`. Emitted to ``models.*.env`` in the
+    # YAML payload; llama-swap injects them before exec'ing ``cmd``
+    # (ADR-039 §4).
+    env: tuple[str, ...] = ()
     hardcoded_flags: tuple[str, ...] = (
         "--kv-unified",
         "--jinja",
@@ -568,6 +581,7 @@ def evaluate_recipe(
         provenance=provenance,
         cmd=cmd,
         gpu=gpu,
+        env=_env_for(options.binary_variant, gpu),
     )
 
 
@@ -623,8 +637,7 @@ def cmd_from_evaluated_dict(
     known; ADR-039 §4).
     """
     sections: list[str] = []
-    prefix = _env_prefix(binary_variant, gpu)
-    sections.append(f"{prefix}{binary} \\")
+    sections.append(f"{binary} \\")
     sections.append(f"  --model {files.main} \\")
 
     if files.mmproj:
@@ -770,13 +783,19 @@ def build_entry(
         options=options,
         overrides=overrides,
     )
-    return entry_id, {
+    payload: dict[str, Any] = {
         "name": evaluated.name,
         "cmd": evaluated.cmd + "\n",
         "proxy": "http://127.0.0.1:${PORT}",
         "ttl": 0,
         "resolved_from": evaluated.matched_recipe,
     }
+    # Only emit ``env`` when there is something to inject. Empty list
+    # clutters the rendered YAML and is the default for the no-gpu
+    # case (every host without GPUs, every cpu binary).
+    if evaluated.env:
+        payload["env"] = list(evaluated.env)
+    return entry_id, payload
 
 
 def build_config(

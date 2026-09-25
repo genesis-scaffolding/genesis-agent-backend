@@ -565,8 +565,10 @@ def test_evaluate_recipe_gpu_unset_propagates_none(options: BuildOptions) -> Non
 
 
 def test_cmd_no_env_prefix_when_gpu_unset(options: BuildOptions) -> None:
-    """Single-GPU hosts that leave gpu unset keep a byte-identical cmd."""
+    """Single-GPU hosts that leave gpu unset have an empty env list."""
     evaluated = _evaluate(_recipe(), options)
+    assert evaluated.env == ()
+    # Cmd stays shell-free; no inline env-var prefix.
     assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
     assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
 
@@ -574,7 +576,7 @@ def test_cmd_no_env_prefix_when_gpu_unset(options: BuildOptions) -> None:
 def test_cmd_emits_cuda_visible_devices_for_cuda_binary(
     options: BuildOptions, tmp_path: Path
 ) -> None:
-    """binary_variant=cuda + gpu=nvidia → CUDA_VISIBLE_DEVICES=N prefix."""
+    """binary_variant=cuda + gpu=nvidia → CUDA_VISIBLE_DEVICES=0 in env list."""
     cuda_binary = tmp_path / "cuda-llama-server"
     cuda_binary.write_text("#!/bin/sh\n")
     opts = BuildOptions(
@@ -585,11 +587,13 @@ def test_cmd_emits_cuda_visible_devices_for_cuda_binary(
     evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 0, "RTX 2060")})
     assert evaluated.gpu is not None
     assert evaluated.gpu.vendor == "nvidia"
-    assert evaluated.cmd.startswith(f"CUDA_VISIBLE_DEVICES=0 {cuda_binary} \\")
+    assert evaluated.env == ("CUDA_VISIBLE_DEVICES=0",)
+    # Cmd stays shell-free; no inline prefix.
+    assert evaluated.cmd.startswith(f"{cuda_binary} \\")
 
 
 def test_cmd_emits_vk_visible_devices_for_vulkan_amd(options: BuildOptions, tmp_path: Path) -> None:
-    """binary_variant=vulkan + gpu=amd → GGML_VK_VISIBLE_DEVICES=N prefix."""
+    """binary_variant=vulkan + gpu=amd → GGML_VK_VISIBLE_DEVICES=0 in env list."""
     vk_binary = tmp_path / "vk-llama-server"
     vk_binary.write_text("#!/bin/sh\n")
     opts = BuildOptions(
@@ -598,7 +602,8 @@ def test_cmd_emits_vk_visible_devices_for_vulkan_amd(options: BuildOptions, tmp_
         binary_variant="vulkan",
     )
     evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("amd", 0, "Vulkan device 0")})
-    assert evaluated.cmd.startswith(f"GGML_VK_VISIBLE_DEVICES=0 {vk_binary} \\")
+    assert evaluated.env == ("GGML_VK_VISIBLE_DEVICES=0",)
+    assert evaluated.cmd.startswith(f"{vk_binary} \\")
 
 
 def test_cmd_emits_vk_visible_devices_for_vulkan_intel(
@@ -612,13 +617,14 @@ def test_cmd_emits_vk_visible_devices_for_vulkan_intel(
         binary_variant="vulkan",
     )
     evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("intel", 0, "Vulkan device 0")})
-    assert evaluated.cmd.startswith(f"GGML_VK_VISIBLE_DEVICES=0 {vk_binary} \\")
+    assert evaluated.env == ("GGML_VK_VISIBLE_DEVICES=0",)
+    assert evaluated.cmd.startswith(f"{vk_binary} \\")
 
 
 def test_cmd_emits_uses_specific_index_not_always_zero(
     options: BuildOptions, tmp_path: Path
 ) -> None:
-    """Index 2 → CUDA_VISIBLE_DEVICES=2."""
+    """Index 2 → CUDA_VISIBLE_DEVICES=2 in the env entry."""
     cuda_binary = tmp_path / "cuda-llama-server"
     opts = BuildOptions(
         repo_root=tmp_path,
@@ -626,18 +632,17 @@ def test_cmd_emits_uses_specific_index_not_always_zero(
         binary_variant="cuda",
     )
     evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 2, "third card")})
-    assert evaluated.cmd.startswith(f"CUDA_VISIBLE_DEVICES=2 {cuda_binary} \\")
+    assert evaluated.env == ("CUDA_VISIBLE_DEVICES=2",)
 
 
-def test_cmd_no_prefix_when_variant_legacy(options: BuildOptions) -> None:
-    """binary_variant=None (legacy fallback) → no env prefix regardless of gpu."""
+def test_cmd_no_env_when_variant_legacy(options: BuildOptions) -> None:
+    """binary_variant=None (legacy fallback) → no env entries regardless of gpu."""
     evaluated = _evaluate(_recipe(), options, overrides={"gpu": _gpu()})
-    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
-    assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
+    assert evaluated.env == ()
 
 
-def test_cmd_no_prefix_when_vendor_mismatch(options: BuildOptions, tmp_path: Path) -> None:
-    """gpu=amd but binary is cuda → unknown combo, no prefix (silent no-op)."""
+def test_cmd_no_env_when_vendor_mismatch(options: BuildOptions, tmp_path: Path) -> None:
+    """gpu=amd but binary is cuda → unknown combo, no env (silent no-op)."""
     cuda_binary = tmp_path / "cuda-llama-server"
     opts = BuildOptions(
         repo_root=tmp_path,
@@ -645,17 +650,13 @@ def test_cmd_no_prefix_when_vendor_mismatch(options: BuildOptions, tmp_path: Pat
         binary_variant="cuda",
     )
     evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("amd", 0, "mismatched")})
-    # Should fall back to no prefix (the cmd layer does not crash on
-    # unknown (variant, vendor) pairs; the service layer is the place
-    # that fails loud if the binary doesn't match the gpu vendor).
-    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
-    assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
-    # The cmd still works (no prefix, just the binary).
+    assert evaluated.env == ()
+    # Cmd still works (no env, just the binary).
     assert evaluated.cmd.startswith(f"{cuda_binary} \\")
 
 
-def test_cmd_no_prefix_when_cpu_binary(options: BuildOptions, tmp_path: Path) -> None:
-    """binary_variant=cpu + any gpu → no prefix (CPU doesn't honor either env var)."""
+def test_cmd_no_env_when_cpu_binary(options: BuildOptions, tmp_path: Path) -> None:
+    """binary_variant=cpu + any gpu → no env (CPU doesn't honor either env var)."""
     cpu_binary = tmp_path / "cpu-llama-server"
     opts = BuildOptions(
         repo_root=tmp_path,
@@ -663,7 +664,7 @@ def test_cmd_no_prefix_when_cpu_binary(options: BuildOptions, tmp_path: Path) ->
         binary_variant="cpu",
     )
     evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 0, "ignored")})
-    assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
+    assert evaluated.env == ()
 
 
 def test_gpu_override_wins_over_recipe(options: BuildOptions) -> None:
@@ -770,3 +771,80 @@ def test_recipe_default_beats_service_default_gpu(options: BuildOptions, tmp_pat
     )
     assert evaluated.gpu == recipe_default_gpu
     assert evaluated.provenance["gpu"] == FieldSource.DEFAULT
+
+
+def test_env_empty_when_no_gpu(options: BuildOptions) -> None:
+    """No gpu at all → env is empty tuple, no entries emitted."""
+    evaluated = _evaluate(_recipe(), options)
+    assert evaluated.env == ()
+
+
+def test_emit_payload_includes_env_for_cuda_gpu(tmp_path: Path) -> None:
+    """YAML payload emits ``env: [CUDA_VISIBLE_DEVICES=N]`` for the right combo."""
+    from genesis_worker.services.llama_swap.generate_config import (
+        build_config,
+        emit_payload,
+    )
+
+    cuda_binary = tmp_path / "cuda-llama-server"
+    cuda_binary.write_text("#!/bin/sh\n")
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cuda_binary),
+        binary_variant="cuda",
+        service_default_gpu=_gpu("nvidia", 0, "RTX 2060"),
+    )
+    entries = build_config(_catalog(), _recipes(), options=opts)
+    payload = emit_payload(entries, root="/tmp", generated_at="2026-01-01T00:00:00+00:00")
+    first_model = next(iter(payload["models"].values()))
+    assert first_model["env"] == ["CUDA_VISIBLE_DEVICES=0"]
+    # And the cmd is shell-free.
+    assert first_model["cmd"].lstrip().startswith(f"{cuda_binary} \\")
+
+
+def test_emit_payload_omits_env_when_empty(tmp_path: Path) -> None:
+    """No env entries → no ``env`` key in the YAML payload (no clutter)."""
+    from genesis_worker.services.llama_swap.generate_config import (
+        build_config,
+        emit_payload,
+    )
+
+    opts = BuildOptions(repo_root=tmp_path)  # no service_default_gpu, no variant
+    entries = build_config(_catalog(), _recipes(), options=opts)
+    payload = emit_payload(entries, root="/tmp", generated_at="2026-01-01T00:00:00+00:00")
+    first_model = next(iter(payload["models"].values()))
+    assert "env" not in first_model
+
+
+def _catalog():
+    from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
+
+    return Catalog(
+        root="/tmp",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            ModelEntry(
+                source="huggingface",
+                name="org/test-model",
+                total_bytes=1_000_000_000,
+                directory="/tmp/vault/test",
+                pieces=[
+                    ModelPiece(
+                        path=Path("/tmp/vault/test/foo.gguf"),
+                        filename="foo.gguf",
+                        bytes=1_000_000_000,
+                        role="main",
+                    )
+                ],
+                notes=[],
+                extra={},
+            )
+        ],
+    )
+
+
+def _recipes():
+    from genesis_worker.services.llama_swap.recipes import Recipes
+
+    return Recipes(default=_recipe(), matchable=[])

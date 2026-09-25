@@ -93,11 +93,13 @@ The **service-level `default_gpu` is part of the cascade**, sitting between the 
 
 Per-model overrides continue to flow through `OverridesStore` (unstructured dict). No schema change to the storage format.
 
-### 4. Cmd emission rule with the `_ENV_VAR_FOR` extensibility seam
+### 4. Per-model `env` emission with the `_ENV_VAR_FOR` extensibility seam
 
-`BuildOptions` gains `binary_variant: str | None = None`. The service populates it from `_options.llama_server_variant` (or `None` when the legacy fallback path is active). It threads through `evaluate_recipe` → `cmd_from_evaluated_dict`.
+`BuildOptions` gains `binary_variant: str | None = None`. The service populates it from `_options.llama_server_variant` (or `None` when the legacy fallback path is active). It threads through `evaluate_recipe` → `_env_for` → `EvaluatedConfig.env`.
 
-`cmd_from_evaluated_dict` prepends an env-var prefix to the rendered cmd when all three conditions hold:
+`llama-swap` parses `cmd` as an argv array (not a shell string), and exposes a separate `models.*.env` field as a list of `NAME=value` strings injected into the child process's environment before exec (see llama-swap docs: `kb/guides/model-runtime/writing-cmd.md`). We use that field rather than an inline `KEY=VAL binary` prefix because the prefix would be parsed by `os/exec` as a literal executable name and fail with `"executable file not found in $PATH"` (the bug that prompted this amendment).
+
+`EvaluatedConfig.env` is populated from `_env_for(binary_variant, gpu)` when all three conditions hold:
 
 1. `gpu` is non-`None`.
 2. `binary_variant` is non-`None`.
@@ -109,28 +111,43 @@ _ENV_VAR_FOR: dict[tuple[str, str], str] = {
     ("vulkan", "amd"):    "GGML_VK_VISIBLE_DEVICES",
     ("vulkan", "intel"):  "GGML_VK_VISIBLE_DEVICES",
     # Future extensibility hooks (do not implement now):
-    # ("rocm", "amd"):      "HIP_VISIBLE_DEVICES",
+    # ("rocm", "amd"):       "HIP_VISIBLE_DEVICES",
     # ("openvino", "intel"): "ONEAPI_DEVICE_SELECTOR",
 }
 
-def _env_prefix(binary_variant: str | None, gpu: GpuDevice | None) -> str:
+def _env_for(binary_variant: str | None, gpu: GpuDevice | None) -> tuple[str, ...]:
     if binary_variant is None or gpu is None:
-        return ""
+        return ()
     env_var = _ENV_VAR_FOR.get((binary_variant, gpu.vendor))
     if env_var is None:
-        return ""
-    return f"{env_var}={gpu.index} "
+        return ()
+    return (f"{env_var}={gpu.index}",)
 ```
 
-The cmd becomes `<env_prefix><binary> \`. Single-GPU hosts that leave `default_gpu` unset get a byte-identical cmd to today — existing golden-file tests in `test_generate_config.py` continue to pass without modification. When `binary_variant is None` (legacy fallback path), no prefix is emitted regardless of `gpu` — we do not know what backend the legacy binary uses.
+`build_entry` adds an `env` key to the per-model YAML dict only when non-empty (so single-GPU / no-pin hosts don't get an `env: []` clutter line in their `config.yaml`):
 
-The `_ENV_VAR_FOR` dict is the single seam for future backends. Adding ROCm = one new tuple; adding OpenVINO = one new tuple. No conditional logic in the cmd renderer.
+```yaml
+models:
+  peculiar-ragdoll-sharp-spark-x2.5-4b-gguf:
+    cmd: |
+      /path/to/llama-server \
+        --model /path/to/model.gguf \
+        ...
+    env:
+      - "CUDA_VISIBLE_DEVICES=0"
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: 0
+```
+
+The rendered `cmd` is shell-free — no inline `KEY=VAL` prefix — and stays byte-identical to today's output when no gpu is selected (existing tests in `test_generate_config.py` continue to pass without modification). When `binary_variant is None` (legacy fallback path), no env entries are emitted regardless of `gpu` — we do not know what backend the legacy binary uses.
+
+The `_ENV_VAR_FOR` dict is the single seam for future backends. Adding ROCm = one new tuple; adding OpenVINO = one new tuple. No new conditional logic.
 
 ### 5. UI surfaces
 
 **Service-level default** (`services/llama_swap/ui/status.py`) gains a "Default GPU" container mirroring the existing "Variant" container:
 
-- Dropdown of `ctx.host_info.hardware.devices`, prefixed with "(use cascade)".
+- Dropdown of `ctx.host_info.hardware.devices` (no "use cascade" deflect — every entry is a real device).
 - On change, calls `svc.set_default_gpu(value)` then `worker.regenerate_service_config(SERVICE_NAME)`.
 
 **Per-model override** (`services/llama_swap/ui/config_editor.py`) gains a "GPU" dropdown in `_render_override_form`:
