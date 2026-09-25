@@ -542,33 +542,29 @@ def test_cmd_c_flag_only_when_both_fit_ctx_and_ctx_size_set(
 
 
 # ---------------------------------------------------------------------------
-# gpu field + env-var cmd prefix (ADR-039 §3, §4)
+# device field + env emission (ADR-039 §3, §4)
 # ---------------------------------------------------------------------------
 
 
-def _gpu(vendor: str = "nvidia", index: int = 0, label: str = "Test Card"):
+def _device(vendor: str = "nvidia", index: int = 0, label: str = "Test Card"):
     from genesis_worker.contracts.host import GpuDevice
 
     return GpuDevice(vendor=vendor, index=index, label=label)
 
 
-def test_evaluate_recipe_gpu_unset_propagates_none(options: BuildOptions) -> None:
-    """No gpu anywhere → no env prefix in the cmd."""
+def test_evaluate_recipe_device_unset_propagates_none(options: BuildOptions) -> None:
+    """No device anywhere → no env entry in the cmd."""
     evaluated = _evaluate(_recipe(), options)
-    assert evaluated.gpu is None
-    # The cmd's first line should start with the binary path, not an
-    # env-var prefix. ``default_binary_rel`` is the legacy fallback,
-    # resolved relative to ``repo_root``.
+    assert evaluated.device is None
     first_line = evaluated.cmd.splitlines()[0]
     assert not first_line.startswith("CUDA_VISIBLE_DEVICES")
     assert not first_line.startswith("GGML_VK_VISIBLE_DEVICES")
 
 
-def test_cmd_no_env_prefix_when_gpu_unset(options: BuildOptions) -> None:
-    """Single-GPU hosts that leave gpu unset have an empty env list."""
+def test_cmd_no_env_when_device_unset(options: BuildOptions) -> None:
+    """Single-GPU hosts that leave device unset have an empty env list."""
     evaluated = _evaluate(_recipe(), options)
     assert evaluated.env == ()
-    # Cmd stays shell-free; no inline env-var prefix.
     assert "CUDA_VISIBLE_DEVICES" not in evaluated.cmd
     assert "GGML_VK_VISIBLE_DEVICES" not in evaluated.cmd
 
@@ -576,7 +572,7 @@ def test_cmd_no_env_prefix_when_gpu_unset(options: BuildOptions) -> None:
 def test_cmd_emits_cuda_visible_devices_for_cuda_binary(
     options: BuildOptions, tmp_path: Path
 ) -> None:
-    """binary_variant=cuda + gpu=nvidia → CUDA_VISIBLE_DEVICES=0 in env list."""
+    """binary_variant=cuda + device=nvidia → CUDA_VISIBLE_DEVICES=0 in env list."""
     cuda_binary = tmp_path / "cuda-llama-server"
     cuda_binary.write_text("#!/bin/sh\n")
     opts = BuildOptions(
@@ -584,16 +580,15 @@ def test_cmd_emits_cuda_visible_devices_for_cuda_binary(
         default_binary=str(cuda_binary),
         binary_variant="cuda",
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 0, "RTX 2060")})
-    assert evaluated.gpu is not None
-    assert evaluated.gpu.vendor == "nvidia"
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": _device("nvidia", 0, "RTX 2060")})
+    assert evaluated.device is not None
+    assert evaluated.device.vendor == "nvidia"
     assert evaluated.env == ("CUDA_VISIBLE_DEVICES=0",)
-    # Cmd stays shell-free; no inline prefix.
     assert evaluated.cmd.startswith(f"{cuda_binary} \\")
 
 
 def test_cmd_emits_vk_visible_devices_for_vulkan_amd(options: BuildOptions, tmp_path: Path) -> None:
-    """binary_variant=vulkan + gpu=amd → GGML_VK_VISIBLE_DEVICES=0 in env list."""
+    """binary_variant=vulkan + device=amd → GGML_VK_VISIBLE_DEVICES=0 in env list."""
     vk_binary = tmp_path / "vk-llama-server"
     vk_binary.write_text("#!/bin/sh\n")
     opts = BuildOptions(
@@ -601,7 +596,9 @@ def test_cmd_emits_vk_visible_devices_for_vulkan_amd(options: BuildOptions, tmp_
         default_binary=str(vk_binary),
         binary_variant="vulkan",
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("amd", 0, "Vulkan device 0")})
+    evaluated = _evaluate(
+        _recipe(), opts, overrides={"device": _device("amd", 0, "Vulkan device 0")}
+    )
     assert evaluated.env == ("GGML_VK_VISIBLE_DEVICES=0",)
     assert evaluated.cmd.startswith(f"{vk_binary} \\")
 
@@ -616,7 +613,9 @@ def test_cmd_emits_vk_visible_devices_for_vulkan_intel(
         default_binary=str(vk_binary),
         binary_variant="vulkan",
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("intel", 0, "Vulkan device 0")})
+    evaluated = _evaluate(
+        _recipe(), opts, overrides={"device": _device("intel", 0, "Vulkan device 0")}
+    )
     assert evaluated.env == ("GGML_VK_VISIBLE_DEVICES=0",)
     assert evaluated.cmd.startswith(f"{vk_binary} \\")
 
@@ -631,59 +630,58 @@ def test_cmd_emits_uses_specific_index_not_always_zero(
         default_binary=str(cuda_binary),
         binary_variant="cuda",
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 2, "third card")})
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": _device("nvidia", 2, "third card")})
     assert evaluated.env == ("CUDA_VISIBLE_DEVICES=2",)
 
 
 def test_cmd_no_env_when_variant_legacy(options: BuildOptions) -> None:
-    """binary_variant=None (legacy fallback) → no env entries regardless of gpu."""
-    evaluated = _evaluate(_recipe(), options, overrides={"gpu": _gpu()})
+    """binary_variant=None (legacy fallback) → no env entries regardless of device."""
+    evaluated = _evaluate(_recipe(), options, overrides={"device": _device()})
     assert evaluated.env == ()
 
 
 def test_cmd_no_env_when_vendor_mismatch(options: BuildOptions, tmp_path: Path) -> None:
-    """gpu=amd but binary is cuda → unknown combo, no env (silent no-op)."""
+    """device=amd but binary is cuda → unknown combo, no env (silent no-op)."""
     cuda_binary = tmp_path / "cuda-llama-server"
     opts = BuildOptions(
         repo_root=tmp_path,
         default_binary=str(cuda_binary),
         binary_variant="cuda",
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("amd", 0, "mismatched")})
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": _device("amd", 0, "mismatched")})
     assert evaluated.env == ()
-    # Cmd still works (no env, just the binary).
     assert evaluated.cmd.startswith(f"{cuda_binary} \\")
 
 
 def test_cmd_no_env_when_cpu_binary(options: BuildOptions, tmp_path: Path) -> None:
-    """binary_variant=cpu + any gpu → no env (CPU doesn't honor either env var)."""
+    """binary_variant=cpu + any device → no env (CpuDevice.env_entry returns None)."""
     cpu_binary = tmp_path / "cpu-llama-server"
     opts = BuildOptions(
         repo_root=tmp_path,
         default_binary=str(cpu_binary),
         binary_variant="cpu",
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": _gpu("nvidia", 0, "ignored")})
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": _device("nvidia", 0, "ignored")})
     assert evaluated.env == ()
 
 
-def test_gpu_override_wins_over_recipe(options: BuildOptions) -> None:
-    """Per-model override beats recipe's gpu field."""
-    recipe_gpu = _gpu("nvidia", 1, "recipe device")
-    override_gpu = _gpu("nvidia", 0, "override device")
+def test_device_override_wins_over_recipe(options: BuildOptions) -> None:
+    """Per-model override beats recipe's device field."""
+    recipe_device = _device("nvidia", 1, "recipe device")
+    override_device = _device("nvidia", 0, "override device")
     recipe = _recipe()
-    recipe.gpu = recipe_gpu
-    evaluated = _evaluate(recipe, options, overrides={"gpu": override_gpu})
-    assert evaluated.gpu == override_gpu
-    assert evaluated.provenance["gpu"] == FieldSource.OVERRIDE
+    recipe.device = recipe_device
+    evaluated = _evaluate(recipe, options, overrides={"device": override_device})
+    assert evaluated.device == override_device
+    assert evaluated.provenance["device"] == FieldSource.OVERRIDE
 
 
-def test_gpu_recipe_wins_over_default_recipe(options: BuildOptions, tmp_path: Path) -> None:
-    default_gpu = _gpu("nvidia", 2, "default device")
-    recipe_gpu = _gpu("nvidia", 1, "recipe device")
+def test_device_recipe_wins_over_default_recipe(options: BuildOptions, tmp_path: Path) -> None:
+    default_device = _device("nvidia", 2, "default device")
+    recipe_device = _device("nvidia", 1, "recipe device")
     recipe = _recipe()
-    recipe.gpu = recipe_gpu
-    default_recipe = Recipe(name="default", gpu=default_gpu)
+    recipe.device = recipe_device
+    default_recipe = Recipe(name="default", device=default_device)
     evaluated = evaluate_recipe(
         recipe,
         detect_file_sets(_entry())[0],
@@ -692,13 +690,15 @@ def test_gpu_recipe_wins_over_default_recipe(options: BuildOptions, tmp_path: Pa
         options=options,
         default_recipe=default_recipe,
     )
-    assert evaluated.gpu == recipe_gpu
-    assert evaluated.provenance["gpu"] == FieldSource.RECIPE
+    assert evaluated.device == recipe_device
+    assert evaluated.provenance["device"] == FieldSource.RECIPE
 
 
-def test_gpu_default_recipe_used_when_recipe_unset(options: BuildOptions, tmp_path: Path) -> None:
-    default_gpu = _gpu("amd", 0, "default device")
-    default_recipe = Recipe(name="default", gpu=default_gpu)
+def test_device_default_recipe_used_when_recipe_unset(
+    options: BuildOptions, tmp_path: Path
+) -> None:
+    default_device = _device("amd", 0, "default device")
+    default_recipe = Recipe(name="default", device=default_device)
     evaluated = evaluate_recipe(
         _recipe(),
         detect_file_sets(_entry())[0],
@@ -707,60 +707,59 @@ def test_gpu_default_recipe_used_when_recipe_unset(options: BuildOptions, tmp_pa
         options=options,
         default_recipe=default_recipe,
     )
-    assert evaluated.gpu == default_gpu
-    assert evaluated.provenance["gpu"] == FieldSource.DEFAULT
+    assert evaluated.device == default_device
+    assert evaluated.provenance["device"] == FieldSource.DEFAULT
 
 
-def test_gpu_computed_when_nothing_set(options: BuildOptions) -> None:
-    """No override, recipe, or default_recipe has gpu → COMPUTED."""
+def test_device_computed_when_nothing_set(options: BuildOptions) -> None:
+    """No override, recipe, or default_recipe has device → COMPUTED."""
     evaluated = _evaluate(_recipe(), options)
-    assert evaluated.gpu is None
-    assert evaluated.provenance["gpu"] == FieldSource.COMPUTED
+    assert evaluated.device is None
+    assert evaluated.provenance["device"] == FieldSource.COMPUTED
 
 
-def test_service_default_gpu_cascades_into_per_model_resolution(
+def test_service_default_device_cascades_into_per_model_resolution(
     options: BuildOptions, tmp_path: Path
 ) -> None:
-    """service_default_gpu sits in the cascade between default_recipe and None.
+    """service_default_device sits in the cascade between default_recipe and None.
 
     The service-level option is the head honcho: every model that
     doesn't explicitly override inherits the service default. With no
     override, recipe, or default_recipe value, the cascade lands on
-    options.service_default_gpu.
+    options.service_default_device.
     """
-    service_gpu = _gpu("nvidia", 0, "RTX 2060")
+    service_device = _device("nvidia", 0, "RTX 2060")
     opts = BuildOptions(
         repo_root=tmp_path,
-        service_default_gpu=service_gpu,
+        service_default_device=service_device,
     )
     evaluated = _evaluate(_recipe(), opts)
-    assert evaluated.gpu == service_gpu
-    # Provenance reflects the cascade level.
-    assert evaluated.provenance["gpu"] == FieldSource.COMPUTED
+    assert evaluated.device == service_device
+    assert evaluated.provenance["device"] == FieldSource.COMPUTED
 
 
-def test_per_model_override_beats_service_default_gpu(
+def test_per_model_override_beats_service_default_device(
     options: BuildOptions, tmp_path: Path
 ) -> None:
-    service_gpu = _gpu("nvidia", 0, "RTX 2060")
-    override_gpu = _gpu("nvidia", 1, "A4000")
+    service_device = _device("nvidia", 0, "RTX 2060")
+    override_device = _device("nvidia", 1, "A4000")
     opts = BuildOptions(
         repo_root=tmp_path,
-        service_default_gpu=service_gpu,
+        service_default_device=service_device,
     )
-    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": override_gpu})
-    assert evaluated.gpu == override_gpu
-    assert evaluated.provenance["gpu"] == FieldSource.OVERRIDE
+    evaluated = _evaluate(_recipe(), opts, overrides={"device": override_device})
+    assert evaluated.device == override_device
+    assert evaluated.provenance["device"] == FieldSource.OVERRIDE
 
 
-def test_recipe_default_beats_service_default_gpu(options: BuildOptions, tmp_path: Path) -> None:
-    service_gpu = _gpu("nvidia", 0, "RTX 2060")
-    recipe_default_gpu = _gpu("amd", 0, "Radeon")
+def test_recipe_default_beats_service_default_device(options: BuildOptions, tmp_path: Path) -> None:
+    service_device = _device("nvidia", 0, "RTX 2060")
+    recipe_default_device = _device("amd", 0, "Radeon")
     opts = BuildOptions(
         repo_root=tmp_path,
-        service_default_gpu=service_gpu,
+        service_default_device=service_device,
     )
-    default_recipe = Recipe(name="default", gpu=recipe_default_gpu)
+    default_recipe = Recipe(name="default", device=recipe_default_device)
     evaluated = evaluate_recipe(
         _recipe(),
         detect_file_sets(_entry())[0],
@@ -769,17 +768,36 @@ def test_recipe_default_beats_service_default_gpu(options: BuildOptions, tmp_pat
         options=opts,
         default_recipe=default_recipe,
     )
-    assert evaluated.gpu == recipe_default_gpu
-    assert evaluated.provenance["gpu"] == FieldSource.DEFAULT
+    assert evaluated.device == recipe_default_device
+    assert evaluated.provenance["device"] == FieldSource.DEFAULT
 
 
-def test_env_empty_when_no_gpu(options: BuildOptions) -> None:
-    """No gpu at all → env is empty tuple, no entries emitted."""
+def test_legacy_gpu_override_key_still_works(options: BuildOptions, tmp_path: Path) -> None:
+    """Backward compat: pre-refactor overrides.yaml uses ``gpu:`` key.
+
+    Operators who saved device overrides before the ComputeDevice
+    refactor still get their pin honoured. The cascade reads ``gpu``
+    as an alias for ``device`` (ADR-039 §3 amendment).
+    """
+    legacy_override = _device("nvidia", 1, "legacy override")
+    cuda_binary = tmp_path / "cuda-llama-server"
+    opts = BuildOptions(
+        repo_root=tmp_path,
+        default_binary=str(cuda_binary),
+        binary_variant="cuda",
+    )
+    evaluated = _evaluate(_recipe(), opts, overrides={"gpu": legacy_override})
+    assert evaluated.device == legacy_override
+    assert evaluated.provenance["device"] == FieldSource.OVERRIDE
+
+
+def test_env_empty_when_no_device(options: BuildOptions) -> None:
+    """No device at all → env is empty tuple, no entries emitted."""
     evaluated = _evaluate(_recipe(), options)
     assert evaluated.env == ()
 
 
-def test_emit_payload_includes_env_for_cuda_gpu(tmp_path: Path) -> None:
+def test_emit_payload_includes_env_for_cuda_device(tmp_path: Path) -> None:
     """YAML payload emits ``env: [CUDA_VISIBLE_DEVICES=N]`` for the right combo."""
     from genesis_worker.services.llama_swap.generate_config import (
         build_config,
@@ -792,13 +810,12 @@ def test_emit_payload_includes_env_for_cuda_gpu(tmp_path: Path) -> None:
         repo_root=tmp_path,
         default_binary=str(cuda_binary),
         binary_variant="cuda",
-        service_default_gpu=_gpu("nvidia", 0, "RTX 2060"),
+        service_default_device=_device("nvidia", 0, "RTX 2060"),
     )
     entries = build_config(_catalog(), _recipes(), options=opts)
     payload = emit_payload(entries, root="/tmp", generated_at="2026-01-01T00:00:00+00:00")
     first_model = next(iter(payload["models"].values()))
     assert first_model["env"] == ["CUDA_VISIBLE_DEVICES=0"]
-    # And the cmd is shell-free.
     assert first_model["cmd"].lstrip().startswith(f"{cuda_binary} \\")
 
 
@@ -809,7 +826,7 @@ def test_emit_payload_omits_env_when_empty(tmp_path: Path) -> None:
         emit_payload,
     )
 
-    opts = BuildOptions(repo_root=tmp_path)  # no service_default_gpu, no variant
+    opts = BuildOptions(repo_root=tmp_path)  # no service_default_device, no variant
     entries = build_config(_catalog(), _recipes(), options=opts)
     payload = emit_payload(entries, root="/tmp", generated_at="2026-01-01T00:00:00+00:00")
     first_model = next(iter(payload["models"].values()))

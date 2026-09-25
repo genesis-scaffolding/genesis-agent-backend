@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from ...contracts.host import GpuDevice
+from ...contracts.host import ComputeDevice
 
 
 class LlamaSwapOptions(BaseModel):
@@ -36,15 +36,16 @@ class LlamaSwapOptions(BaseModel):
     # managed binary wins without a one-time setup step. Override via
     # ``GENESIS_SERVICES__LLAMA_SWAP__LLAMA_SERVER_VARIANT``.
     llama_server_variant: Literal["auto", "cuda", "cpu", "vulkan"] | None = "auto"
-    # Pin a specific detected device. ``None`` falls back to the variant
-    # cascade (cuda → vulkan → cpu). When set, the matching variant
-    # binary is required — the service fails loud at config-regen time
-    # if the binary is missing or the vendor has no framework-managed
-    # variant. Persistence follows the standard flat-key path under
-    # ``Settings.services.llama_swap``; pydantic serializes ``GpuDevice``
-    # as ``{vendor, index, label}``. Override via
-    # ``GENESIS_SERVICES__LLAMA_SWAP__DEFAULT_GPU``.
-    default_gpu: GpuDevice | None = None
+    # Pin a specific compute device. ``None`` falls back to the smart
+    # auto-pick (NVIDIA 0 → AMD 0 → Intel 0 → CPU). When set, the
+    # matching variant binary is required — the service fails loud at
+    # config-regen time if the binary is missing or the vendor has no
+    # framework-managed variant. Persistence follows the standard
+    # flat-key path under ``Settings.services.llama_swap``; pydantic
+    # serializes ``ComputeDevice`` polymorphically by type (GpuDevice
+    # → ``{vendor, index, label}``, CpuDevice → ``{}``). Override via
+    # ``GENESIS_SERVICES__LLAMA_SWAP__DEFAULT_DEVICE``.
+    default_device: ComputeDevice | None = None
 
     config_path: Path | None = None
     recipes_path: Path | None = None
