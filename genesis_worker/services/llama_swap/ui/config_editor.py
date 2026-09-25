@@ -13,12 +13,31 @@ from typing import Any
 
 import streamlit as st
 
+from genesis_worker.contracts.host import GpuDevice
 from genesis_worker.services.llama_swap.generate_config import EvaluatedConfig, FieldSource
 
 SERVICE_NAME = "llama_swap"
 
 worker = st.session_state["worker"]
 svc = worker.service(SERVICE_NAME)
+
+
+def _gpu_choice_label(device: GpuDevice) -> str:
+    return f"{device.label}  ({device.vendor}, idx {device.index})"
+
+
+def _coerce_gpu(raw: Any) -> GpuDevice | None:
+    """Hydrate an overrides-style dict into a GpuDevice, or return None."""
+    if raw is None:
+        return None
+    if isinstance(raw, GpuDevice):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            return GpuDevice(**raw)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +118,14 @@ def _render_effective(cfg: EvaluatedConfig) -> None:
                 _badge(cfg.provenance["extra_flags"]),
             )
         )
+    if cfg.gpu is not None:
+        rows.append(
+            (
+                "GPU",
+                f"{cfg.gpu.label} ({cfg.gpu.vendor}, idx {cfg.gpu.index})",
+                _badge(cfg.provenance["gpu"]),
+            )
+        )
 
     rows.append(("Hardcoded flags (always)", " ".join(cfg.hardcoded_flags), ""))
 
@@ -159,6 +186,36 @@ def _render_override_form(
             else:
                 idx = variant_options.index(choice)
                 new_overrides["binary"] = variant_values[idx]
+
+        # --- GPU ---
+        # Per-model device pin (ADR-039 §3). ``None`` = inherit from
+        # the service-level ``default_gpu`` (or the variant cascade).
+        # The dropdown reads the live host snapshot so freshly
+        # plugged-in devices appear after a worker restart.
+        devices = svc.host_info.hardware.devices
+        if devices:
+            gpu_labels = ["(use service default)"] + [_gpu_choice_label(d) for d in devices]
+            current_gpu = _coerce_gpu(current_overrides.get("gpu"))
+            if current_gpu is None:
+                current_gpu_idx = 0
+            else:
+                current_label = _gpu_choice_label(current_gpu)
+                current_gpu_idx = (
+                    gpu_labels.index(current_label) if current_label in gpu_labels else 0
+                )
+            gpu_choice = st.selectbox(
+                "GPU",
+                gpu_labels,
+                index=current_gpu_idx,
+                key=f"ov-{entry_id}-gpu",
+            )
+            if gpu_choice != "(use service default)":
+                chosen_gpu = next(
+                    (d for d in devices if _gpu_choice_label(d) == gpu_choice),
+                    None,
+                )
+                if chosen_gpu is not None:
+                    new_overrides["gpu"] = chosen_gpu
 
         # --- KV Cache ---
         kv_val = st.text_input(
