@@ -14,6 +14,7 @@ svc = worker.service(SERVICE_NAME)
 
 st.title(svc.display_name)
 
+
 # --- Service info + Configuration ------------------------------------------
 with st.container(border=True):
     st.header("Service info")
@@ -40,15 +41,47 @@ with st.container(border=True):
         st.markdown(f"**Container name:** `{svc._options.container_name}`")
         st.markdown(f"**Listen:** `{svc.listen_address}`")
     with cols[1]:
-        gpu_state = "available" if svc.has_nvidia_gpu else "not detected"
-        st.markdown(f"**GPU (host):** {gpu_state}")
-        if svc._options.gpu_required and not svc.has_nvidia_gpu:
+        nvidia_state = "available" if svc.has_nvidia_gpu else "not detected"
+        amd_state = "available" if svc.has_amd_gpu else "not detected"
+        st.markdown(f"**NVIDIA GPU (host):** {nvidia_state}")
+        st.markdown(f"**AMD GPU (host):** {amd_state}")
+        variant = svc.effective_gpu_variant
+        variant_present = svc.has_nvidia_gpu if variant == "cuda" else svc.has_amd_gpu
+        if svc._options.gpu_required and not variant_present:
+            vendor = "NVIDIA" if variant == "cuda" else "AMD"
             st.warning(
-                "No NVIDIA GPU on this host. Set `gpu_required: false` in "
-                "the service options to allow starting without GPU."
+                f"No {vendor} GPU on this host (active variant: {variant}). "
+                "Switch the GPU variant below or set `gpu_required: false` "
+                "in the service options to allow starting without GPU."
             )
         public_host = svc.public_host()
         st.markdown(f"**Public URL:** `http://{public_host}:{svc._options.listen_port}/`")
+
+
+# --- GPU variant (ADR-040) -------------------------------------------------
+# Mirrors llama_swap's variant selectbox: an explicit choice wins over
+# the snapshot auto-pick (NVIDIA -> cuda, else AMD -> rocm). In-memory
+# only; a worker restart reverts to auto-pick.
+def _on_variant_change() -> None:
+    raw = st.session_state["status-comfyui-variant"]
+    svc.set_gpu_variant(None if raw == "auto" else raw)
+
+
+with st.container(border=True):
+    st.subheader("GPU variant")
+    variant_labels = ["auto", "cuda", "rocm"]
+    current_variant = svc.gpu_variant or "auto"
+    st.selectbox(
+        "Image variant",
+        variant_labels,
+        index=variant_labels.index(current_variant),
+        key="status-comfyui-variant",
+        on_change=_on_variant_change,
+    )
+    st.caption(
+        f"Active: **{svc.effective_gpu_variant}** — "
+        f"image `{svc.image_ref}`. Takes effect on the next start."
+    )
 
 # --- Console ---------------------------------------------------------------
 with st.container(border=True):

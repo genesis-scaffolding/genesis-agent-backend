@@ -23,6 +23,7 @@ from genesis_worker.tests._factories import service_ctx
 def _hw(
     *,
     nvidia: bool = False,
+    amd: bool = False,
     runtime: bool = False,
     cdi: bool = False,
 ) -> Hardware:
@@ -30,6 +31,8 @@ def _hw(
     return Hardware(
         nvidia=nvidia,
         nvidia_count=1 if nvidia else 0,
+        amd=amd,
+        amd_count=1 if amd else 0,
         nvidia_runtime=runtime,
         nvidia_cdi=cdi,
     )
@@ -55,6 +58,27 @@ def test_construction_applies_options(tmp_path: Path) -> None:
     )
     assert svc.listen_address == "0.0.0.0:9999"
     assert svc.image_ref == "ghcr.io/genesis-scaffolding/comfyui-cuda:v0.99.0-cuda-13.0-amd64"
+
+
+def test_construction_rocm_options(tmp_path: Path) -> None:
+    svc = ComfyUiService(
+        service_ctx(
+            tmp_path,
+            name="comfyui",
+            options={"rocm_image_tag": "v0.34.0-rocm-7.2-amd64"},
+        )
+    )
+    assert (
+        svc._install_rocm.image_ref
+        == "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-rocm-7.2-amd64"
+    )
+
+
+def test_construction_has_amd_gpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(amd=True))
+    assert svc.has_amd_gpu is True
+    assert svc.has_nvidia_gpu is False
 
 
 def test_construction_defaults_log_file_to_log_dir(tmp_path: Path) -> None:
@@ -154,6 +178,50 @@ def test_construction_has_nvidia_gpu_cached(
     assert svc.has_nvidia_gpu is True
 
 
+# --- GPU variant resolution (ADR-040) --------------------------------------
+
+
+def test_variant_auto_picks_cuda_on_dual_gpu_host(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc._hardware = _hw(nvidia=True, amd=True)  # dual-GPU host: CUDA wins
+    assert svc.effective_gpu_variant == "cuda"
+
+
+def test_variant_auto_picks_rocm_when_only_amd(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc._hardware = _hw(amd=True)
+    assert svc.effective_gpu_variant == "rocm"
+    assert svc.image_ref == "ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64"
+
+
+def test_variant_auto_falls_back_to_cuda_when_no_gpu(tmp_path: Path) -> None:
+    """Preserves the pre-ROCm "no NVIDIA GPU" refusal on GPU-less hosts."""
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    assert svc.effective_gpu_variant == "cuda"
+
+
+def test_variant_explicit_pin_wins_over_snapshot(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc._hardware = _hw(nvidia=True)
+    svc.set_gpu_variant("rocm")
+    assert svc.effective_gpu_variant == "rocm"
+    svc.set_gpu_variant(None)  # revert to auto-pick
+    assert svc.effective_gpu_variant == "cuda"
+
+
+def test_set_gpu_variant_rejects_unknown(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    with pytest.raises(ValueError, match="unknown variant"):
+        svc.set_gpu_variant("vulkan")
+
+
+def test_active_install_follows_variant(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    assert svc.active_install is svc._install_cuda
+    svc._hardware = _hw(amd=True)
+    assert svc.active_install is svc._install_rocm
+
+
 # --- capabilities ----------------------------------------------------------
 
 
@@ -202,16 +270,21 @@ def test_is_available_does_not_consult_binary_path(tmp_path: Path) -> None:
     is decided by ``state() == INSTALLED`` instead.
     """
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
-    assert svc._install.binary_path() is None
+    assert svc._install_cuda.binary_path() is None
     # ``is_available`` works regardless of ``binary_path`` being None.
 
 
-def test_installs_returns_comfyui_image(tmp_path: Path) -> None:
+def test_installs_returns_both_variants(tmp_path: Path) -> None:
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     installs = svc.installs()
-    assert len(installs) == 1
-    assert installs[0].name == "comfyui-cuda"
-    assert svc.primary_installable() is installs[0]
+    assert [i.name for i in installs] == ["comfyui-cuda", "comfyui-rocm"]
+    assert svc.primary_installable() is svc._install_cuda
+
+
+def test_primary_installable_follows_active_variant(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc._hardware = _hw(amd=True)
+    assert svc.primary_installable() is svc._install_rocm
 
 
 # --- endpoints -------------------------------------------------------------
@@ -263,6 +336,35 @@ def test_start_refuses_when_no_gpu_and_required(
     r = svc.start()
     assert r.ok is False
     assert "no NVIDIA GPU" in r.message
+
+
+def test_start_refuses_when_no_amd_gpu_and_rocm_pinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True))
+    svc.set_gpu_variant("rocm")
+    r = svc.start()
+    assert r.ok is False
+    assert "no AMD GPU" in r.message
+
+
+def test_start_refusal_honours_gpu_required_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui", options={"gpu_required": False}))
+    svc._hardware = _hw(amd=True)  # rocm auto-picked, no AMD check needed anyway
+    sentinel = StartResult(ok=True, message="ok")
+    with patch(
+        "genesis_worker.services.comfyui.lifecycle.start_comfyui",
+        return_value=sentinel,
+    ):
+        r = svc.start()
+    assert r is sentinel
 
 
 def test_start_refuses_when_image_not_pulled(
@@ -318,6 +420,8 @@ def test_start_skips_gpu_args_when_runtime_missing(
     kwargs = mock_start.call_args.kwargs
     assert kwargs["runtime"] is None
     assert kwargs["gpu_flags"] is None
+    assert kwargs["devices"] is None
+    assert kwargs["group_add"] is None
 
 
 def test_start_uses_cdi_gpus_all_when_runtime_missing_but_cdi_present(
@@ -361,6 +465,70 @@ def test_start_skips_gpu_args_when_nvidia_present_but_no_runtime_or_cdi(
     kwargs = mock_start.call_args.kwargs
     assert kwargs["runtime"] is None
     assert kwargs["gpu_flags"] is None
+    assert kwargs["devices"] is None
+    assert kwargs["group_add"] is None
+
+
+def test_start_rocm_passes_devices_group_and_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ROCm path: direct device passthrough + video group + upstream env.
+
+    The AOTriton flag is load-bearing for GPU attention kernels (ADR-040).
+    """
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(amd=True))
+    with patch(
+        "genesis_worker.services.comfyui.lifecycle.start_comfyui",
+        return_value=StartResult(ok=True, message="ok"),
+    ) as mock_start:
+        svc.start()
+    kwargs = mock_start.call_args.kwargs
+    assert kwargs["image"].startswith("ghcr.io/genesis-scaffolding/comfyui-rocm:")
+    assert kwargs["runtime"] is None
+    assert kwargs["gpu_flags"] is None
+    assert kwargs["devices"] == ["/dev/kfd", "/dev/dri"]
+    assert kwargs["group_add"] == "video"
+    assert kwargs["env"]["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] == "1"
+    assert kwargs["env"]["HIP_VISIBLE_DEVICES"] == "0"
+    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    # PUID/PGID survive alongside the ROCm env.
+    assert "PUID" in kwargs["env"] and "PGID" in kwargs["env"]
+
+
+def test_start_rocm_custom_devices_option(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(
+        service_ctx(
+            tmp_path,
+            name="comfyui",
+            options={"gpu_variant": "rocm", "rocm_devices": ["/dev/kfd"]},
+        )
+    )
+    monkeypatch.setattr(svc, "_hardware", _hw(amd=True))
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    assert mock_start.call_args.kwargs["devices"] == ["/dev/kfd"]
+
+
+def test_start_cuda_env_has_no_rocm_vars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    env = mock_start.call_args.kwargs["env"]
+    assert "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL" not in env
 
 
 def test_start_passes_vault_models_dir_to_lifecycle(

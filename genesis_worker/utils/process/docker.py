@@ -98,6 +98,8 @@ class DockerContainer:
         env: dict[str, str] | None = None,
         runtime: str | None = None,
         gpu_flags: list[str] | None = None,
+        devices: list[str] | None = None,
+        group_add: str | None = None,
         hostname: str | None = None,
         restart: str = "unless-stopped",
         shm_size: str | None = None,
@@ -113,8 +115,12 @@ class DockerContainer:
         (``nvidia`` or ``None``). ``gpu_flags`` are the value of ``--gpus``
         when ``runtime`` is set. ``shm_size`` adds ``--shm-size`` when set
         (e.g. ``"1g"`` for browser-backed services that need more than the
-        64 MB default). ``security_opts`` adds ``--security-opt`` flags
-        (e.g. ``seccomp=unconfined``, ``apparmor=unconfined``).
+        64 MB default). ``devices`` adds ``--device`` flags for direct
+        host-device passthrough (e.g. ROCm's ``/dev/kfd``, ``/dev/dri``).
+        ``group_add`` adds ``--group-add`` (e.g. ``video`` for
+        ``/dev/dri`` render nodes). ``security_opts`` adds
+        ``--security-opt`` flags (e.g. ``seccomp=unconfined``,
+        ``apparmor=unconfined``).
 
         Any prior container of the same name is removed first
         (idempotent). The function returns ``StartResult(ok=True)`` only
@@ -137,6 +143,10 @@ class DockerContainer:
             argv += ["--runtime", runtime]
         if gpu_flags:
             argv += ["--gpus", ",".join(gpu_flags)]
+        for device in devices or []:
+            argv += ["--device", device]
+        if group_add:
+            argv += ["--group-add", group_add]
         if shm_size:
             argv += ["--shm-size", shm_size]
         if security_opts:
