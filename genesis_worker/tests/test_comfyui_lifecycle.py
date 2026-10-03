@@ -21,6 +21,8 @@ def _start_kwargs(tmp_path: Path, **overrides):
         "env": {"PUID": "1000", "PGID": "1000"},
         "runtime": "nvidia",
         "gpu_flags": ["driver=nvidia", "count=1"],
+        "devices": None,
+        "group_add": None,
         "extra_args": ["--verbose"],
         "restart_policy": "unless-stopped",
         "hostname": "comfyui",

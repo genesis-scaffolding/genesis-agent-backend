@@ -27,6 +27,8 @@ def start_comfyui(
     env: dict[str, str],
     runtime: str | None,
     gpu_flags: list[str] | None,
+    devices: list[str] | None,
+    group_add: str | None,
     extra_args: list[str] | None,
     restart_policy: str,
     hostname: str,
@@ -67,6 +69,8 @@ def start_comfyui(
         env=env,
         runtime=runtime,
         gpu_flags=gpu_flags,
+        devices=devices,
+        group_add=group_add,
         hostname=hostname,
         restart=restart_policy,
     )

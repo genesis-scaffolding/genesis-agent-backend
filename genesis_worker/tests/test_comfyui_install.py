@@ -32,10 +32,12 @@ def _wait_for_terminal(session) -> AcquireView:  # type: ignore[no-untyped-def]
 def _make_installable(
     tmp_path: Path,
     *,
+    variant: str = "cuda",
     image_repo: str = "ghcr.io/genesis-scaffolding/comfyui-cuda",
     image_tag: str = "v0.34.0-cuda-13.0-amd64",
 ) -> ComfyUiImage:
     return ComfyUiImage(
+        variant=variant,
         data_dir=tmp_path / "data",
         cache_dir=tmp_path / "cache",
         state_dir=tmp_path / "state",
@@ -57,6 +59,17 @@ def test_source_url_points_to_ghcr(tmp_path: Path) -> None:
     url = inst.source_url()
     assert url is not None
     assert "comfyui-cuda" in url
+
+
+def test_name_and_source_url_follow_variant(tmp_path: Path) -> None:
+    inst = _make_installable(
+        tmp_path,
+        variant="rocm",
+        image_repo="ghcr.io/genesis-scaffolding/comfyui-rocm",
+    )
+    assert inst.name == "comfyui-rocm"
+    assert "comfyui-rocm" in (inst.source_url() or "")
+    assert inst.image_ref == "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-cuda-13.0-amd64"
 
 
 def test_binary_path_is_none(tmp_path: Path) -> None:
@@ -82,9 +95,17 @@ def test_state_not_installed_when_image_missing(
     assert _make_installable(tmp_path).state().value == "not_installed"
 
 
+def test_selection_path_is_per_variant(tmp_path: Path) -> None:
+    """The two variants never share a selection file (ADR-040)."""
+    cuda = _make_installable(tmp_path, variant="cuda")
+    rocm = _make_installable(tmp_path, variant="rocm")
+    assert cuda._selection_path == tmp_path / "state" / "cuda" / "current"
+    assert rocm._selection_path == tmp_path / "state" / "rocm" / "current"
+
+
 def test_installed_version_reads_selection_file(tmp_path: Path) -> None:
     inst = _make_installable(tmp_path)
-    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "cuda").mkdir(parents=True, exist_ok=True)
     inst._selection_path.write_text("v0.34.0-cuda-13.0-amd64\n")
     assert inst.installed_version() == "v0.34.0-cuda-13.0-amd64"
 
@@ -346,7 +367,7 @@ def test_uninstall_clears_selection_when_matching(
         ),
     )
     inst = _make_installable(tmp_path)
-    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "cuda").mkdir(parents=True, exist_ok=True)
     inst._selection_path.write_text("v0.34.0-cuda-13.0-amd64")
     inst.uninstall(version="v0.34.0-cuda-13.0-amd64")
     assert not inst._selection_path.exists()
@@ -363,7 +384,7 @@ def test_uninstall_keeps_selection_when_different_version(
         ),
     )
     inst = _make_installable(tmp_path)
-    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "cuda").mkdir(parents=True, exist_ok=True)
     inst._selection_path.write_text("v0.34.0-cuda-13.0-amd64")
     inst.uninstall(version="v0.99.0-cuda-13.0-amd64")
     assert inst._selection_path.read_text() == "v0.34.0-cuda-13.0-amd64"

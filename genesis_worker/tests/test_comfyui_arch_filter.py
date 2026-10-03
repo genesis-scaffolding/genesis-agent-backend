@@ -100,6 +100,7 @@ def _make_installable(
     from genesis_worker.services.comfyui import install as install_mod
 
     inst = ComfyUiImage(
+        variant="cuda",
         data_dir=tmp_path / "data",
         cache_dir=tmp_path / "cache",
         state_dir=tmp_path / "state",
@@ -195,6 +196,7 @@ def test_available_versions_auto_detects_arch(
     # Stub platform.machine so the auto-detect path is deterministic.
     monkeypatch.setattr(install_mod.platform, "machine", lambda: "aarch64")
     inst = ComfyUiImage(
+        variant="cuda",
         data_dir=tmp_path / "data",
         cache_dir=tmp_path / "cache",
         state_dir=tmp_path / "state",

@@ -20,8 +20,9 @@ svc = worker.service(SERVICE_NAME)
 st.title("Image")
 
 st.caption(
-    "One installable per upstream image. Active selection lives in "
-    "``<state_dir>/comfyui-cuda/current``; pinning is via the dropdown below."
+    "One installable per GPU variant (cuda / rocm). The active variant "
+    "is chosen on the Status page; tag pinning lives in "
+    "``<state_dir>/<variant>/current`` per installable."
 )
 
 _SESSION_KEY_PREFIX = "image/sessions"
@@ -78,11 +79,14 @@ for installable in svc.installs():
                 "Service is currently running — stop it from the Status page before uninstalling."
             )
 
-        # Disable install when GPU is required but missing.
-        install_disabled_by_gpu = svc._options.gpu_required and not svc.has_nvidia_gpu
+        # Disable install when this variant's GPU is required but missing
+        # (cuda -> NVIDIA, rocm -> AMD; ADR-040).
+        vendor_present = svc.has_nvidia_gpu if installable.variant == "cuda" else svc.has_amd_gpu
+        vendor_name = "NVIDIA" if installable.variant == "cuda" else "AMD"
+        install_disabled_by_gpu = svc._options.gpu_required and not vendor_present
         if install_disabled_by_gpu:
             st.caption(
-                "Install disabled: NVIDIA GPU required but not detected. "
+                f"Install disabled: {vendor_name} GPU required but not detected. "
                 "Set `gpu_required: false` in service options to override."
             )
 

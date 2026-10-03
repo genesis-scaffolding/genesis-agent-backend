@@ -63,16 +63,29 @@ class ComfyUiService(InferenceService):
         self._puid = opts.puid if opts.puid is not None else os.getuid()
         self._pgid = opts.pgid if opts.pgid is not None else os.getgid()
 
-        # Installable.
-        self._install = ComfyUiImage(
-            data_dir=ctx.data_dir,
-            cache_dir=ctx.cache_dir,
-            state_dir=ctx.state_dir,
+        # Installables — one per GPU variant (ADR-040). Both share the
+        # same data dirs / vault / container; the variant pick only
+        # chooses which image the single container runs.
+        common = {
+            "data_dir": ctx.data_dir,
+            "cache_dir": ctx.cache_dir,
+            "state_dir": ctx.state_dir,
+            "host_arch": opts.host_arch,
+            "secrets": ctx.secrets,
+        }
+        self._install_cuda = ComfyUiImage(
+            variant="cuda",
             image_repo=opts.image_repo,
             image_tag=opts.image_tag,
-            host_arch=opts.host_arch,
-            secrets=ctx.secrets,
+            **common,
         )
+        self._install_rocm = ComfyUiImage(
+            variant="rocm",
+            image_repo=opts.rocm_image_repo,
+            image_tag=opts.rocm_image_tag,
+            **common,
+        )
+        self._installs = {"cuda": self._install_cuda, "rocm": self._install_rocm}
 
         # Symlink applier. The catalog is supplied by callers at apply /
         # list time; the service does not reach into the framework.
@@ -88,8 +101,47 @@ class ComfyUiService(InferenceService):
         return self._hardware.nvidia
 
     @property
+    def has_amd_gpu(self) -> bool:
+        return self._hardware.amd
+
+    # --- GPU variant resolution (ADR-040) ---------------------------------
+    # Mirrors llama_swap's llama_server_variant: an explicit user choice
+    # (UI dropdown / options) wins, otherwise auto-pick from the host
+    # snapshot. In-memory only; a worker restart reverts to auto-pick.
+
+    @property
+    def gpu_variant(self) -> str | None:
+        return self._options.gpu_variant
+
+    def set_gpu_variant(self, variant: str | None) -> None:
+        """UI write path. ``None`` reverts to the auto-pick."""
+        if variant not in ("cuda", "rocm", None):
+            raise ValueError(f"unknown variant {variant!r}; expected cuda/rocm or None")
+        self._options.gpu_variant = variant  # type: ignore[assignment]
+
+    @property
+    def effective_gpu_variant(self) -> str:
+        """The variant the container runs: pinned choice or snapshot pick.
+
+        NVIDIA present -> cuda, else AMD present -> rocm, else cuda
+        (preserves the pre-ROCm "no NVIDIA GPU" failure message on
+        GPU-less hosts).
+        """
+        if self._options.gpu_variant is not None:
+            return self._options.gpu_variant
+        if self._hardware.nvidia:
+            return "cuda"
+        if self._hardware.amd:
+            return "rocm"
+        return "cuda"
+
+    @property
+    def active_install(self) -> ComfyUiImage:
+        return self._installs[self.effective_gpu_variant]
+
+    @property
     def image_ref(self) -> str:
-        return f"{self._options.image_repo}:{self._options.image_tag}"
+        return self.active_install.image_ref
 
     @property
     def listen_address(self) -> str:
@@ -107,8 +159,9 @@ class ComfyUiService(InferenceService):
 
     def is_available(self) -> bool:
         # Override: there is no host binary for a container service.
-        # Availability is "image pulled locally" — consult state() directly.
-        return self._install.state() == InstallState.INSTALLED
+        # Availability is "the active variant's image pulled locally" —
+        # consult state() directly.
+        return self.active_install.state() == InstallState.INSTALLED
 
     def capabilities(self) -> ServiceCapabilities:
         return ServiceCapabilities(
@@ -162,14 +215,20 @@ class ComfyUiService(InferenceService):
             return "localhost"
 
     def start(self) -> StartResult:
-        if self._options.gpu_required and not self._hardware.nvidia:
+        variant = self.effective_gpu_variant
+        has_variant_gpu = self._hardware.nvidia if variant == "cuda" else self._hardware.amd
+        if self._options.gpu_required and not has_variant_gpu:
+            vendor = "NVIDIA" if variant == "cuda" else "AMD"
             return StartResult(
                 ok=False,
-                message="no NVIDIA GPU detected; set gpu_required=false to skip",
+                message=f"no {vendor} GPU detected; set gpu_required=false to skip",
             )
         runtime: str | None = None
         gpu_flags: list[str] | None = None
-        if self._options.gpu_required and self._hardware.nvidia:
+        devices: list[str] | None = None
+        group_add: str | None = None
+        extra_env: dict[str, str] = {}
+        if variant == "cuda" and has_variant_gpu:
             if self._hardware.nvidia_runtime:
                 # Legacy path (Docker ≤28 with the nvidia OCI runtime
                 # registered). The daemon honours `--runtime nvidia`; the
@@ -189,6 +248,13 @@ class ComfyUiService(InferenceService):
             # CDI specs available. Container starts without a GPU; the
             # user sees the PyTorch "no NVIDIA driver" message and knows
             # to install nvidia-container-toolkit.
+        elif variant == "rocm" and has_variant_gpu:
+            # ROCm has no Docker runtime/CDI integration — the container
+            # gets direct device passthrough (KFD + render nodes) and the
+            # `video` group, plus the upstream compose env (ADR-040).
+            devices = self._options.rocm_devices
+            group_add = self._options.rocm_group_add
+            extra_env = self._options.rocm_env
 
         return lifecycle.start_comfyui(
             image=self.image_ref,
@@ -207,9 +273,11 @@ class ComfyUiService(InferenceService):
                 "/vault": str(self._vault_models_dir.parent),
             },
             extra_args=["--models-directory", "/vault/comfyui", *self._options.extra_args],
-            env={"PUID": str(self._puid), "PGID": str(self._pgid)},
+            env={"PUID": str(self._puid), "PGID": str(self._pgid), **extra_env},
             runtime=runtime,
             gpu_flags=gpu_flags,
+            devices=devices,
+            group_add=group_add,
             restart_policy=self._options.restart_policy,
             hostname=self._options.container_name,
             vault_models_dir=self._vault_models_dir,
@@ -237,10 +305,10 @@ class ComfyUiService(InferenceService):
     # --- install axis -----------------------------------------------------
 
     def installs(self) -> list[ServiceInstall]:
-        return [self._install]
+        return [self._install_cuda, self._install_rocm]
 
     def primary_installable(self) -> ServiceInstall | None:
-        return self._install
+        return self.active_install
 
     def uninstall_installable(self, name: str, *, version: str | None = None) -> None:
         """Remove an installable's installed version. Refuses if the service is running."""

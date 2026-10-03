@@ -114,19 +114,22 @@ def _write_cache(path: Path, tags: list[str]) -> None:
 
 
 class ComfyUiImage(ServiceInstall):
-    """Installable for the ComfyUI Docker image.
+    """Installable for one ComfyUI Docker image variant (cuda / rocm).
 
     ``name`` mirrors the upstream image so the Binaries-style UI page
     reads naturally. ``binary_path()`` returns ``None`` — there is no
     host binary for a container service; ``is_available()`` consults
     ``state()`` directly.
-    """
 
-    name = "comfyui-cuda"
+    Each variant instance owns its own selection file at
+    ``state_dir/<variant>/current`` so the two variants never clobber
+    each other's tag pin (ADR-040).
+    """
 
     def __init__(
         self,
         *,
+        variant: str,
         data_dir: Path,
         cache_dir: Path,
         state_dir: Path,
@@ -135,19 +138,21 @@ class ComfyUiImage(ServiceInstall):
         host_arch: str | None = None,
         secrets=None,  # accepted but unused for v1 (public GHCR)
     ) -> None:
+        self.variant = variant
+        self.name = f"comfyui-{variant}"
         self._image_repo = image_repo
         self._image_tag = image_tag
         self._host_arch = _normalise_host_arch(host_arch)
         self._cache_dir = cache_dir
         self._state_dir = state_dir
-        self._selection_path = state_dir / "current"
+        self._selection_path = state_dir / variant / "current"
 
     @property
     def image_ref(self) -> str:
         return f"{self._image_repo}:{self._image_tag}"
 
     def source_url(self) -> str | None:
-        return "https://github.com/genesis-scaffolding/comfyui-cuda/pkgs/container/comfyui-cuda"
+        return f"https://github.com/genesis-scaffolding/{self.name}/pkgs/container/{self.name}"
 
     def state(self) -> InstallState:
         return (
@@ -210,7 +215,7 @@ class ComfyUiImage(ServiceInstall):
 
     def _record_selection(self, tag: str) -> None:
         """Write the installed tag to the selection file on successful install."""
-        self._state_dir.mkdir(parents=True, exist_ok=True)
+        self._selection_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._selection_path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
         with tmp.open("w") as f:
             f.write(tag)
