@@ -119,6 +119,23 @@ class ComfyUiService(InferenceService):
             raise ValueError(f"unknown variant {variant!r}; expected cuda/rocm or None")
         self._options.gpu_variant = variant  # type: ignore[assignment]
 
+    def set_extra_args(self, args: list[str]) -> None:
+        """Update ``extra_args`` in memory (ADR-041).
+
+        Persistence is the UI's job: the caller writes the value to the
+        per-service JSON sidecar via ``worker.write_service_overrides``
+        using the canonical ``paths.config_dir`` path. The service does
+        not write the sidecar directly because ``ctx.config_dir`` is
+        per-service scoped (``<base>/<service-name>``) while the
+        framework reads the sidecar from ``<base>/services/<name>...``;
+        routing through the worker keeps the two paths aligned.
+
+        The in-memory update means ``start()`` picks up the new value
+        without a worker restart; the sidecar write means a worker
+        restart also picks it up via ``Settings.options_for``.
+        """
+        self._options.extra_args = list(args)
+
     @property
     def effective_gpu_variant(self) -> str:
         """The variant the container runs: pinned choice or snapshot pick.
@@ -334,6 +351,7 @@ class ComfyUiService(InferenceService):
                 "Image", ":material/inventory_2:", ui_dir / "image.py", url_path="comfyui_image"
             ),
             UiPage("Models", ":material/link:", ui_dir / "models.py", url_path="comfyui_models"),
+            UiPage("Flags", ":material/flag:", ui_dir / "flags.py", url_path="comfyui_flags"),
         ]
 
 

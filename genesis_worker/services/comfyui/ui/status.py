@@ -40,6 +40,11 @@ with st.container(border=True):
         st.markdown(f"**Image:** `{svc.image_ref}`")
         st.markdown(f"**Container name:** `{svc._options.container_name}`")
         st.markdown(f"**Listen:** `{svc.listen_address}`")
+        # Read-only view of the resolved CLI args; the editable set lives on
+        # the Flags page (ADR-041). The bake-in prefix is shown first so the
+        # operator can see exactly what the running container was launched with.
+        args_display = " ".join(["--models-directory", "/vault/comfyui", *svc._options.extra_args])
+        st.markdown(f"**Args:** `{args_display}`")
     with cols[1]:
         nvidia_state = "available" if svc.has_nvidia_gpu else "not detected"
         amd_state = "available" if svc.has_amd_gpu else "not detected"
