@@ -222,6 +222,55 @@ def test_active_install_follows_variant(tmp_path: Path) -> None:
     assert svc.active_install is svc._install_rocm
 
 
+# --- extra-args persistence (ADR-041) --------------------------------------
+
+
+def test_set_extra_args_updates_memory(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    assert svc._options.extra_args == ["--verbose"]  # YAML default
+    svc.set_extra_args(["--lowvram", "--gpu-only"])
+    assert svc._options.extra_args == ["--lowvram", "--gpu-only"]
+
+
+def test_set_extra_args_empty_reverts_to_yaml_default(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc.set_extra_args(["--lowvram"])
+    svc.set_extra_args([])
+    assert svc._options.extra_args == []
+
+
+def test_set_extra_args_defensive_copy(tmp_path: Path) -> None:
+    """Caller's list is not aliased into ``_options.extra_args``."""
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    src = ["--lowvram"]
+    svc.set_extra_args(src)
+    src.append("--gpu-only")  # mutate source after the call
+    assert svc._options.extra_args == ["--lowvram"]
+
+
+def test_start_picks_up_in_memory_extra_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An in-memory edit reaches ``lifecycle.start_comfyui`` without a worker restart."""
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
+    svc.set_extra_args(["--lowvram", "--gpu-only"])
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    kwargs = mock_start.call_args.kwargs
+    # The bake-in prefix is still first; user flags follow it verbatim.
+    assert kwargs["extra_args"] == [
+        "--models-directory",
+        "/vault/comfyui",
+        "--lowvram",
+        "--gpu-only",
+    ]
+
+
 # --- capabilities ----------------------------------------------------------
 
 
@@ -629,12 +678,17 @@ def test_tail_log_returns_docker_logs_output(tmp_path: Path) -> None:
 # --- ui_pages --------------------------------------------------------------
 
 
-def test_ui_pages_has_three_pages_with_explicit_url_paths(tmp_path: Path) -> None:
-    """Three pages; explicit url_path to avoid slug collisions."""
+def test_ui_pages_has_four_pages_with_explicit_url_paths(tmp_path: Path) -> None:
+    """Four pages; explicit url_path to avoid slug collisions."""
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     pages = svc.ui_pages
-    assert [p.label for p in pages] == ["Status", "Image", "Models"]
-    assert [p.url_path for p in pages] == ["comfyui_status", "comfyui_image", "comfyui_models"]
+    assert [p.label for p in pages] == ["Status", "Image", "Models", "Flags"]
+    assert [p.url_path for p in pages] == [
+        "comfyui_status",
+        "comfyui_image",
+        "comfyui_models",
+        "comfyui_flags",
+    ]
 
 
 # --- resource estimate ----------------------------------------------------
