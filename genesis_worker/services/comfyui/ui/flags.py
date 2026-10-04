@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from ..cli_args import parse_extra_args
+
 SERVICE_NAME = "comfyui"
 
 worker = st.session_state["worker"]
@@ -39,11 +41,6 @@ st.caption(
 )
 
 _ERROR_KEY = "flags-start_error"
-
-
-def _parse_args(raw: str) -> list[str]:
-    """Split the text area into a list of flags, dropping blank lines."""
-    return [ln.strip() for ln in raw.splitlines() if ln.strip()]
 
 
 # Pull the current value from the sidecar when available so the form
@@ -61,15 +58,16 @@ raw = st.text_area(
     value="\n".join(current_value),
     height=240,
     help=(
-        "Each line is one CLI flag. Empty lines are ignored. "
+        "Each line is shell-tokenised: `--reserve-vram 10` becomes two argv "
+        "tokens (`--reserve-vram`, `10`). Blank lines are ignored. "
         "Example: `--lowvram --gpu-only --disable-metadata`."
     ),
 )
 
-parsed = _parse_args(raw)
+parsed = parse_extra_args(raw)
 
 st.caption(
-    f"`{len(parsed)}` flag(s) parsed. "
+    f"`{len(parsed)}` argv token(s) parsed. "
     "`--models-directory /vault/comfyui` is hardcoded before your flags; "
     "appending `--models-directory <other>` here will override it (last-wins)."
 )
