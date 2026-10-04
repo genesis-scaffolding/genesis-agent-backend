@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ..cli_args import parse_extra_args
+from genesis_worker.services.comfyui.cli_args import parse_extra_args
 
 SERVICE_NAME = "comfyui"
 
