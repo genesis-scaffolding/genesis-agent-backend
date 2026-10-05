@@ -136,6 +136,17 @@ class ComfyUiService(InferenceService):
         """
         self._options.extra_args = list(args)
 
+    def set_extra_env(self, env: dict[str, str]) -> None:
+        """Update ``extra_env`` in memory (ADR-041 pattern, second field).
+
+        Same split as :meth:`set_extra_args`: the service mutates the
+        in-memory ``_options.extra_env`` so the next ``start()`` picks
+        up the new value; the UI is responsible for also writing the
+        full sidecar via ``worker.write_service_overrides`` so a
+        worker restart reloads it via ``Settings.options_for``.
+        """
+        self._options.extra_env = dict(env)
+
     @property
     def effective_gpu_variant(self) -> str:
         """The variant the container runs: pinned choice or snapshot pick.
@@ -290,7 +301,15 @@ class ComfyUiService(InferenceService):
                 "/vault": str(self._vault_models_dir.parent),
             },
             extra_args=["--models-directory", "/vault/comfyui", *self._options.extra_args],
-            env={"PUID": str(self._puid), "PGID": str(self._pgid), **extra_env},
+            # User-supplied env is merged last so it wins on key
+            # collisions with the framework-managed PUID/PGID and
+            # the ROCm-specific env (ADR-036 env_map semantics).
+            env={
+                "PUID": str(self._puid),
+                "PGID": str(self._pgid),
+                **extra_env,
+                **self._options.extra_env,
+            },
             runtime=runtime,
             gpu_flags=gpu_flags,
             devices=devices,
@@ -351,7 +370,7 @@ class ComfyUiService(InferenceService):
                 "Image", ":material/inventory_2:", ui_dir / "image.py", url_path="comfyui_image"
             ),
             UiPage("Models", ":material/link:", ui_dir / "models.py", url_path="comfyui_models"),
-            UiPage("Flags", ":material/flag:", ui_dir / "flags.py", url_path="comfyui_flags"),
+            UiPage("Runtime", ":material/tune:", ui_dir / "runtime.py", url_path="comfyui_runtime"),
         ]
 
 

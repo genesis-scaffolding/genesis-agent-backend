@@ -98,3 +98,15 @@ The Status page keeps its existing layout. The current flags show up in the Cont
 1. ADR (this file).
 2. Service setter + sidecar write path + tests.
 3. UI page + ui-page import test.
+
+## Pattern extension
+
+The pattern above was reused for a second option field without
+modification to this ADR. `ComfyUiOptions.extra_env` (added in the
+follow-on commit) takes the same path: a Python plugin field with
+an in-memory setter (`set_extra_env`) plus a sidecar-persisted
+value driven by the same UI flow. The original Flags page became
+the Runtime page with two editors (flags + env) sharing one Save
+button. The architectural questions settled here (in-memory-only
+setter, UI writes through the facade, single canonical sidecar
+path) carried over unchanged.

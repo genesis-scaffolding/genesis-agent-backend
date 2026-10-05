@@ -69,6 +69,11 @@ class ComfyUiOptions(BaseModel):
 
     # --- extra container args ---
     extra_args: list[str] = ["--verbose"]
+    # --- extra env vars ---
+    # User-supplied env, merged into the container's env after PUID/PGID/ROCm
+    # so the user wins on key collisions (matches ADR-036's env_map semantics).
+    # Edited from the Runtime page; persists to the per-service JSON sidecar.
+    extra_env: dict[str, str] = {}
 
 
 __all__ = ["ComfyUiOptions"]

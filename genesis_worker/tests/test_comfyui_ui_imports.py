@@ -16,7 +16,7 @@ PAGES = [
     Path(__file__).resolve().parents[1] / "services" / "comfyui" / "ui" / "status.py",
     Path(__file__).resolve().parents[1] / "services" / "comfyui" / "ui" / "image.py",
     Path(__file__).resolve().parents[1] / "services" / "comfyui" / "ui" / "models.py",
-    Path(__file__).resolve().parents[1] / "services" / "comfyui" / "ui" / "flags.py",
+    Path(__file__).resolve().parents[1] / "services" / "comfyui" / "ui" / "runtime.py",
 ]
 
 
@@ -54,7 +54,7 @@ def test_models_page_parses() -> None:
     ), f"{page.name} must define SERVICE_NAME"
 
 
-def test_flags_page_parses() -> None:
+def test_runtime_page_parses() -> None:
     page = PAGES[3]
     tree = _parse(page)
     assert any(

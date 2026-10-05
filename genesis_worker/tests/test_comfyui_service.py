@@ -271,6 +271,87 @@ def test_start_picks_up_in_memory_extra_args(
     ]
 
 
+# --- extra-env (ADR-041 second field) --------------------------------------
+
+
+def test_set_extra_env_updates_memory(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    assert svc._options.extra_env == {}
+    svc.set_extra_env({"HF_HOME": "/cache", "HF_TOKEN": "hf_abc"})
+    assert svc._options.extra_env == {"HF_HOME": "/cache", "HF_TOKEN": "hf_abc"}
+
+
+def test_set_extra_env_defensive_copy(tmp_path: Path) -> None:
+    """Caller's dict is not aliased into ``_options.extra_env``."""
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    src = {"HF_HOME": "/cache"}
+    svc.set_extra_env(src)
+    src["HF_TOKEN"] = "hf_abc"  # mutate source after the call
+    assert svc._options.extra_env == {"HF_HOME": "/cache"}
+
+
+def test_set_extra_env_empty_reverts_to_empty(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc.set_extra_env({"HF_HOME": "/cache"})
+    svc.set_extra_env({})
+    assert svc._options.extra_env == {}
+
+
+def test_start_merges_extra_env_into_container_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User-supplied env reaches the container, after PUID/PGID."""
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
+    svc.set_extra_env({"HF_HOME": "/cache", "HF_TOKEN": "hf_abc"})
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    env = mock_start.call_args.kwargs["env"]
+    assert env["PUID"] == str(os.getuid())
+    assert env["PGID"] == str(os.getgid())
+    assert env["HF_HOME"] == "/cache"
+    assert env["HF_TOKEN"] == "hf_abc"
+
+
+def test_user_env_wins_on_collision_with_framework_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-036 env_map semantics: user additions win on key collisions."""
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    monkeypatch.setattr(svc, "_hardware", _hw(nvidia=True, runtime=True))
+    # ``PUID`` is a framework-managed key; the user's value should win.
+    svc.set_extra_env({"PUID": "9999"})
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    assert mock_start.call_args.kwargs["env"]["PUID"] == "9999"
+
+
+def test_user_env_wins_on_collision_with_rocm_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the ROCm path, the user env dict still wins over ``rocm_env``."""
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc._hardware = _hw(amd=True)  # rocm variant, AMD GPU present
+    svc.set_extra_env({"HIP_VISIBLE_DEVICES": "1"})
+    with patch("genesis_worker.services.comfyui.lifecycle.start_comfyui") as mock_start:
+        svc.start()
+    env = mock_start.call_args.kwargs["env"]
+    # The rocm default was "0"; the user value "1" wins.
+    assert env["HIP_VISIBLE_DEVICES"] == "1"
+
+
 # --- capabilities ----------------------------------------------------------
 
 
@@ -682,12 +763,12 @@ def test_ui_pages_has_four_pages_with_explicit_url_paths(tmp_path: Path) -> None
     """Four pages; explicit url_path to avoid slug collisions."""
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     pages = svc.ui_pages
-    assert [p.label for p in pages] == ["Status", "Image", "Models", "Flags"]
+    assert [p.label for p in pages] == ["Status", "Image", "Models", "Runtime"]
     assert [p.url_path for p in pages] == [
         "comfyui_status",
         "comfyui_image",
         "comfyui_models",
-        "comfyui_flags",
+        "comfyui_runtime",
     ]
 
 
