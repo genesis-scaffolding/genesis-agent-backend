@@ -1,8 +1,8 @@
-"""Tests for ``comfyui.cli_args.parse_extra_args``."""
+"""Tests for ``comfyui.cli_args.parse_extra_args`` and ``parse_extra_env``."""
 
 from __future__ import annotations
 
-from genesis_worker.services.comfyui.cli_args import parse_extra_args
+from genesis_worker.services.comfyui.cli_args import parse_extra_args, parse_extra_env
 
 
 def test_single_flag_per_line_stays_single_token() -> None:
@@ -72,3 +72,63 @@ def test_user_reported_repro() -> None:
     # Specifically: no element contains a literal space.
     for tok in result:
         assert " " not in tok
+
+
+# --- parse_extra_env -------------------------------------------------------
+
+
+def test_env_basic_key_value() -> None:
+    assert parse_extra_env("HF_HOME=/cache") == {"HF_HOME": "/cache"}
+
+
+def test_env_multiple_vars() -> None:
+    raw = "HF_HOME=/cache\nHF_TOKEN=hf_abc\nCOMFYUI_PORT=8188"
+    assert parse_extra_env(raw) == {
+        "HF_HOME": "/cache",
+        "HF_TOKEN": "hf_abc",
+        "COMFYUI_PORT": "8188",
+    }
+
+
+def test_env_empty_value_preserved() -> None:
+    """``FOO=`` is preserved as empty string (clears inherited default)."""
+    assert parse_extra_env("FOO=") == {"FOO": ""}
+
+
+def test_env_quoted_value_with_spaces_strips_quotes() -> None:
+    """``FOO=\"hello world\"`` → ``{"FOO": "hello world"}``."""
+    assert parse_extra_env('FOO="hello world"') == {"FOO": "hello world"}
+
+
+def test_env_unquoted_value_with_spaces_preserved() -> None:
+    """Unquoted spaces in the value are part of the value, not split."""
+    assert parse_extra_env("FOO=hello world") == {"FOO": "hello world"}
+
+
+def test_env_single_quotes_also_stripped() -> None:
+    assert parse_extra_env("FOO='hello world'") == {"FOO": "hello world"}
+
+
+def test_env_blank_lines_and_comments_skipped() -> None:
+    raw = "\n# a comment\nHF_HOME=/cache\n# another\n\nFOO=bar"
+    assert parse_extra_env(raw) == {"HF_HOME": "/cache", "FOO": "bar"}
+
+
+def test_env_lines_without_equals_are_skipped() -> None:
+    """A bare key with no value is silently ignored (no implicit empty)."""
+    raw = "HF_HOME=/cache\nNOT_A_VALID_LINE\nFOO=bar"
+    assert parse_extra_env(raw) == {"HF_HOME": "/cache", "FOO": "bar"}
+
+
+def test_env_empty_input() -> None:
+    assert parse_extra_env("") == {}
+    assert parse_extra_env("\n\n# only comments\n") == {}
+
+
+def test_env_value_with_equals_in_it() -> None:
+    """``partition`` on the first ``=`` so a literal ``=`` in the value survives."""
+    assert parse_extra_env("CONNECTION=host=db;port=5432") == {"CONNECTION": "host=db;port=5432"}
+
+
+def test_env_whitespace_around_key_stripped() -> None:
+    assert parse_extra_env("  HF_HOME  =/cache") == {"HF_HOME": "/cache"}

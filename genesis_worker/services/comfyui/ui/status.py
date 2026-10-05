@@ -41,11 +41,11 @@ with st.container(border=True):
         st.markdown(f"**Container name:** `{svc._options.container_name}`")
         st.markdown(f"**Listen:** `{svc.listen_address}`")
         # Read-only view of the resolved CLI args; the editable set lives on
-        # the Flags page (ADR-041). The bake-in prefix is shown first so the
-        # operator can see exactly what the running container was launched
-        # with. We render one argv element per line because tokens like
-        # ``--reserve-vram 10`` are two elements in argv, not one string with
-        # a space.
+        # the Runtime page (ADR-041). The bake-in prefix is shown first so
+        # the operator can see exactly what the running container was
+        # launched with. We render one argv element per line because tokens
+        # like ``--reserve-vram 10`` are two elements in argv, not one
+        # string with a space.
         args_display = "\n".join(["--models-directory /vault/comfyui", *svc._options.extra_args])
         st.code(args_display, language="bash")
     with cols[1]:
@@ -64,6 +64,25 @@ with st.container(border=True):
             )
         public_host = svc.public_host()
         st.markdown(f"**Public URL:** `http://{public_host}:{svc._options.listen_port}/`")
+
+# --- Effective env (read-only) ---------------------------------------------
+# Shows the full env the container will start with, including the
+# framework-managed PUID/PGID, the ROCm-specific env (only when the
+# active variant is rocm and the host has an AMD GPU), and the
+# user-supplied ``extra_env`` from the Runtime page. Order matches
+# what docker sees: framework → ROCm → user (user wins on collisions,
+# so it appears last). Read-only; edit on the Runtime page (ADR-041).
+with st.container(border=True):
+    st.subheader("Env")
+    effective_env: dict[str, str] = {
+        "PUID": str(svc._puid),
+        "PGID": str(svc._pgid),
+    }
+    if svc.effective_gpu_variant == "rocm" and svc.has_amd_gpu:
+        effective_env.update(svc._options.rocm_env)
+    effective_env.update(svc._options.extra_env)
+    env_display = "\n".join(f"{k}={v}" for k, v in effective_env.items())
+    st.code(env_display, language="bash")
 
 
 # --- GPU variant (ADR-040) -------------------------------------------------

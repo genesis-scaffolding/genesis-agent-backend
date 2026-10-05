@@ -40,4 +40,37 @@ def parse_extra_args(raw: str) -> list[str]:
     return out
 
 
-__all__ = ["parse_extra_args"]
+def parse_extra_env(raw: str) -> dict[str, str]:
+    """Parse the env text area into a dict of ``KEY=VALUE`` pairs.
+
+    One entry per line; ``#`` comments and blank lines are skipped;
+    lines without ``=`` are skipped. Whitespace around the key and
+    value is stripped. The value is everything after the first ``=``,
+    so unquoted spaces in the value are preserved (``FOO=hello world``
+    → ``{"FOO": "hello world"}``); matching surrounding quotes are
+    stripped so ``FOO="hello world"`` and ``FOO='hello world'`` both
+    produce ``{"FOO": "hello world"}`` without the quote characters.
+
+    ``FOO=`` (empty after ``=``) is preserved as an empty string —
+    operators sometimes need to set a key to an empty value to clear
+    a default the container would otherwise inherit.
+    """
+    out: dict[str, str] = {}
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
+__all__ = ["parse_extra_args", "parse_extra_env"]
