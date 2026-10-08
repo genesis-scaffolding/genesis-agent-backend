@@ -64,16 +64,53 @@ def test_walk_returns_empty_when_no_hub(tmp_path: Path) -> None:
     assert src.is_available() is False
 
 
-def test_walk_skips_partial_repo_without_refs(tmp_path: Path) -> None:
+def test_walk_skips_repo_without_snapshots(tmp_path: Path) -> None:
     hub = tmp_path / "huggingface" / "hub"
     repo = hub / "models--acme--broken"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text("abc")
+    # no snapshots dir
+    src = HuggingFaceSource(source_ctx(local_path=hub))
+    assert src.walk() == []
+
+
+def test_walk_includes_repos_without_refs_main(tmp_path: Path) -> None:
+    """refs/main is no longer required; snapshots are the source of truth."""
+    hub = tmp_path / "huggingface" / "hub"
+    repo = hub / "models--acme--norefs"
     snapshot = repo / "snapshots" / "abc"
     snapshot.mkdir(parents=True)
     (snapshot / "model.gguf").write_bytes(b"\x00")
-    (repo / "refs" / "main").parent.mkdir(parents=True, exist_ok=True)
-    # no refs/main
     src = HuggingFaceSource(source_ctx(local_path=hub))
-    assert src.walk() == []
+    models = src.walk()
+    assert len(models) == 1
+    assert models[0].native_id == "acme/norefs"
+
+
+def test_walk_merges_all_snapshot_revisions(tmp_path: Path) -> None:
+    """One entry per repo; pieces from every revision merged and deduped."""
+    hub = tmp_path / "huggingface" / "hub"
+    repo = hub / "models--acme--multi"
+    s1 = repo / "snapshots" / "aaa111"
+    s1.mkdir(parents=True)
+    (s1 / "model.gguf").write_bytes(b"\x00" * 100)
+    (s1 / "shared.safetensors").write_bytes(b"\x00" * 50)
+    s2 = repo / "snapshots" / "bbb222"
+    s2.mkdir(parents=True)
+    (s2 / "lora.safetensors").write_bytes(b"\x00" * 25)
+    (s2 / "shared.safetensors").symlink_to("../aaa111/shared.safetensors")
+    (repo / "refs" / "main").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "refs" / "main").write_text("bbb222")
+    src = HuggingFaceSource(source_ctx(local_path=hub))
+    models = src.walk()
+    assert len(models) == 1
+    m = models[0]
+    assert m.native_id == "acme/multi"
+    # 3 unique files: model + lora + shared (deduped across revisions)
+    assert len(m.pieces) == 3
+    assert m.total_bytes == 100 + 50 + 25
+    assert m.extra["snapshots"] == ["aaa111", "bbb222"]
+    assert m.extra["snapshot"] == "aaa111"
 
 
 def test_walk_notes_when_no_weights(tmp_path: Path) -> None:

@@ -70,32 +70,45 @@ class HuggingFaceSource(ModelSource):
                 continue
             repo_id = f"{parts[1]}/{'--'.join(parts[2:])}"
 
-            refs_main = repo_dir / "refs" / "main"
             snapshots_dir = repo_dir / "snapshots"
-            if not refs_main.is_file() or not snapshots_dir.is_dir():
+            if not snapshots_dir.is_dir():
                 continue
 
-            try:
-                sha = refs_main.read_text().strip()
-            except OSError:
+            # Merge pieces across all snapshot revisions into one model entry.
+            # Dedupe by resolved blob path: the same file can appear under the
+            # same relative name in multiple revisions (e.g. a re-uploaded
+            # weight) and we only want to count it once.
+            all_pieces: list[ModelPiece] = []
+            seen_paths: set[Path] = set()
+            snapshot_shas: list[str] = []
+            for snapshot_dir in sorted(snapshots_dir.iterdir()):
+                if not snapshot_dir.is_dir():
+                    continue
+                snapshot_shas.append(snapshot_dir.name)
+                pieces, _ = _collect_pieces(snapshot_dir)
+                for piece in pieces:
+                    if piece.path in seen_paths:
+                        continue
+                    seen_paths.add(piece.path)
+                    all_pieces.append(piece)
+            if not all_pieces:
                 continue
 
-            snapshot_dir = snapshots_dir / sha
-            if not snapshot_dir.is_dir():
-                continue
-
-            pieces, total_bytes = _collect_pieces(snapshot_dir)
-            notes = _summarize_notes(pieces)
+            total_bytes = sum(p.bytes for p in all_pieces)
+            main_snapshot = snapshot_shas[0] if snapshot_shas else None
+            # directory is the whole repo: the entry now spans all revisions,
+            # so "delete model" (facade.delete_model) wipes the entire repo.
+            directory = repo_dir
 
             out.append(
                 DiscoveredModel(
                     source="huggingface",
                     native_id=repo_id,
-                    pieces=pieces,
+                    pieces=all_pieces,
                     total_bytes=total_bytes,
-                    directory=snapshot_dir.resolve(),
-                    notes=notes,
-                    extra={"snapshot": sha},
+                    directory=directory.resolve(),
+                    notes=_summarize_notes(all_pieces),
+                    extra={"snapshot": main_snapshot, "snapshots": snapshot_shas},
                 )
             )
 
