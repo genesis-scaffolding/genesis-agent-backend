@@ -7,10 +7,15 @@
 # (8099 is free; avoids the worker's other used ports). Config persists
 # under ``$data_dir/config`` and the books directory is bind-mounted from
 # ``$options.books_dir`` (defaults to ``$media_vault_path``) into the
-# container's ``/manga`` path.
+# container's ``/manga`` path. Kavita also exposes ``/comics`` and
+# ``/books`` mount points for mixed libraries; use ``extra_mounts`` to add
+# them if needed.
+#
+# The official image does not support PUID/PGID (a linuxserver.io
+# convention) -- ``puid_default``/``pgid_default`` are ``false``.
 #
 # See https://hub.docker.com/r/jvmilazz0/kavita and
-# https://wiki.kavitareader.com/en/getting-started.
+# https://wiki.kavitareader.com/installation/docker.
 
 version: 1
 kind: docker
@@ -47,8 +52,8 @@ container:
   health_probe_path: /
   web_ui_path: /
   restart_policy: unless-stopped
-  puid_default: true
-  pgid_default: true
+  puid_default: false
+  pgid_default: false
 
 env:
   TZ: "$options.tz"
