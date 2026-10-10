@@ -1,18 +1,21 @@
 # Navidrome declarative service spec.
 #
-# Self-hosted music streaming server (navidrome/navidrome). Navidrome
-# listens on port 4533 inside the container; we map host 4533 -> container
-# 4533 (clear of llama-swap/8080, bifrost/8090, worker API/9090,
-# ntfy/8092, jellyfin/8096, and everything else in use). Persists its
-# SQLite database and cache under ``$data_dir`` (mapped to container /data)
-# and reads the music library from ``$options.music_dir`` (mapped to
-# container /music, read-only).
+# Self-hosted music streaming server (deluan/navidrome -- the official
+# image; ``navidrome/navidrome`` on Docker Hub is an archived redirect).
+# Navidrome listens on port 4533 inside the container; we map host
+# 4533 -> container 4533 (clear of llama-swap/8080, bifrost/8090, worker
+# API/9090, ntfy/8092, jellyfin/8096, and everything else in use). Persists
+# its SQLite database and cache under ``$data_dir`` (mapped to container
+# /data) and reads the music library from ``$options.music_dir`` (mapped to
+# container /music).
 #
-# Navidrome's image ignores PUID/PGID env vars -- it requires the
-# ``user`` directive instead. We set ``puid_default`` and ``pgid_default``
-# to ``true`` anyway: the framework injects ``PUID``/``PGID`` which are
-# silently ignored, and Docker's ``--user`` flag handles the actual UID
-# mapping when the container is started.
+# The container's music/data paths are set by the volume mounts alone --
+# Navidrome defaults ND_MUSICFOLDER=/music and ND_DATAFOLDER=/data, which
+# match the mounts, so no env vars are needed for them.
+#
+# Navidrome's image ignores PUID/PGID env vars (a linuxserver.io
+# convention) -- the official docs say to use the ``user`` directive
+# instead. ``puid_default``/``pgid_default`` are therefore ``false``.
 #
 # First-launch: navigate to the web UI, create the first admin account.
 # Navidrome has no built-in auth-token or pre-seed mechanism.
@@ -41,10 +44,10 @@ resource_estimate:
   cpu_cores_recommended: 1
 
 image:
-  repo: navidrome/navidrome
+  repo: deluan/navidrome
   tag: latest
   install_name: navidrome
-  source_url: https://hub.docker.com/r/navidrome/navidrome
+  source_url: https://hub.docker.com/r/deluan/navidrome
 
 container:
   name: navidrome
@@ -54,12 +57,10 @@ container:
   health_probe_path: /
   web_ui_path: /
   restart_policy: unless-stopped
-  puid_default: true
-  pgid_default: true
+  puid_default: false
+  pgid_default: false
 
 env:
-  ND_MUSICFOLDER: "$options.music_dir"
-  ND_DATAFOLDER: "/data"
   ND_LOGLEVEL: "$options.loglevel"
 
 volumes:
@@ -77,7 +78,7 @@ options:
     type: path
     default: "$media_vault_path"
     ui_label: Music library
-    ui_help: Host directory containing your music files (bind-mounted read-only into the container)
+    ui_help: Host directory containing your music files (bind-mounted into the container as /music)
     ui_group: Storage
   loglevel:
     type: string
