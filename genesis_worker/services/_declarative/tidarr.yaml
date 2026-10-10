@@ -1,0 +1,119 @@
+# Tidarr declarative service spec.
+# Self-hosted Tidal downloader with a ReactJS + ExpressJS web UI (cstaelen/tidarr).
+# Tidarr authenticates against Tidal via an interactive OAuth device-flow in the
+# web UI or via a docker exec tiddl auth command. Downloaded files land under
+# /music inside the container (bound to options.download_dir on the host, which
+# defaults to media_vault_path), so Jellyfin / Navidrome scan them automatically.
+#
+# The image ships both latest (rolling) and versioned tags on Docker Hub.
+# It supports PUID / PGID / UMASK. The container entrypoint uses su-exec;
+# the declarative framework's puid_default: true produces the same env vars.
+#
+# Health probe: /api/is-auth-active
+# See https://github.com/cstaelen/tidarr.
+
+version: 1
+kind: docker
+name: tidarr
+display_name: Tidarr
+description: Self-hosted Tidal downloader with web UI -- download tracks, albums, playlists, and music videos up to 24-bit/192 kHz FLAC directly into the shared media vault
+category: media
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: cstaelen/tidarr
+  tag: latest
+  install_name: tidarr
+  source_url: https://hub.docker.com/r/cstaelen/tidarr
+
+container:
+  name: tidarr
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 8484
+  health_probe_path: /api/is-auth-active
+  web_ui_path: /
+  restart_policy: unless-stopped
+  puid_default: true
+  pgid_default: true
+
+env:
+  PORT: "$options.listen_port"
+  TZ: "$options.tz"
+  ADMIN_PASSWORD: "$options.admin_password"
+  NAVIDROME_URL: "$options.navidrome_url"
+  NAVIDROME_USER: "$options.navidrome_user"
+  NAVIDROME_PASSWORD: "$options.navidrome_password"
+
+volumes:
+  /shared: "$data_dir"
+  /music: "$options.download_dir"
+
+options:
+  listen_port:
+    type: port
+    default: 8097
+    ui_label: Web UI port
+    ui_help: Host-side port the Tidarr web UI listens on (default 8097; internal container port is always 8484)
+    ui_group: Network
+  download_dir:
+    type: path
+    default: "$media_vault_path"
+    ui_label: Download directory
+    ui_help: Host directory Tidarr writes downloaded media into; bind-mounted to /music inside the container. Defaults to the shared media vault so Jellyfin and Navidrome scan the files automatically.
+    ui_group: Storage
+  tz:
+    type: string
+    default: "UTC"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Australia/Adelaide)
+    ui_group: General
+  admin_password:
+    type: string
+    default: ""
+    ui_label: Admin password
+    ui_help: Optional. If set, a password is required to access the web UI. Leave empty for open access (authenticate with Tidal OAuth instead).
+    ui_group: Security
+  navidrome_url:
+    type: string
+    default: ""
+    ui_label: Navidrome URL
+    ui_help: Optional. URL of your Navidrome instance (e.g. http://localhost:4533). When set, Tidarr can trigger a Navidrome library scan after downloads complete.
+    ui_group: Services
+  navidrome_user:
+    type: string
+    default: ""
+    ui_label: Navidrome username
+    ui_help: Navidrome username for scan-triggering. Required only when navidrome_url is set.
+    ui_group: Services
+  navidrome_password:
+    type: string
+    default: ""
+    ui_label: Navidrome password
+    ui_help: Navidrome password. Stored in plain text in the container -- use a dedicated low-privilege Navidrome account.
+    ui_group: Services
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional Tidarr env vars (see https://github.com/cstaelen/tidarr#options)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host->container bind mounts
+    ui_group: Advanced

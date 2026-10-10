@@ -78,6 +78,7 @@ _BUILT_IN_SPECS = (
     "ntfy.yaml",
     "photoprism.yaml",
     "sillytavern.yaml",
+    "tidarr.yaml",
 )
 
 
