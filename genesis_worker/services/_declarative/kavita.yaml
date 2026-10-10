@@ -1,0 +1,90 @@
+# Kavita declarative service spec.
+#
+# Self-hosted ebook / comic / manga server (jvmilazz0/kavita). Kavita is
+# a .NET app that indexes a plain directory of epub / cbz / cbr / pdf /
+# mobi files directly — no Calibre database required. The container
+# listens on port 5000 internally; we map host 8099 -> container 5000
+# (8099 is free; avoids the worker's other used ports). Config persists
+# under ``$data_dir/config`` and the books directory is bind-mounted from
+# ``$options.books_dir`` (defaults to ``$media_vault_path``) into the
+# container's ``/manga`` path.
+#
+# See https://hub.docker.com/r/jvmilazz0/kavita and
+# https://wiki.kavitareader.com/en/getting-started.
+
+version: 1
+kind: docker
+name: kavita
+display_name: Kavita
+description: Self-hosted ebook, comic, and manga server
+category: media
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: jvmilazz0/kavita
+  tag: latest
+  install_name: kavita
+  source_url: https://hub.docker.com/r/jvmilazz0/kavita
+
+container:
+  name: kavita
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 5000
+  health_probe_path: /
+  web_ui_path: /
+  restart_policy: unless-stopped
+  puid_default: true
+  pgid_default: true
+
+env:
+  TZ: "$options.tz"
+
+volumes:
+  /kavita/config: "$data_dir/config"
+  /manga: "$options.books_dir"
+
+options:
+  listen_port:
+    type: port
+    default: 8099
+    ui_label: Web UI port
+    ui_help: Host-side port the Kavita web UI listens on
+    ui_group: Network
+  tz:
+    type: string
+    default: "UTC"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Australia/Adelaide)
+    ui_group: General
+  books_dir:
+    type: path
+    default: "$media_vault_path"
+    ui_label: Books / library directory
+    ui_help: Directory Kavita indexes for books, comics, and manga. Bind-mounted into the container as /manga.
+    ui_group: Storage
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional Kavita env vars (see https://wiki.kavitareader.com/en/getting-started)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host→container bind mounts
+    ui_group: Advanced
