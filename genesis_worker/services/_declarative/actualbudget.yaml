@@ -1,0 +1,78 @@
+# actualbudget declarative service spec.
+#
+# Self-hosted personal finance manager (Actual Budget / actualbudget/actual-server).
+# Actual is a local-first, envelope-budgeting app with a modern PWA web UI.
+# Single container; SQLite is embedded in the image. Data persists under
+# ``$data_dir/data`` which the container maps to its own ``/data``. Port
+# 5006 inside the container maps to host 8100 (avoiding the worker's other
+# in-use ports). No PUID/PGID because the image does not honour them.
+# See https://actualbudget.org/docs/install/docker/ and
+# https://github.com/actualbudget/actual.
+
+version: 1
+kind: docker
+name: actualbudget
+display_name: Actual Budget
+description: Self-hosted personal finance and envelope budgeting
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: actualbudget/actual-server
+  tag: latest
+  install_name: actualbudget
+  source_url: https://hub.docker.com/r/actualbudget/actual-server
+
+container:
+  name: actualbudget
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 5006          # actual-server's default
+  health_probe_path: /
+  web_ui_path: /
+  restart_policy: unless-stopped
+
+env:
+  TZ: "$options.tz"
+
+volumes:
+  /data: "$data_dir/data"
+
+options:
+  listen_port:
+    type: port
+    default: 8100
+    ui_label: Web UI port
+    ui_help: Host-side port the Actual Budget web UI listens on
+    ui_group: Network
+  tz:
+    type: string
+    default: "UTC"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Australia/Adelaide)
+    ui_group: General
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional environment variables (see https://actualbudget.org/docs/install/docker/)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host->container bind mounts
+    ui_group: Advanced
