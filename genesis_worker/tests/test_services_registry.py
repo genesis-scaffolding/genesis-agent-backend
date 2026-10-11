@@ -53,6 +53,7 @@ def test_registry_all_returns_every_service() -> None:
         "freshrss",
         "llama_swap",
         "navidrome",
+        "jellyfin",
         "ntfy",
         "photoprism",
         "sillytavern",
