@@ -75,6 +75,8 @@ _BUILT_IN_SPECS = (
     "bifrost.yaml",
     "crawl4ai.yaml",
     "freshrss.yaml",
+    "navidrome.yaml",
+    "jellyfin.yaml",
     "ntfy.yaml",
     "photoprism.yaml",
     "sillytavern.yaml",
