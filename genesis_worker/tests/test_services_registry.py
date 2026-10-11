@@ -56,6 +56,11 @@ def test_registry_all_returns_every_service() -> None:
         "ntfy",
         "photoprism",
         "sillytavern",
+        "llama_swap",
+        "metube",
+        "tidarr",
+        "navidrome",
+        "jellyfin",
     }
 
 
