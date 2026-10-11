@@ -1,0 +1,100 @@
+# Navidrome declarative service spec.
+#
+# Self-hosted music streaming server (deluan/navidrome -- the official
+# image; ``navidrome/navidrome`` on Docker Hub is an archived redirect).
+# Navidrome listens on port 4533 inside the container; we map host
+# 4533 -> container 4533 (clear of llama-swap/8080, bifrost/8090, worker
+# API/9090, ntfy/8092, jellyfin/8096, and everything else in use). Persists
+# its SQLite database and cache under ``$data_dir`` (mapped to container
+# /data) and reads the music library from ``$options.music_dir`` (mapped to
+# container /music).
+#
+# The container's music/data paths are set by the volume mounts alone --
+# Navidrome defaults ND_MUSICFOLDER=/music and ND_DATAFOLDER=/data, which
+# match the mounts, so no env vars are needed for them.
+#
+# Navidrome's image ignores PUID/PGID env vars (a linuxserver.io
+# convention) -- the official docs say to use the ``user`` directive
+# instead. ``puid_default``/``pgid_default`` are therefore ``false``.
+#
+# First-launch: navigate to the web UI, create the first admin account.
+# Navidrome has no built-in auth-token or pre-seed mechanism.
+# See https://www.navidrome.org/docs/installation/docker/
+# and https://www.navidrome.org/docs/usage/configuration/options/.
+
+version: 1
+kind: docker
+name: navidrome
+display_name: Navidrome
+description: Self-hosted music streaming server (Subsonic-compatible)
+category: media
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: deluan/navidrome
+  tag: latest
+  install_name: navidrome
+  source_url: https://hub.docker.com/r/deluan/navidrome
+
+container:
+  name: navidrome
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 4533
+  health_probe_path: /
+  web_ui_path: /
+  restart_policy: unless-stopped
+  puid_default: false
+  pgid_default: false
+
+env:
+  ND_LOGLEVEL: "$options.loglevel"
+
+volumes:
+  /data: "$data_dir"
+  /music: "$options.music_dir"
+
+options:
+  listen_port:
+    type: port
+    default: 4533
+    ui_label: Web UI port
+    ui_help: Host-side port the Navidrome web UI listens on
+    ui_group: Network
+  music_dir:
+    type: path
+    default: "$media_vault_path"
+    ui_label: Music library
+    ui_help: Host directory containing your music files (bind-mounted into the container as /music)
+    ui_group: Storage
+  loglevel:
+    type: string
+    default: info
+    ui_label: Log level
+    ui_help: Navidrome log level (error, warn, info, debug, trace)
+    ui_group: General
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional ND_* Navidrome env vars (see https://www.navidrome.org/docs/usage/configuration/options/)
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host->container bind mounts
+    ui_group: Advanced
