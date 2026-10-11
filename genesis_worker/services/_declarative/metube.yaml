@@ -3,8 +3,9 @@
 # Self-hosted YouTube/yt-dlp downloader with a web UI (alexta69/metube).
 # Python/Flask backend + browser frontend; yt-dlp handles the actual
 # extraction. Downloads land in ``/downloads`` (bind-mounted from
-# ``$options.download_dir``) so Jellyfin picks them up via the shared
-# media vault. The ``STATE_DIR`` defaults to ``/downloads/.metube`` and
+# ``$options.download_dir``, which defaults to <media vault>/youtube so
+# downloads stay in their own subdirectory rather than scattering across
+# the vault root) so Jellyfin picks them up via the shared media vault. The ``STATE_DIR`` defaults to ``/downloads/.metube`` and
 # stores the queue, history, subscriptions, and uploaded cookies so
 # sessions survive container restarts. Host port 8098 avoids every other
 # in-use port in this stack.
@@ -66,9 +67,9 @@ options:
     ui_group: Network
   download_dir:
     type: path
-    default: "$media_vault_path"
+    default: "$media_vault_path/youtube"
     ui_label: Download directory
-    ui_help: Host directory where downloaded files are saved (defaults to the worker's media vault at ~/media so Jellyfin can pick them up)
+    ui_help: Host directory where downloaded files are saved (defaults to <media vault>/youtube, matching the tidy-subdirectory pattern of tidal and comfyui, so Jellyfin can pick them up)
     ui_group: Storage
   puid:
     type: int
