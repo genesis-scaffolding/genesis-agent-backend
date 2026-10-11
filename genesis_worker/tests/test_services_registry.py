@@ -52,10 +52,16 @@ def test_registry_all_returns_every_service() -> None:
         "cptr",
         "crawl4ai",
         "freshrss",
+        "kavita",
         "llama_swap",
         "ntfy",
         "photoprism",
         "sillytavern",
+        "llama_swap",
+        "metube",
+        "tidarr",
+        "navidrome",
+        "jellyfin",
     }
 
 
