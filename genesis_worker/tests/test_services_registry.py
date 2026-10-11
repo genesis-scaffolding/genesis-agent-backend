@@ -46,15 +46,16 @@ def test_registry_unknown_service_raises() -> None:
 
 def test_registry_all_returns_every_service() -> None:
     assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {
-        "llama_swap",
-        "cptr",
-        "comfyui",
-        "sillytavern",
-        "crawl4ai",
         "bifrost",
+        "comfyui",
+        "cptr",
+        "crawl4ai",
         "freshrss",
+        "jellyfin",
+        "llama_swap",
         "ntfy",
         "photoprism",
+        "sillytavern",
     }
 
 
