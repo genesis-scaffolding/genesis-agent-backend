@@ -51,7 +51,7 @@ container:
   pgid_default: true
 
 env:
-  PORT: "$options.listen_port"
+  PORT: "8484"  # must match internal_port; Docker maps host listen_port -> 8484
   TZ: "$options.tz"
   ADMIN_PASSWORD: "$options.admin_password"
   NAVIDROME_URL: "$options.navidrome_url"
@@ -67,7 +67,7 @@ options:
     type: port
     default: 8097
     ui_label: Web UI port
-    ui_help: Host-side port the Tidarr web UI listens on (default 8097; internal container port is always 8484)
+    ui_help: Host-side port the Tidarr web UI is published on (default 8097); the container itself always listens on 8484
     ui_group: Network
   download_dir:
     type: path
