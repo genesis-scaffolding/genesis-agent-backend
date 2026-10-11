@@ -3,7 +3,9 @@
 # Tidarr authenticates against Tidal via an interactive OAuth device-flow in the
 # web UI or via a docker exec tiddl auth command. Downloaded files land under
 # /music inside the container (bound to options.download_dir on the host, which
-# defaults to media_vault_path), so Jellyfin / Navidrome scan them automatically.
+# defaults to <media_vault>/tidal so Tidarr's album tree stays in its own
+# subdirectory rather than scattering across the media vault root), so
+# Jellyfin / Navidrome scan them automatically.
 #
 # The image ships both latest (rolling) and versioned tags on Docker Hub.
 # It supports PUID / PGID / UMASK. The container entrypoint uses su-exec;
@@ -71,9 +73,9 @@ options:
     ui_group: Network
   download_dir:
     type: path
-    default: "$media_vault_path"
+    default: "$media_vault_path/tidal"
     ui_label: Download directory
-    ui_help: Host directory Tidarr writes downloaded media into; bind-mounted to /music inside the container. Defaults to the shared media vault so Jellyfin and Navidrome scan the files automatically.
+    ui_help: Host directory Tidarr writes downloaded media into; bind-mounted to /music inside the container. Defaults to <media vault>/tidal so downloads stay in their own subdirectory (like comfyui's <media vault>/comfyui) instead of scattering across the vault root. Jellyfin and Navidrome still scan it automatically.
     ui_group: Storage
   tz:
     type: string
