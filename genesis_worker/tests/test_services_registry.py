@@ -46,6 +46,7 @@ def test_registry_unknown_service_raises() -> None:
 
 def test_registry_all_returns_every_service() -> None:
     assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {
+        "actualbudget",
         "bifrost",
         "comfyui",
         "cptr",

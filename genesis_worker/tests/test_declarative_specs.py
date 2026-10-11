@@ -72,6 +72,7 @@ def test_declarative_dir_has_no_python_modules_other_than_init() -> None:
 
 
 _BUILT_IN_SPECS = (
+    "actualbudget.yaml",
     "bifrost.yaml",
     "crawl4ai.yaml",
     "freshrss.yaml",
