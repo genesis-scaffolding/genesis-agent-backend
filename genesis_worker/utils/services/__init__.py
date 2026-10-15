@@ -10,6 +10,11 @@ import from it without violating the framework boundary (ADR-009).
 """
 
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
+from .compose_service import (
+    ComposeImageInstall,
+    ComposeService,
+    ComposeServiceConfig,
+)
 from .docker_service import (
     AuthConfig,
     DockerImageInstall,
@@ -18,6 +23,7 @@ from .docker_service import (
 )
 from .loader import load_service_spec, resolve_placeholders
 from .spec import (
+    ComposeServiceSpec,
     DockerServiceSpec,
     OptionSpec,
     ServiceSpecUnion,
@@ -29,6 +35,10 @@ from .uv_service import UvService, UvServiceConfig, UvToolInstall
 
 __all__ = [
     "AuthConfig",
+    "ComposeImageInstall",
+    "ComposeService",
+    "ComposeServiceConfig",
+    "ComposeServiceSpec",
     "DeclarativeServiceBase",
     "DeclarativeServiceConfig",
     "DockerImageInstall",

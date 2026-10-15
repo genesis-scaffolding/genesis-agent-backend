@@ -1,0 +1,103 @@
+# ROMM — self-hosted ROM library manager.
+# https://docs.romm.app/latest/getting-started/quick-start/
+# Ships as a docker compose stack: romm (web app) + romm-db (PostgreSQL).
+
+version: 1
+kind: compose
+name: romm
+display_name: ROMM
+description: Self-hosted ROM library manager
+category: media
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 2
+
+compose_version: "3.8"
+listen_port: 8080
+health_probe_path: /
+
+# The compose_template is a Jinja2 string. The loader has already resolved
+# all $placeholder strings ($state_dir, $data_dir, $options.X) to their
+# typed runtime values before the template is stored. Jinja2 renders at
+# start time for compose-specific expressions (conditionals, loops).
+compose_template: |
+  version: "3.8"
+  services:
+    romm:
+      image: rommapp/romm:{{ romm_version }}
+      container_name: romm
+      restart: unless-stopped
+      ports:
+        - "{{ listen_host }}:{{ listen_port }}:8080"
+      environment:
+        ROMM_DB_HOST: romm-db
+        ROMM_DB_NAME: {{ db_name }}
+        ROMM_DB_USER: {{ db_user }}
+        ROMM_DB_PASS: "{{ db_password }}"
+        ROMM_FRONTEND: "1"
+      volumes:
+        - {{ state_dir }}/library:/romm/library
+        - {{ state_dir }}/config:/romm/config
+        - {{ data_dir }}/roms:/romm/roms
+      healthcheck:
+        test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 30s
+
+    romm-db:
+      image: postgres:16-alpine
+      container_name: romm-db
+      restart: unless-stopped
+      environment:
+        POSTGRES_DB: {{ db_name }}
+        POSTGRES_USER: {{ db_user }}
+        POSTGRES_PASSWORD: "{{ db_password }}"
+      volumes:
+        - {{ state_dir }}/db:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD", "pg_isready", "-U", "{{ db_user }}"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+options:
+  listen_port:
+    type: port
+    default: 8080
+    ui_label: Web UI port
+    ui_group: Network
+  romm_version:
+    type: string
+    default: "latest"
+    ui_label: ROMM version
+    ui_help: Docker image tag (e.g. latest, 3.0.0)
+    ui_group: Container
+  db_name:
+    type: string
+    default: "romm"
+    ui_label: Database name
+    ui_group: Database
+  db_user:
+    type: string
+    default: "romm"
+    ui_label: Database user
+    ui_group: Database
+  db_password:
+    type: string
+    default: "changeme"
+    ui_label: Database password
+    ui_help: Change this to a strong unique password before starting
+    ui_group: Database

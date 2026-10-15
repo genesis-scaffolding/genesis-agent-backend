@@ -35,8 +35,10 @@ from ...contracts import (
 )
 from . import spec as _spec_module
 from .base import DeclarativeServiceBase
+from .compose_service import ComposeService, ComposeServiceConfig
 from .docker_service import AuthConfig, DockerService, DockerServiceConfig
 from .spec import (
+    ComposeServiceSpec,
     DockerServiceSpec,
     OptionSpec,
     UvServiceSpec,
@@ -146,7 +148,7 @@ def resolve_placeholders(
 # --- the loader --------------------------------------------------------------
 
 
-def _validate_spec(raw: dict) -> DockerServiceSpec | UvServiceSpec:
+def _validate_spec(raw: dict) -> DockerServiceSpec | UvServiceSpec | ComposeServiceSpec:
     """Dispatch a raw YAML dict to the right spec model by ``kind``.
 
     ``ServiceSpecUnion`` is the discriminated union type, but pydantic
@@ -158,7 +160,9 @@ def _validate_spec(raw: dict) -> DockerServiceSpec | UvServiceSpec:
         return DockerServiceSpec.model_validate(raw)
     if kind == "uv":
         return UvServiceSpec.model_validate(raw)
-    raise ValueError(f"unknown service kind {kind!r}; expected 'docker' or 'uv'")
+    if kind == "compose":
+        return ComposeServiceSpec.model_validate(raw)
+    raise ValueError(f"unknown service kind {kind!r}; expected 'docker', 'uv', or 'compose'")
 
 
 def _build_docker_config(
@@ -234,6 +238,53 @@ def _build_docker_config(
         data_dir_subpath=resolved["data_dir_subpath"],
         pre_start_hooks=tuple(resolved.get("pre_start_hooks") or ()),
         auth=auth_cfg,
+    )
+
+
+def _build_compose_config(
+    resolved: dict,
+    options_model: type[BaseModel],
+    option_specs: Mapping[str, _spec_module.OptionSpec],
+    options_resolved: Mapping[str, Any],
+) -> ComposeServiceConfig:
+    """Translate an already-resolved compose spec dict into ``ComposeServiceConfig``.
+
+    The caller has substituted every ``$placeholder``. This function
+    just maps resolved data into the config dataclass.
+    """
+    ui = resolved["ui"]
+    category = ServiceCategory(resolved["category"])
+    capabilities = ServiceCapabilities(**resolved["capabilities"])
+    resource_estimate = ServiceResourceEstimate(**resolved["resource_estimate"])
+    extra_env = dict(options_resolved.get("extra_env") or {})
+    extra_mounts_raw = options_resolved.get("extra_mounts") or {}
+    extra_mounts = {k: str(v) for k, v in extra_mounts_raw.items()}
+    merged_env = {**(resolved.get("env") or {}), **extra_env}
+    merged_env = {
+        k: ("true" if v is True else "false" if v is False else v) for k, v in merged_env.items()
+    }
+    merged_volumes = {**(resolved.get("volumes") or {}), **extra_mounts}
+    return ComposeServiceConfig(
+        name=resolved["name"],
+        display_name=resolved["display_name"],
+        description=resolved["description"],
+        category=category,
+        capabilities=capabilities,
+        resource_estimate=resource_estimate,
+        options_model=options_model,
+        log_filename=resolved["log_filename"],
+        ui_pages=tuple(ui["status_panels"]),
+        option_specs=option_specs,
+        # compose-specific
+        compose_template=resolved["compose_template"],
+        compose_version=resolved.get("compose_version", "3.8"),
+        listen_host=resolved["listen_host"],
+        listen_port=resolved["listen_port"],
+        health_probe_path=resolved.get("health_probe_path", "/"),
+        extra_env=merged_env,
+        extra_volumes=merged_volumes,
+        pre_start_hooks=tuple(resolved.get("pre_start_hooks") or ()),
+        data_dir_subpath=resolved.get("data_dir_subpath"),
     )
 
 
@@ -353,7 +404,9 @@ def load_service_spec(
     raw_substituted = resolve_placeholders(raw, ctx, options_resolved)
 
     try:
-        spec: DockerServiceSpec | UvServiceSpec = _validate_spec(raw_substituted)
+        spec: DockerServiceSpec | UvServiceSpec | ComposeServiceSpec = _validate_spec(
+            raw_substituted
+        )
     except ValidationError as exc:
         raise ValueError(f"{path}: YAML failed schema validation:\n{exc}") from exc
 
@@ -386,6 +439,10 @@ def load_service_spec(
     if isinstance(spec, DockerServiceSpec):
         config = _build_docker_config(resolved, options_model, spec.options)
         return DockerService(ctx, config=config)
+
+    if isinstance(spec, ComposeServiceSpec):
+        config = _build_compose_config(resolved, options_model, spec.options, options_resolved)
+        return ComposeService(ctx, config=config)
 
     config = _build_uv_config(resolved, options_model, spec.options)
     return UvService(ctx, config=config)

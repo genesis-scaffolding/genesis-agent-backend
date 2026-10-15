@@ -30,6 +30,7 @@ from genesis_worker.contracts import (
 from genesis_worker.registries import ServiceRegistry
 from genesis_worker.tests._factories import service_ctx
 from genesis_worker.utils.services import (
+    ComposeService,
     DockerService,
     load_service_spec,
 )
@@ -82,13 +83,21 @@ _BUILT_IN_SPECS = (
     "jellyfin.yaml",
     "ntfy.yaml",
     "photoprism.yaml",
+    "romm.yaml",
     "sillytavern.yaml",
     "tidarr.yaml",
 )
 
+# Docker-kind specs only (excludes compose services like romm.yaml)
+_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s != "romm.yaml")
+
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
-    """Parse + construct one built-in YAML spec against a hermetic context."""
+    """Parse + construct one built-in YAML spec against a hermetic context.
+
+    Returns DockerService for all docker-kind specs. Compose services should
+    be loaded via load_service_spec directly.
+    """
     path = _DECLARATIVE_DIR / name
     assert path.is_file(), f"missing built-in spec: {path}"
     svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
@@ -96,14 +105,14 @@ def _load_spec(name: str, tmp_path: Path) -> DockerService:
     return svc
 
 
-@pytest.mark.parametrize("spec_name", _BUILT_IN_SPECS)
+@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s != "romm.yaml"])
 def test_built_in_spec_parses_and_constructs(spec_name: str, tmp_path: Path) -> None:
     """Every built-in YAML must parse + construct via the framework loader."""
     svc = _load_spec(spec_name, tmp_path)
     assert isinstance(svc, DockerService), f"{spec_name}: expected DockerService"
 
 
-@pytest.mark.parametrize("spec_name", _BUILT_IN_SPECS)
+@pytest.mark.parametrize("spec_name", _DOCKER_SPECS)
 def test_built_in_spec_identity(spec_name: str, tmp_path: Path) -> None:
     """``name`` / ``display_name`` / ``category`` / ``description`` come from the YAML."""
     svc = _load_spec(spec_name, tmp_path)
@@ -115,7 +124,7 @@ def test_built_in_spec_identity(spec_name: str, tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("spec_name", _BUILT_IN_SPECS)
+@pytest.mark.parametrize("spec_name", _DOCKER_SPECS)
 def test_built_in_spec_capabilities_and_resource(spec_name: str, tmp_path: Path) -> None:
     """Capabilities + resource estimate come from the YAML, not hard-coded defaults."""
     svc = _load_spec(spec_name, tmp_path)
@@ -136,7 +145,7 @@ def test_built_in_spec_capabilities_and_resource(spec_name: str, tmp_path: Path)
     assert resource.vram_bytes_min == 0
 
 
-@pytest.mark.parametrize("spec_name", _BUILT_IN_SPECS)
+@pytest.mark.parametrize("spec_name", _DOCKER_SPECS)
 def test_built_in_spec_is_available_reflects_image_present(
     spec_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -151,10 +160,18 @@ def test_built_in_spec_is_available_reflects_image_present(
         "genesis_worker.utils.services.docker_service.DockerContainer.image_present",
         staticmethod(lambda image: True),
     )
+    monkeypatch.setattr(
+        "genesis_worker.utils.process.docker.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
     assert _load_spec(spec_name, tmp_path).is_available() is True
 
     monkeypatch.setattr(
         "genesis_worker.utils.services.docker_service.DockerContainer.image_present",
+        staticmethod(lambda image: False),
+    )
+    monkeypatch.setattr(
+        "genesis_worker.utils.process.docker.DockerContainer.image_present",
         staticmethod(lambda image: False),
     )
     assert _load_spec(spec_name, tmp_path).is_available() is False
@@ -574,3 +591,97 @@ def test_no_python_crawl4ai_or_sillytavern_modules() -> None:
             f"{stale}/ should be deleted in phase 3; "
             f"found {sorted(p.name for p in (services_root / stale).iterdir())}"
         )
+
+
+# --- romm-specific ---------------------------------------------------------
+
+
+def test_romm_identity(tmp_path: Path) -> None:
+    """ROMM's identity / category / description match the spec's surface."""
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert svc.name == "romm"
+    assert svc.display_name == "ROMM"
+    assert svc.category.value == "media"
+    assert svc.description == "Self-hosted ROM library manager"
+
+
+def test_romm_is_compose_service(tmp_path: Path) -> None:
+    """ROMM is a compose-kind service, not docker-kind."""
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert not isinstance(svc, DockerService)
+
+
+def test_romm_compose_config_fields(tmp_path: Path) -> None:
+    """Compose-specific fields are wired correctly."""
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert svc.config.compose_version == "3.8"
+    assert svc.config.listen_host == "0.0.0.0"
+    assert svc.config.listen_port == 8080
+    assert svc.config.health_probe_path == "/"
+    assert svc.config.compose_template.startswith("version:")
+    assert "rommapp/romm:" in svc.config.compose_template
+    assert "postgres:16-alpine" in svc.config.compose_template
+    assert "romm-db" in svc.config.compose_template
+
+
+def test_romm_options_have_configure_panel(tmp_path: Path) -> None:
+    """ROMM declares an ``options:`` block so ``configure`` auto-includes."""
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert svc.options.listen_port == 8080  # type: ignore[attr-defined]
+    assert svc.options.romm_version == "latest"  # type: ignore[attr-defined]
+    assert svc.options.db_name == "romm"  # type: ignore[attr-defined]
+    assert svc.options.db_user == "romm"  # type: ignore[attr-defined]
+    assert svc.options.db_password == "changeme"  # type: ignore[attr-defined]
+    assert "configure" in svc.ui_panels
+
+
+def test_romm_compose_template_resolves_placeholders(tmp_path: Path) -> None:
+    """The compose template has had $placeholder strings resolved by the loader.
+
+    After loading, the template contains concrete paths (no $state_dir,
+    no $data_dir, no $options.X markers) because the loader substituted
+    them against the service context at construction time.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    template = svc.config.compose_template
+    # No raw placeholder markers remain.
+    assert "$state_dir" not in template
+    assert "$data_dir" not in template
+    assert "$options." not in template
+    # Concrete paths are present (data_dir subpath is "data" so the
+    # data_dir used by compose is ctx.data_dir / "data").
+    assert "library" in template  # $state_dir/library
+    assert "config" in template  # $state_dir/config
+    assert "roms" in template  # $data_dir/roms
+
+
+def test_romm_is_available_reflects_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """is_available() reflects whether all images in the compose file are present."""
+    monkeypatch.setattr(
+        "genesis_worker.utils.process.docker.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert svc.is_available() is True
+
+    monkeypatch.setattr(
+        "genesis_worker.utils.process.docker.DockerContainer.image_present",
+        staticmethod(lambda image: False),
+    )
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert svc.is_available() is False
+
+
+def test_romm_ui_panels_include_compose_status(tmp_path: Path) -> None:
+    """ROMM's compose service includes container_info and log_tail panels."""
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert "service_info" in svc.ui_panels
+    assert "container_info" in svc.ui_panels
+    assert "log_tail" in svc.ui_panels
+    assert "configure" in svc.ui_panels

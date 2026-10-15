@@ -196,8 +196,56 @@ class UvServiceSpec(BaseModel):
         return self
 
 
+class ComposeServiceSpec(BaseModel):
+    """The full compose-kind YAML, validated against ``extra="forbid"``.
+
+    The ``compose_template`` field holds a Jinja2 template string. The
+    loader resolves ``$placeholder`` strings (``$state_dir``, ``$data_dir``,
+    ``$options.X``) against the runtime context *before* storing the
+    template in ``ComposeServiceConfig.compose_template``. At start time
+    the template is rendered with a small context (``listen_host``,
+    ``listen_port``) for compose-file-specific expressions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    kind: Literal["compose"]
+    name: str
+    display_name: str
+    description: str = ""
+    category: ServiceCategory = ServiceCategory.OTHER
+    capabilities: ServiceCapabilities
+    resource_estimate: ServiceResourceEstimate
+
+    # Compose template — Jinja2 string, already $placeholder-resolved by the loader.
+    compose_template: str
+    compose_version: str = "3.8"
+
+    # Port / health
+    listen_host: str = "0.0.0.0"
+    listen_port: int
+    health_probe_path: str = "/"
+
+    # Top-level compose env / volumes (project-wide, not per-service)
+    env: dict[str, Any] = Field(default_factory=dict)
+    volumes: dict[str, Any] = Field(default_factory=dict)
+
+    pre_start_hooks: list[HookSpec] = Field(default_factory=list)
+    ui: UiSpec = Field(default_factory=UiSpec)
+    options: dict[str, OptionSpec] = Field(default_factory=dict)
+
+    data_dir_subpath: str | None = "data"
+    log_filename: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_option_types(self) -> ComposeServiceSpec:
+        spec_to_options_model(self.options, model_name=f"{self.name.title()}Options")
+        return self
+
+
 ServiceSpecUnion = Annotated[
-    DockerServiceSpec | UvServiceSpec,
+    DockerServiceSpec | UvServiceSpec | ComposeServiceSpec,
     Field(discriminator="kind"),
 ]
 
@@ -346,6 +394,7 @@ def spec_to_options_model(
 
 __all__ = [
     "AuthSpec",
+    "ComposeServiceSpec",
     "ContainerSpec",
     "DockerServiceSpec",
     "HookSpec",
