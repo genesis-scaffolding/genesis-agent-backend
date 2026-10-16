@@ -3,8 +3,8 @@
 Multi-container services use a ``docker-compose.yml`` (a plain string,
 populated by the standard $placeholder mechanism at load time) instead of
 a single ``docker run`` invocation. Lifecycle delegates to
-``DockerComposeStack``; install axis uses ``ComposeImageInstall`` which
-checks and pulls all images referenced in the rendered compose file.
+``DockerComposeStack``; the install axis is one ``DockerImageInstall`` per
+declared image (real registry versioning, GUI version pick).
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from ...contracts import (
-    InstallState,
     ServiceCapabilities,
     ServiceCategory,
     ServiceContext,
