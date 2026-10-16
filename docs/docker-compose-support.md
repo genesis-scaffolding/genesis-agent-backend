@@ -150,11 +150,13 @@ Deliberate design choice (resolved 16 Oct): a second templating engine (Jinja2) 
 
 ### 4. Versioning and `is_available()` for compose services
 
-**Rule: every image a compose stack uses is declared in the YAML.** The spec carries an `images` list (name + repo + `tag_option`); each entry gets its own **`DockerImageInstall`** — the same class every `kind: docker` service uses, so version tracking is the tested single-image path: registry tag listing (15-min cache), recorded selection, GUI version pick, pull-at-tag. A stack with N images (e.g. ComfyUI + ComfyUI-API, or romm + postgres) declares N entries, each independently updatable from the GUI. There is no untracked/dependency tier — if an image is in the template, it is in the YAML, installable and versionable.
+**Rule: every image a compose stack uses is declared in the YAML.** The spec carries an `images` list (name + repo + `default_tag`); each entry gets its own **`DockerImageInstall`** — the same class every `kind: docker` service uses, so version tracking is the tested single-image path: registry tag listing (15-min cache), recorded selection, GUI version pick, pull-at-tag. A stack with N images (e.g. ComfyUI + ComfyUI-API, or romm + postgres) declares N entries, each independently updatable from the GUI. There is no untracked/dependency tier — if an image is in the template, it is in the YAML, installable and versionable.
+
+**Image identity is framework-level, not a user option.** The `images` block is the framework's declaration of what to pull — analogous to `kind: docker`'s top-level `image: {repo, tag}`. It is deliberately NOT exposed in the options panel; `options` is reserved for app-tunable settings (db name, ports, data dirs, etc.).
 
 `is_available()` is true when **all** declared images are present locally (at their effective tag), checked via `DockerContainer.image_present()`. Because every image has an installable, a full install leaves nothing missing — `start()` never hits a half-pulled stack.
 
-**Image tag substitution happens at render time, not load time.** The loader protects the declared `tag_option` markers (`$options.<tag_option>`) from the load-time `$placeholder` pass so the stored template still carries them. At `start()` the template is written with each marker replaced by the *effective* tag: the recorded selection (a version the user installed from the GUI) wins over the load-time default. This is what makes a GUI version pick reach the compose file. All other `$options.X` references are resolved at load time as usual.
+**Image refs are substituted at render time, not load time.** The template names each image via an `$images.<name>` marker. This is *not* a `$placeholder` — `_resolve_placeholder` returns `$images.*` markers intact, so they survive the load-time pass with no protection hack. At `start()` the template is written with each marker replaced by the *effective ref* (`<repo>:<tag>`): the recorded selection (a version the user installed from the GUI) wins over `default_tag`. This is what makes a GUI version pick reach the compose file. All other `$options.X` references are resolved at load time as usual.
 
 ### 5. Backward Compatibility
 
@@ -205,45 +207,56 @@ resource_estimate:
 compose_version: "3.8"
 health_probe_path: /
 
-# Tracked containers: each gets a real DockerImageInstall (registry tags,
-# GUI version pick). The romm tag marker is substituted at render time
-# with the recorded selection. postgres is untracked — a dependency.
+# Every image the stack uses, declared here (framework-level, NOT a user
+# option). Each gets a real DockerImageInstall (registry tags, GUI version
+# pick). The template names each via $images.<name>, substituted at render
+# time with the effective ref (recorded selection wins over default_tag).
 images:
   - name: romm
     repo: rommapp/romm
-    tag_option: romm_version
+    default_tag: latest
   - name: romm-db
     repo: postgres
-    tag_option: postgres_version
+    default_tag: 16-alpine
 
 # No top-level listen_port — options.listen_port is the single source of
 # truth; the loader derives the runtime port from the resolved option.
+# Default port 8101 — 8080 is taken by llama-swap.
 
 compose_template: |
   version: "3.8"
   services:
     romm:
-      image: rommapp/romm:$options.romm_version
+      image: $images.romm
       container_name: romm
       restart: unless-stopped
       ports:
         - "$options.listen_host:$options.listen_port:8080"
       environment:
-        ROMM_DB_HOST: romm-db
-        ROMM_DB_NAME: $options.db_name
-        ROMM_DB_USER: $options.db_user
-        ROMM_DB_PASS: "$options.db_password"
+        # ROMM 5.x env scheme (bare DB_* + ROMM_DB_DRIVER), not the legacy
+        # ROMM_DB_* names. Driver=postgresql, port 5432 (the defaults are
+        # mariadb/3306, which do not match our postgres db).
+        ROMM_DB_DRIVER: postgresql
+        DB_HOST: romm-db
+        DB_PORT: "5432"
+        DB_USER: $options.db_user
+        DB_PASSWD: "$options.db_password"
+        DB_NAME: $options.db_name
+        ROMM_FRONTEND: "1"
       volumes:
         - $state_dir/library:/romm/library
         - $state_dir/config:/romm/config
+        - $options.roms_dir:/romm/roms
       healthcheck:
-        test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
+        # ROMM 5.x serves /health (not /api/health, which 404s).
+        test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
         interval: 10s
         timeout: 5s
         retries: 5
+        start_period: 30s
 
     romm-db:
-      image: postgres:$options.postgres_version
+      image: $images.romm-db
       container_name: romm-db
       restart: unless-stopped
       environment:
@@ -253,19 +266,16 @@ compose_template: |
       volumes:
         - $state_dir/db:/var/lib/postgresql/data
 
-options:
+options:  # app-tunable settings only — image identity is NOT here
   listen_host:
     type: string
     default: "0.0.0.0"
   listen_port:
     type: port
-    default: 8080
-  romm_version:
-    type: string
-    default: "latest"
-  postgres_version:
-    type: string
-    default: "16-alpine"
+    default: 8101
+  roms_dir:
+    type: path
+    default: "$media_vault_path/roms"
   db_name:
     type: string
     default: "romm"

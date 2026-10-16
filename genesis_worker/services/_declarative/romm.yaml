@@ -27,17 +27,18 @@ compose_version: "3.8"
 health_probe_path: /
 # Default port 8101 — 8080 is taken by llama-swap.
 
-# Every image the stack uses, declared here. Each gets a real
-# DockerImageInstall (registry tags, GUI version pick). Tag markers
-# ($options.X) are substituted at render time with the recorded
-# selection, so a picked version reaches the compose file.
+# Every image the stack uses, declared here (framework-level, NOT a user
+# option — the options panel is for app tuning only). Each gets a real
+# DockerImageInstall (registry tags, GUI version pick). The template names
+# each image via $images.<name>, substituted at render time with the
+# effective ref (recorded selection wins over default_tag).
 images:
   - name: romm
     repo: rommapp/romm
-    tag_option: romm_version
+    default_tag: latest
   - name: romm-db
     repo: postgres
-    tag_option: postgres_version
+    default_tag: 16-alpine
 
 # No top-level listen_host / listen_port: the options block is the single
 # source of truth (options.listen_port), and the loader derives the
@@ -51,7 +52,7 @@ compose_template: |
   version: "3.8"
   services:
     romm:
-      image: rommapp/romm:$options.romm_version
+      image: $images.romm
       container_name: romm
       restart: unless-stopped
       ports:
@@ -80,7 +81,7 @@ compose_template: |
         start_period: 30s
 
     romm-db:
-      image: postgres:$options.postgres_version
+      image: $images.romm-db
       container_name: romm-db
       restart: unless-stopped
       environment:
@@ -112,12 +113,6 @@ options:
     ui_label: ROMs directory
     ui_help: Host directory for ROM files (defaults to <media vault>/roms)
     ui_group: Storage
-  romm_version:
-    type: string
-    default: "latest"
-    ui_label: ROMM version
-    ui_help: Docker image tag (e.g. latest, 3.0.0)
-    ui_group: Container
   db_name:
     type: string
     default: "romm"
@@ -127,11 +122,6 @@ options:
     type: string
     default: "romm"
     ui_label: Database user
-    ui_group: Database
-  postgres_version:
-    type: string
-    default: "16-alpine"
-    ui_label: PostgreSQL version
     ui_group: Database
   db_password:
     type: string

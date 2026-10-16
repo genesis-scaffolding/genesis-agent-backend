@@ -622,9 +622,12 @@ def test_romm_compose_config_fields(tmp_path: Path) -> None:
     assert svc.config.listen_port == 8101  # 8080 is llama-swap's
     assert svc.config.health_probe_path == "/"
     assert svc.config.compose_template.startswith("version:")
-    assert "rommapp/romm:" in svc.config.compose_template
-    assert "postgres:" in svc.config.compose_template
-    assert "romm-db" in svc.config.compose_template
+    # template names images via $images.<name> markers (resolved at render)
+    assert "$images.romm" in svc.config.compose_template
+    assert "$images.romm-db" in svc.config.compose_template
+    # image identity is in the framework-level images block
+    repos = {img.repo for img in svc.config.images}
+    assert repos == {"rommapp/romm", "postgres"}
 
 
 def test_romm_runtime_port_follows_option(tmp_path: Path) -> None:
@@ -649,14 +652,16 @@ def test_romm_runtime_port_follows_option(tmp_path: Path) -> None:
 
 
 def test_romm_options_have_configure_panel(tmp_path: Path) -> None:
-    """ROMM declares an ``options:`` block so ``configure`` auto-includes."""
+    """ROMM's options are app-tuning only — image identity is NOT an option."""
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
     assert svc.options.listen_port == 8101  # type: ignore[attr-defined]
-    assert svc.options.romm_version == "latest"  # type: ignore[attr-defined]
     assert svc.options.db_name == "romm"  # type: ignore[attr-defined]
     assert svc.options.db_user == "romm"  # type: ignore[attr-defined]
     assert svc.options.db_password == "changeme"  # type: ignore[attr-defined]
+    # image version is framework-level, not a user option
+    assert not hasattr(svc.options, "romm_version")
+    assert not hasattr(svc.options, "postgres_version")
     assert "configure" in svc.ui_panels
 
 
@@ -670,12 +675,12 @@ def test_romm_compose_template_resolves_placeholders(tmp_path: Path) -> None:
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
     template = svc.config.compose_template
-    # No raw placeholder markers remain — except the image tag markers,
-    # which are deliberately kept for render-time substitution.
+    # No raw placeholder markers remain — except the image markers
+    # ($images.<name>), which are deliberately kept for render-time substitution.
     assert "$state_dir" not in template
     assert "$data_dir" not in template
-    assert "$options.romm_version" in template  # image tag, resolved at render
-    assert "$options.postgres_version" in template  # image tag, resolved at render
+    assert "$images.romm" in template  # image marker, resolved at render
+    assert "$images.romm-db" in template  # image marker, resolved at render
     assert "$options.db_name" not in template  # other options resolved at load
     # Concrete paths are present (data_dir subpath is "data" so the
     # data_dir used by compose is ctx.data_dir / "data").

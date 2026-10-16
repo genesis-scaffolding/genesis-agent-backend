@@ -38,28 +38,43 @@ _IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
 
 @dataclass(frozen=True)
 class ComposeImage:
-    """One image in a compose stack.
+    """One image in a compose stack (framework-level, not a user option).
 
-    ``repo`` is the image repository (no tag). ``tag_option`` names the
-    service option that carries the tag; the recorded selection (see
-    ``DockerImageInstall``) wins at render time once the user has
-    installed a version.
+    ``repo`` is the pull reference (registry path — ``rommapp/romm`` for
+    Docker Hub, ``ghcr.io/org/img`` for GHCR). ``default_tag`` is the tag
+    used when the user has not picked a version; a recorded selection
+    (see ``DockerImageInstall``) wins at render time. Image identity is
+    owned by the framework, so it is NOT exposed in the options panel —
+    that surface is reserved for app-tunable settings.
     """
 
     name: str
     repo: str
-    tag_option: str = ""
+    default_tag: str = "latest"
 
 
-def _substitute_tag_markers(text: str, subs: dict[str, str]) -> str:
-    """Replace ``$options.<name>`` markers present in ``subs`` with their values.
+def _substitute_image_markers(
+    text: str,
+    images: tuple["ComposeImage", ...],
+    installables: list["DockerImageInstall"],
+) -> str:
+    """Replace ``$images.<name>`` markers with the effective image ref.
 
-    Only the markers the caller listed are touched — any other
-    ``$options.X`` in the text is left intact (there shouldn't be any;
-    the loader resolves the rest at load time).
+    ``$images.<name>`` → ``<repo>:<tag>`` where the tag is the recorded
+    selection (a version the user picked in the GUI) if one exists, else
+    ``default_tag``. These markers are deliberately NOT ``$placeholder``s
+    (the loader leaves ``$images.*`` intact), so they survive to render
+    time — this is what makes a GUI version pick reach the compose file.
     """
-    for name, value in subs.items():
-        text = text.replace(f"$options.{name}", value)
+    for img, installable in zip(images, installables):
+        tag = installable.installed_version() or img.default_tag
+        # Negative lookahead so ``$images.romm`` does not clobber the
+        # prefix of ``$images.romm-db`` (the trailing ``-db`` is excluded).
+        text = re.sub(
+            r"\$images\." + re.escape(img.name) + r"(?![-\w])",
+            f"{img.repo}:{tag}",
+            text,
+        )
     return text
 
 
@@ -81,10 +96,6 @@ class ComposeServiceConfig(DeclarativeServiceConfig):
     # DockerImageInstall (real registry versioning, GUI version pick).
     # Rule: if it's in the template, it's declared here.
     images: tuple[ComposeImage, ...] = ()
-    # ``$options.X`` markers left in the template for declared image tags;
-    # substituted at render time with the recorded selection (or the
-    # load-time default when nothing has been installed yet).
-    render_substitutions: dict[str, str] = field(default_factory=dict)
 
 
 # --- service ---------------------------------------------------------------
@@ -115,7 +126,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         self._installables = [
             DockerImageInstall(
                 image_repo=img.repo,
-                image_tag=config.render_substitutions.get(img.tag_option, "latest"),
+                image_tag=img.default_tag,
                 cache_dir=ctx.cache_dir,
                 state_dir=ctx.state_dir / "install" / img.name,
                 name=f"{config.name}:{img.name}",
@@ -165,25 +176,9 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         return self.config.description
 
     def _stack_images(self) -> list[str]:
-        """Every image in the template, at its effective tag."""
-        subs = self._tag_substitutions()
-        return [
-            _substitute_tag_markers(img, subs) for img in _IMAGE_RE.findall(self.config.compose_template)
-        ]
-
-    def _tag_substitutions(self) -> dict[str, str]:
-        """Map ``$options.<tag_option>`` markers to their effective tag.
-
-        The recorded selection (a version the user installed) wins over
-        the load-time default, so a GUI version pick reaches the
-        compose file on the next start.
-        """
-        subs: dict[str, str] = dict(self.config.render_substitutions)
-        for img, installable in zip(self.config.images, self._installables):
-            if img.tag_option:
-                selected = installable.installed_version()
-                subs[img.tag_option] = selected or subs.get(img.tag_option, "latest")
-        return subs
+        """Every image in the template, at its effective ref."""
+        body = _substitute_image_markers(self.config.compose_template, self.config.images, self._installables)
+        return _IMAGE_RE.findall(body)
 
     def is_available(self) -> bool:
         return all(DockerContainer.image_present(img) for img in self._stack_images())
@@ -222,12 +217,12 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         """Write the compose file to disk.
 
         The loader substituted every ``$placeholder`` at load time, except
-        the declared image tag markers (``$options.<tag_option>``), which
-        are substituted here with the effective tag — recorded selection
-        wins over the load-time default.
+        the image markers (``$images.<name>``), which are substituted here
+        with the effective ref — recorded selection wins over default_tag.
         """
-        subs = self._tag_substitutions()
-        body = _substitute_tag_markers(self.config.compose_template, subs)
+        body = _substitute_image_markers(
+            self.config.compose_template, self.config.images, self._installables
+        )
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
         path.write_text(body)

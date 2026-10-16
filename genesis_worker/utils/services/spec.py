@@ -197,19 +197,20 @@ class UvServiceSpec(BaseModel):
 
 
 class ComposeImageSpec(BaseModel):
-    """One image in a compose stack.
+    """One image in a compose stack (framework-level, not a user option).
 
-    Every image the stack uses must be declared here. ``repo`` is the
-    image repository without a tag; ``tag_option`` names the service
-    option carrying the tag (its default is the initial tag; a recorded
-    install selection overrides it at render time).
+    Every image the stack uses must be declared here. ``repo`` is the pull
+    reference (registry path); ``default_tag`` is used when the user has not
+    picked a version — a recorded install selection overrides it at render
+    time. Image identity is owned by the framework, so it is not exposed in
+    the options panel (reserved for app-tunable settings).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
     repo: str
-    tag_option: str = ""
+    default_tag: str = "latest"
 
 
 class ComposeServiceSpec(BaseModel):

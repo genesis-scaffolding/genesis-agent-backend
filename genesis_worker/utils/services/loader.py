@@ -112,6 +112,10 @@ def _resolve_placeholder(
         return ctx.config_dir
     if key.startswith("options."):
         return options.get(key.split(".", 1)[1])
+    # Image markers ($images.<name>) are substituted at render time by
+    # ComposeService, not at load time — leave them intact.
+    if key.startswith("images."):
+        return f"${key}"
     # Unknown placeholder -- leave the marker intact so callers can spot it.
     return f"${key}"
 
@@ -294,15 +298,10 @@ def _build_compose_config(
             ComposeImage(
                 name=t["name"],
                 repo=t["repo"],
-                tag_option=t.get("tag_option", ""),
+                default_tag=t.get("default_tag", "latest"),
             )
             for t in resolved.get("images") or ()
         ),
-        render_substitutions={
-            t["tag_option"]: str(options_resolved[t["tag_option"]])
-            for t in (resolved.get("images") or ())
-            if t.get("tag_option") and t["tag_option"] in options_resolved
-        },
     )
 
 
@@ -416,28 +415,12 @@ def load_service_spec(
     # elsewhere in the spec.
     options_resolved = resolve_placeholders(options_dump, ctx, options_dump)
 
-    # Compose specs: protect declared image tag markers so they survive the
-    # load-time substitution — they are substituted at render time with the
-    # recorded selection (a GUI version pick), not the load-time default.
-    protected_tags: set[str] = set()
-    if (raw.get("kind") == "compose" and raw.get("images")
-            and isinstance(raw.get("compose_template"), str)):
-        protected_tags = {
-            t["tag_option"] for t in raw["images"] if t.get("tag_option")
-        }
-        for tag in protected_tags:
-            raw["compose_template"] = raw["compose_template"].replace(
-                f"$options.{tag}", f"__TRACKED_TAG__{tag}__"
-            )
-
     # Substitute placeholders in the raw dict so pydantic sees concrete
     # values. ``container.listen_port: "$options.web_port"`` becomes
-    # ``container.listen_port: 9090`` before validation.
+    # ``container.listen_port: 9090`` before validation. (Compose image
+    # markers ``$images.<name>`` are left intact here — _resolve_placeholder
+    # returns them unchanged — and substituted at render time.)
     raw_substituted = resolve_placeholders(raw, ctx, options_resolved)
-    for tag in protected_tags:
-        raw_substituted["compose_template"] = raw_substituted["compose_template"].replace(
-            f"__TRACKED_TAG__{tag}__", f"$options.{tag}"
-        )
 
     try:
         spec: DockerServiceSpec | UvServiceSpec | ComposeServiceSpec = _validate_spec(
@@ -447,20 +430,7 @@ def load_service_spec(
         raise ValueError(f"{path}: YAML failed schema validation:\n{exc}") from exc
 
     # The fully-resolved spec, used to feed the config builder.
-    # (Tracked-tag markers in compose_template are re-protected for this
-    # second pass, then restored — see the first-pass protection above.)
-    _dump = spec.model_dump()
-    if protected_tags and isinstance(_dump.get("compose_template"), str):
-        for tag in protected_tags:
-            _dump["compose_template"] = _dump["compose_template"].replace(
-                f"$options.{tag}", f"__TRACKED_TAG__{tag}__"
-            )
-    resolved = resolve_placeholders(_dump, ctx, options_resolved)
-    if protected_tags and isinstance(resolved.get("compose_template"), str):
-        for tag in protected_tags:
-            resolved["compose_template"] = resolved["compose_template"].replace(
-                f"__TRACKED_TAG__{tag}__", f"$options.{tag}"
-            )
+    resolved = resolve_placeholders(spec.model_dump(), ctx, options_resolved)
 
     # Map options (``extra_env`` / ``extra_mounts``) merge additively
     # into the resolved spec, with user additions winning on key
