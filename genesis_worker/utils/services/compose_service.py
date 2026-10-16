@@ -1,7 +1,8 @@
 """Compose-backed ``DeclarativeServiceBase`` subclass.
 
-Multi-container services use a Jinja2-rendered ``docker-compose.yml``
-instead of a single ``docker run`` invocation. Lifecycle delegates to
+Multi-container services use a ``docker-compose.yml`` (a plain string,
+populated by the standard $placeholder mechanism at load time) instead of
+a single ``docker run`` invocation. Lifecycle delegates to
 ``DockerComposeStack``; install axis uses ``ComposeImageInstall`` which
 checks and pulls all images referenced in the rendered compose file.
 """
@@ -13,8 +14,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-from jinja2 import Template
 
 from ...contracts import (
     AcquireChoice,
@@ -228,7 +227,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
 
     Lifecycle delegates to ``DockerComposeStack``. ``is_available()``
     is True when every image referenced in the compose template is
-    present locally. ``start()`` renders the Jinja2 template, writes
+    present locally. ``start()`` writes the resolved template to
     ``docker-compose.yml``, then runs ``docker compose up -d``.
     """
 
@@ -322,14 +321,14 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
                 pass
 
     def _render_compose_file(self) -> Path:
-        tmpl = Template(self.config.compose_template)
-        rendered = tmpl.render(
-            listen_host=self.config.listen_host,
-            listen_port=self.config.listen_port,
-        )
+        """Write the (already $placeholder-resolved) compose template to disk.
+
+        The loader substituted every ``$placeholder`` at load time, so the
+        stored template is final — no second templating pass here.
+        """
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
-        path.write_text(rendered)
+        path.write_text(self.config.compose_template)
         return path
 
     def start(self) -> StartResult:

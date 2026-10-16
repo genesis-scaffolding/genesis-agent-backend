@@ -660,6 +660,36 @@ def test_romm_compose_template_resolves_placeholders(tmp_path: Path) -> None:
     assert "roms" in template  # $data_dir/roms
 
 
+def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
+    """The written compose file has concrete options + state/data dirs.
+
+    Guards the $placeholder unification: the template references
+    ``$options.db_name`` / ``$options.db_password`` / ``$options.romm_version``
+    and ``$state_dir`` / ``$data_dir``. The loader substitutes these at
+    load time, so the stored template is final and the written file has
+    concrete values — no empty strings, no ``{{ }}`` markers.
+    """
+    import re
+
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    path = svc._render_compose_file()
+    rendered = path.read_text()
+    # option-derived values land in the file
+    assert "POSTGRES_DB: romm" in rendered
+    assert "POSTGRES_USER: romm" in rendered
+    assert 'POSTGRES_PASSWORD: "changeme"' in rendered
+    assert "image: rommapp/romm:latest" in rendered
+    # no unresolved markers of either templating layer
+    assert "{{" not in rendered
+    assert "$options." not in rendered
+    # state/data dir-derived volume paths are concrete, not empty
+    assert not re.search(r"^\s*- :/", rendered, re.MULTILINE)
+    assert f"{tmp_path}/state/library:/romm/library" in rendered
+    assert f"{tmp_path}/data/roms:/romm/roms" in rendered
+    assert f"{tmp_path}/state/db:/var/lib/postgresql/data" in rendered
+
+
 def test_romm_is_available_reflects_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """is_available() reflects whether all images in the compose file are present."""
     monkeypatch.setattr(

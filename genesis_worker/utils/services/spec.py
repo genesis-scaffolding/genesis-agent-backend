@@ -199,12 +199,11 @@ class UvServiceSpec(BaseModel):
 class ComposeServiceSpec(BaseModel):
     """The full compose-kind YAML, validated against ``extra="forbid"``.
 
-    The ``compose_template`` field holds a Jinja2 template string. The
-    loader resolves ``$placeholder`` strings (``$state_dir``, ``$data_dir``,
-    ``$options.X``) against the runtime context *before* storing the
-    template in ``ComposeServiceConfig.compose_template``. At start time
-    the template is rendered with a small context (``listen_host``,
-    ``listen_port``) for compose-file-specific expressions.
+    The ``compose_template`` field is a plain string populated by the
+    standard ``$placeholder`` mechanism (``$state_dir``, ``$data_dir``,
+    ``$options.X``). The loader resolves every placeholder against the
+    runtime context *before* storing the template, so the stored string
+    is final — written to disk verbatim at start time.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -218,7 +217,7 @@ class ComposeServiceSpec(BaseModel):
     capabilities: ServiceCapabilities
     resource_estimate: ServiceResourceEstimate
 
-    # Compose template — Jinja2 string, already $placeholder-resolved by the loader.
+    # Compose template — plain string, $placeholder-resolved by the loader.
     compose_template: str
     compose_version: str = "3.8"
 

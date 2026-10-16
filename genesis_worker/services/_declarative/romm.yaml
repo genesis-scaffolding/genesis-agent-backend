@@ -27,29 +27,29 @@ compose_version: "3.8"
 listen_port: 8080
 health_probe_path: /
 
-# The compose_template is a Jinja2 string. The loader has already resolved
-# all $placeholder strings ($state_dir, $data_dir, $options.X) to their
-# typed runtime values before the template is stored. Jinja2 renders at
-# start time for compose-specific expressions (conditionals, loops).
+# The compose_template is a plain string populated by the standard
+# $placeholder mechanism ($state_dir, $data_dir, $options.X) at load
+# time — the same mechanism every other declarative service uses. No
+# second templating layer; the stored template is ready to write to disk.
 compose_template: |
   version: "3.8"
   services:
     romm:
-      image: rommapp/romm:{{ romm_version }}
+      image: rommapp/romm:$options.romm_version
       container_name: romm
       restart: unless-stopped
       ports:
-        - "{{ listen_host }}:{{ listen_port }}:8080"
+        - "$options.listen_host:$options.listen_port:8080"
       environment:
         ROMM_DB_HOST: romm-db
-        ROMM_DB_NAME: {{ db_name }}
-        ROMM_DB_USER: {{ db_user }}
-        ROMM_DB_PASS: "{{ db_password }}"
+        ROMM_DB_NAME: $options.db_name
+        ROMM_DB_USER: $options.db_user
+        ROMM_DB_PASS: "$options.db_password"
         ROMM_FRONTEND: "1"
       volumes:
-        - {{ state_dir }}/library:/romm/library
-        - {{ state_dir }}/config:/romm/config
-        - {{ data_dir }}/roms:/romm/roms
+        - $state_dir/library:/romm/library
+        - $state_dir/config:/romm/config
+        - $data_dir/roms:/romm/roms
       healthcheck:
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
         interval: 10s
@@ -62,18 +62,23 @@ compose_template: |
       container_name: romm-db
       restart: unless-stopped
       environment:
-        POSTGRES_DB: {{ db_name }}
-        POSTGRES_USER: {{ db_user }}
-        POSTGRES_PASSWORD: "{{ db_password }}"
+        POSTGRES_DB: $options.db_name
+        POSTGRES_USER: $options.db_user
+        POSTGRES_PASSWORD: "$options.db_password"
       volumes:
-        - {{ state_dir }}/db:/var/lib/postgresql/data
+        - $state_dir/db:/var/lib/postgresql/data
       healthcheck:
-        test: ["CMD", "pg_isready", "-U", "{{ db_user }}"]
+        test: ["CMD", "pg_isready", "-U", "$options.db_user"]
         interval: 10s
         timeout: 5s
         retries: 5
 
 options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
+    ui_label: Listen host
+    ui_group: Network
   listen_port:
     type: port
     default: 8080

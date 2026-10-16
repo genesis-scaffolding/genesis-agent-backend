@@ -10,7 +10,7 @@ Some services require **multiple coordinated containers** — typically an appli
 
 ## Decision
 
-Add a new `kind: compose` to the declarative YAML system. The YAML ships a **compose template** (Jinja2-rendered) that `docker compose` uses to orchestrate the full stack. The lifecycle maps to `docker compose up -d / down / ps` just as `kind: docker` maps to `docker run / stop / rm / inspect`.
+Add a new `kind: compose` to the declarative YAML system. The YAML ships a **compose template** (a plain string populated by the standard `$placeholder` mechanism) that `docker compose` uses to orchestrate the full stack. The lifecycle maps to `docker compose up -d / down / ps` just as `kind: docker` maps to `docker run / stop / rm / inspect`.
 
 The implementation follows the same layered pattern as `kind: docker`:
 
@@ -65,7 +65,7 @@ class ComposeServiceSpec(BaseModel):
     resource_estimate: ServiceResourceEstimate
 
     # Compose-level config
-    compose_template: str          # Jinja2 template string (the compose file body)
+    compose_template: str          # plain string, $placeholder-resolved at load time (the compose file body)
     compose_version: str = "3.8"  # compose file format version; emitted in the rendered output
 
     # Port mapping for the web UI
@@ -122,23 +122,16 @@ class DockerComposeStack:
 - `is_running()`: runs `docker compose ps --format json` and checks for containers in `running` state
 - `logs()`: runs `docker compose logs --tail N`
 
-### 2. Compose Template Rendering
+### 2. Compose Template Population
 
-The `compose_template` in the YAML is a **Jinja2 template**. The loader resolves `$placeholders` in the template before pydantic validation (the same `resolve_placeholders()` used for `kind: docker`). At start time, the resolved template is rendered with a small runtime context:
+The `compose_template` in the YAML is a **plain string** using the standard `$placeholder` mechanism — the exact same `resolve_placeholders()` pass used for `kind: docker` and `kind: uv`. The loader substitutes every `$variable` (`$state_dir`, `$data_dir`, `$options.X`) against the runtime context *before* the template string is stored in `ComposeServiceConfig.compose_template`. At start time the stored string is written to disk verbatim — there is no second templating layer:
 
 ```python
 # In ComposeService.start()
-from jinja2 import Template
-tmpl = Template(self.config.compose_template)
-rendered = tmpl.render(
-    listen_host=self.config.listen_host,
-    listen_port=self.config.listen_port,
-    # Plus any $options.X that survived the loader's pre-substitution
-)
-(project_dir / "docker-compose.yml").write_text(rendered)
+(project_dir / "docker-compose.yml").write_text(self.config.compose_template)
 ```
 
-The template can reference any `$variable` (including `$state_dir`, `$data_dir`, `$options.X`) because the loader resolves them before the template string is stored in `ComposeServiceConfig.compose_template`. The Jinja2 render is a second-pass for compose-specific interpolation.
+Deliberate design choice (resolved 16 Oct): a second templating engine (Jinja2) was briefly introduced for compose-specific interpolation, then removed. None of the compose templates need conditionals or loops, and a parallel template mechanism duplicated what `$placeholder` already does. If a future spec genuinely needs conditional compose output, that is when a real templating layer gets added — deliberately, not by accident.
 
 ### 3. Start / Stop / Status mapping
 
@@ -146,7 +139,7 @@ The template can reference any `$variable` (including `$state_dir`, `$data_dir`,
 |---|---|
 | `is_available()` | All images in the compose file are present locally (`docker image inspect` for each `image:` line) |
 | `is_running()` | `stack.is_running()` — at least one container in `running` state |
-| `start()` | 1. `_ensure_volume_dirs()` pre-creates bind-mount targets<br>2. Pre-start hooks fire<br>3. Jinja2-render template → `docker-compose.yml`<br>4. `stack.up(env=merged_env)` |
+| `start()` | 1. `_ensure_volume_dirs()` pre-creates bind-mount targets<br>2. Pre-start hooks fire<br>3. Write the resolved template → `docker-compose.yml`<br>4. `stack.up(env=merged_env)` |
 | `stop()` | `stack.down()` |
 | `status()` | `is_running()` → health probe → `ServiceState` |
 | `wait_ready()` | `HealthProbe(...).wait_ready(timeout_s)` |
@@ -208,29 +201,23 @@ compose_version: "3.8"
 listen_port: 8080
 health_probe_path: /
 
-env:
-  ROMM_DB_HOST: romm-db          # compose service name, resolvable by docker DNS
-  ROMM_DB_NAME: $options.db_name
-  ROMM_DB_USER: $options.db_user
-  ROMM_DB_PASS: $options.db_password
-
 compose_template: |
   version: "3.8"
   services:
     romm:
-      image: rommapp/romm:{{ options.romm_version | default("latest") }}
+      image: rommapp/romm:$options.romm_version
       container_name: romm
       restart: unless-stopped
       ports:
-        - "{{ listen_host }}:{{ listen_port }}:8080"
+        - "$options.listen_host:$options.listen_port:8080"
       environment:
         ROMM_DB_HOST: romm-db
-        ROMM_DB_NAME: {{ options.db_name | default("romm") }}
-        ROMM_DB_USER: {{ options.db_user | default("romm") }}
-        ROMM_DB_PASS: "{{ options.db_password | default("romm") }}"
+        ROMM_DB_NAME: $options.db_name
+        ROMM_DB_USER: $options.db_user
+        ROMM_DB_PASS: "$options.db_password"
       volumes:
-        - "{{ data_dir }}/library:/romm/library"
-        - "{{ state_dir }}/config:/romm/config"
+        - $state_dir/library:/romm/library
+        - $state_dir/config:/romm/config
       healthcheck:
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
         interval: 10s
@@ -242,18 +229,16 @@ compose_template: |
       container_name: romm-db
       restart: unless-stopped
       environment:
-        POSTGRES_DB: {{ options.db_name | default("romm") }}
-        POSTGRES_USER: {{ options.db_user | default("romm") }}
-        POSTGRES_PASSWORD: "{{ options.db_password | default("romm") }}"
+        POSTGRES_DB: $options.db_name
+        POSTGRES_USER: $options.db_user
+        POSTGRES_PASSWORD: "$options.db_password"
       volumes:
-        - "{{ state_dir }}/db:/var/lib/postgresql/data"
-
-volumes:
-  romm-library:
-  romm-config:
-  romm-db:
+        - $state_dir/db:/var/lib/postgresql/data
 
 options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
   listen_port:
     type: port
     default: 8080
@@ -272,7 +257,7 @@ options:
     ui_label: "Database password"
 ```
 
-Note: The `compose_template` field in the YAML is a **string** containing the Jinja2 template. The loader resolves `$placeholder` strings (like `$options.db_name`) to their typed values **before** the template is stored, so Jinja2 receives concrete values for `{{ options.db_name }}`. The Jinja2 render is the second-pass for compose-file-specific expressions.
+Note: The `compose_template` field in the YAML is a **plain string** using `$placeholders` (like `$options.db_name`). The loader resolves every placeholder to its concrete value **before** the template is stored, so the stored string is the final compose file — written to disk verbatim at start time.
 
 ---
 
@@ -296,7 +281,7 @@ genesis_worker/services/_declarative/
 genesis_worker/tests/test_declarative_specs.py
   + "romm.yaml" in _BUILT_IN_SPECS
   + test_romm_identity
-  + test_romm_compose_template_renders
+  + test_romm_render_includes_options_and_dirs
   + test_romm_is_available_reflects_images
 
 genesis_worker/tests/test_services_registry.py
@@ -313,4 +298,4 @@ genesis_worker/tests/test_compose_stack.py     NEW
 1. **`docker compose` availability check**: Should `is_available()` fail fast if `docker compose` isn't on PATH, or silently return `False`? (DockerContainer uses silent `False` for the same scenario.)
 2. **Multiple images install**: `ComposeImageInstall.install()` pulls images sequentially. Should it stream combined progress output per image, or just fire-and-forget?
 3. **`compose_version` in template vs spec**: The `compose_version` field in the spec is emitted as the top-level `version:` in the rendered file. Should we validate this is a known version string?
-4. **ROMM template variables**: The example above uses `{{ options.db_name }}` inside the Jinja2 template, but the loader has already resolved `$options.db_name`. Should we instead use only the resolved Python values (no Jinja2 pass), making the template pure output? This would simplify but remove Jinja2 conditionals/loops. Gen should decide.
+4. ~~**ROMM template variables**~~: **Resolved 16 Oct** — the Jinja2 pass was removed. The template is pure `$placeholder` output, resolved at load time. One template mechanism across the whole declarative system; a real templating layer returns only if a spec needs conditionals/loops.
