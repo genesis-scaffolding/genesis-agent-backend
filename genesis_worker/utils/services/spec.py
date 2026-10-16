@@ -196,6 +196,22 @@ class UvServiceSpec(BaseModel):
         return self
 
 
+class ComposeImageSpec(BaseModel):
+    """One image in a compose stack.
+
+    Every image the stack uses must be declared here. ``repo`` is the
+    image repository without a tag; ``tag_option`` names the service
+    option carrying the tag (its default is the initial tag; a recorded
+    install selection overrides it at render time).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    repo: str
+    tag_option: str = ""
+
+
 class ComposeServiceSpec(BaseModel):
     """The full compose-kind YAML, validated against ``extra="forbid"``.
 
@@ -217,9 +233,15 @@ class ComposeServiceSpec(BaseModel):
     capabilities: ServiceCapabilities
     resource_estimate: ServiceResourceEstimate
 
-    # Compose template — plain string, $placeholder-resolved by the loader.
+    # Compose template — plain string, $placeholder-resolved by the loader
+    # (declared image tag markers stay for render-time substitution).
     compose_template: str
     compose_version: str = "3.8"
+
+    # Every image the stack uses. Each entry gets its own DockerImageInstall
+    # (real registry versioning, GUI version pick). Rule: if it's in the
+    # template, it's declared here.
+    images: list[ComposeImageSpec] = Field(default_factory=list)
 
     # Port / health. Optional at top level: when the service declares a
     # ``listen_port`` option (the norm), the loader derives the runtime
@@ -395,6 +417,7 @@ def spec_to_options_model(
 
 __all__ = [
     "AuthSpec",
+    "ComposeImageSpec",
     "ComposeServiceSpec",
     "ContainerSpec",
     "DockerServiceSpec",

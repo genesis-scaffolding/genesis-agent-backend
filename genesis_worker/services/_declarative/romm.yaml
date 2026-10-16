@@ -26,6 +26,18 @@ resource_estimate:
 compose_version: "3.8"
 health_probe_path: /
 
+# Every image the stack uses, declared here. Each gets a real
+# DockerImageInstall (registry tags, GUI version pick). Tag markers
+# ($options.X) are substituted at render time with the recorded
+# selection, so a picked version reaches the compose file.
+images:
+  - name: romm
+    repo: rommapp/romm
+    tag_option: romm_version
+  - name: romm-db
+    repo: postgres
+    tag_option: postgres_version
+
 # No top-level listen_host / listen_port: the options block is the single
 # source of truth (options.listen_port), and the loader derives the
 # runtime port (health probe, web UI endpoint) from the resolved option.
@@ -61,7 +73,7 @@ compose_template: |
         start_period: 30s
 
     romm-db:
-      image: postgres:16-alpine
+      image: postgres:$options.postgres_version
       container_name: romm-db
       restart: unless-stopped
       environment:
@@ -102,6 +114,11 @@ options:
     type: string
     default: "romm"
     ui_label: Database user
+    ui_group: Database
+  postgres_version:
+    type: string
+    default: "16-alpine"
+    ui_label: PostgreSQL version
     ui_group: Database
   db_password:
     type: string

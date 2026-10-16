@@ -148,11 +148,13 @@ Deliberate design choice (resolved 16 Oct): a second templating engine (Jinja2) 
 | `wait_ready()` | `HealthProbe(...).wait_ready(timeout_s)` |
 | `tail_log()` | `stack.logs(tail_lines)` |
 
-### 4. `is_available()` for compose services
+### 4. Versioning and `is_available()` for compose services
 
-Unlike `DockerImageInstall` (single image), compose services may have multiple images. `is_available()` is true when **all** images referenced in the compose template are present locally. We parse the `image:` lines from the resolved template at construction time (or lazily at `is_available()` call) and check each via `DockerContainer.image_present()`.
+**Rule: every image a compose stack uses is declared in the YAML.** The spec carries an `images` list (name + repo + `tag_option`); each entry gets its own **`DockerImageInstall`** — the same class every `kind: docker` service uses, so version tracking is the tested single-image path: registry tag listing (15-min cache), recorded selection, GUI version pick, pull-at-tag. A stack with N images (e.g. ComfyUI + ComfyUI-API, or romm + postgres) declares N entries, each independently updatable from the GUI. There is no untracked/dependency tier — if an image is in the template, it is in the YAML, installable and versionable.
 
-`installs()` returns one `ComposeImageInstall` (subclass of `ServiceInstall`) that wraps all images. `ComposeImageInstall.install()` pulls each image in sequence. Future enhancement: parallel pull with progress streaming.
+`is_available()` is true when **all** declared images are present locally (at their effective tag), checked via `DockerContainer.image_present()`. Because every image has an installable, a full install leaves nothing missing — `start()` never hits a half-pulled stack.
+
+**Image tag substitution happens at render time, not load time.** The loader protects the declared `tag_option` markers (`$options.<tag_option>`) from the load-time `$placeholder` pass so the stored template still carries them. At `start()` the template is written with each marker replaced by the *effective* tag: the recorded selection (a version the user installed from the GUI) wins over the load-time default. This is what makes a GUI version pick reach the compose file. All other `$options.X` references are resolved at load time as usual.
 
 ### 5. Backward Compatibility
 
@@ -203,6 +205,17 @@ resource_estimate:
 compose_version: "3.8"
 health_probe_path: /
 
+# Tracked containers: each gets a real DockerImageInstall (registry tags,
+# GUI version pick). The romm tag marker is substituted at render time
+# with the recorded selection. postgres is untracked — a dependency.
+images:
+  - name: romm
+    repo: rommapp/romm
+    tag_option: romm_version
+  - name: romm-db
+    repo: postgres
+    tag_option: postgres_version
+
 # No top-level listen_port — options.listen_port is the single source of
 # truth; the loader derives the runtime port from the resolved option.
 
@@ -230,7 +243,7 @@ compose_template: |
         retries: 5
 
     romm-db:
-      image: postgres:16-alpine
+      image: postgres:$options.postgres_version
       container_name: romm-db
       restart: unless-stopped
       environment:
@@ -250,6 +263,9 @@ options:
   romm_version:
     type: string
     default: "latest"
+  postgres_version:
+    type: string
+    default: "16-alpine"
   db_name:
     type: string
     default: "romm"
@@ -271,10 +287,10 @@ Note: The `compose_template` field in the YAML is a **plain string** using `$pla
 ```
 genesis_worker/utils/services/
   compose_stack.py       NEW — DockerComposeStack utility
-  compose_service.py     NEW — ComposeService + ComposeServiceConfig
+  compose_service.py     NEW — ComposeService + ComposeServiceConfig + ComposeImage
 
 genesis_worker/utils/services/spec.py
-  + ComposeServiceSpec pydantic model
+  + ComposeServiceSpec + ComposeImageSpec pydantic models
 
 genesis_worker/utils/services/loader.py
   + _build_compose_config()
@@ -301,6 +317,6 @@ genesis_worker/tests/test_compose_stack.py     NEW
 ## Open Questions
 
 1. **`docker compose` availability check**: Should `is_available()` fail fast if `docker compose` isn't on PATH, or silently return `False`? (DockerContainer uses silent `False` for the same scenario.)
-2. **Multiple images install**: `ComposeImageInstall.install()` pulls images sequentially. Should it stream combined progress output per image, or just fire-and-forget?
+2. ~~**Multiple images install**~~: **Resolved 16 Oct** — `ComposeImageInstall` was removed. Every image is declared in the YAML `images` list and gets the existing `DockerImageInstall` (independent, real registry versioning). Note the related multi-endpoint gap: `web_ui_endpoint()` is single-valued, so a sidecar's own port (e.g. ComfyUI-API) can be version-tracked today but not displayed in the GUI. File that as a follow-up when the first such stack lands.
 3. **`compose_version` in template vs spec**: The `compose_version` field in the spec is emitted as the top-level `version:` in the rendered file. Should we validate this is a known version string?
 4. ~~**ROMM template variables**~~: **Resolved 16 Oct** — the Jinja2 pass was removed. The template is pure `$placeholder` output, resolved at load time. One template mechanism across the whole declarative system; a real templating layer returns only if a spec needs conditionals/loops.

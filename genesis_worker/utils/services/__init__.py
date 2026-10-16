@@ -11,7 +11,7 @@ import from it without violating the framework boundary (ADR-009).
 
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_service import (
-    ComposeImageInstall,
+    ComposeImage,
     ComposeService,
     ComposeServiceConfig,
 )
@@ -35,9 +35,9 @@ from .uv_service import UvService, UvServiceConfig, UvToolInstall
 
 __all__ = [
     "AuthConfig",
-    "ComposeImageInstall",
     "ComposeService",
     "ComposeServiceConfig",
+    "ComposeImage",
     "ComposeServiceSpec",
     "DeclarativeServiceBase",
     "DeclarativeServiceConfig",

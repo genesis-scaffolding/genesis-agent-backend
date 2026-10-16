@@ -623,7 +623,7 @@ def test_romm_compose_config_fields(tmp_path: Path) -> None:
     assert svc.config.health_probe_path == "/"
     assert svc.config.compose_template.startswith("version:")
     assert "rommapp/romm:" in svc.config.compose_template
-    assert "postgres:16-alpine" in svc.config.compose_template
+    assert "postgres:" in svc.config.compose_template
     assert "romm-db" in svc.config.compose_template
 
 
@@ -670,10 +670,13 @@ def test_romm_compose_template_resolves_placeholders(tmp_path: Path) -> None:
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
     template = svc.config.compose_template
-    # No raw placeholder markers remain.
+    # No raw placeholder markers remain — except the image tag markers,
+    # which are deliberately kept for render-time substitution.
     assert "$state_dir" not in template
     assert "$data_dir" not in template
-    assert "$options." not in template
+    assert "$options.romm_version" in template  # image tag, resolved at render
+    assert "$options.postgres_version" in template  # image tag, resolved at render
+    assert "$options.db_name" not in template  # other options resolved at load
     # Concrete paths are present (data_dir subpath is "data" so the
     # data_dir used by compose is ctx.data_dir / "data").
     assert "library" in template  # $state_dir/library
@@ -700,7 +703,9 @@ def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
     assert "POSTGRES_DB: romm" in rendered
     assert "POSTGRES_USER: romm" in rendered
     assert 'POSTGRES_PASSWORD: "changeme"' in rendered
+    # image tags are substituted at render time with the load-time defaults
     assert "image: rommapp/romm:latest" in rendered
+    assert "image: postgres:16-alpine" in rendered
     # no unresolved markers of either templating layer
     assert "{{" not in rendered
     assert "$options." not in rendered
@@ -709,6 +714,46 @@ def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
     assert f"{tmp_path}/state/library:/romm/library" in rendered
     assert f"{tmp_path}/data/roms:/romm/roms" in rendered
     assert f"{tmp_path}/state/db:/var/lib/postgresql/data" in rendered
+
+
+def test_romm_images_are_real_installables(tmp_path: Path) -> None:
+    """Every declared image is a real DockerImageInstall — registry tags,
+
+    not a template hash. romm and postgres are both declared, both
+    versionable, each with its own installable.
+    """
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    installables = svc.installs()
+    assert len(installables) == 2
+    refs = {i.image_ref for i in installables}
+    assert refs == {"rommapp/romm:latest", "postgres:16-alpine"}
+    assert all(isinstance(i, DockerImageInstall) for i in installables)
+    # installed_version is a real tag (or None before first install),
+    # never a template hash.
+    for i in installables:
+        assert i.installed_version() in (None, i.image_ref.split(":", 1)[1])
+
+
+def test_romm_render_uses_recorded_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recorded version selection reaches the rendered compose file.
+
+    Simulates the user having installed rommapp/romm:2.9.1 from the GUI:
+    the selection file exists, and render substitutes the tracked tag
+    marker with the selected tag.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    installable = svc.installs()[0]
+    installable._record_selection("2.9.1")
+    # rebuild so the installable reads the fresh selection
+    svc2 = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    rendered = svc2._render_compose_file().read_text()
+    assert "image: rommapp/romm:2.9.1" in rendered
+    # the other image keeps its load-time default tag
+    assert "image: postgres:16-alpine" in rendered
 
 
 def test_romm_is_available_reflects_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
