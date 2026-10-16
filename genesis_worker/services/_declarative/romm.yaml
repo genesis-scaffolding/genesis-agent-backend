@@ -25,6 +25,7 @@ resource_estimate:
 
 compose_version: "3.8"
 health_probe_path: /
+# Default port 8101 — 8080 is taken by llama-swap.
 
 # Every image the stack uses, declared here. Each gets a real
 # DockerImageInstall (registry tags, GUI version pick). Tag markers
@@ -69,7 +70,7 @@ compose_template: |
       volumes:
         - $state_dir/library:/romm/library
         - $state_dir/config:/romm/config
-        - $data_dir/roms:/romm/roms
+        - $options.roms_dir:/romm/roms
       healthcheck:
         # ROMM 5.x serves /health (not /api/health, which 404s).
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
@@ -102,9 +103,15 @@ options:
     ui_group: Network
   listen_port:
     type: port
-    default: 8080
+    default: 8101
     ui_label: Web UI port
     ui_group: Network
+  roms_dir:
+    type: path
+    default: "$media_vault_path/roms"
+    ui_label: ROMs directory
+    ui_help: Host directory for ROM files (defaults to <media vault>/roms)
+    ui_group: Storage
   romm_version:
     type: string
     default: "latest"

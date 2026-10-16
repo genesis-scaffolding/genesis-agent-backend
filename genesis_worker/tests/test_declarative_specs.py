@@ -619,7 +619,7 @@ def test_romm_compose_config_fields(tmp_path: Path) -> None:
     assert isinstance(svc, ComposeService)
     assert svc.config.compose_version == "3.8"
     assert svc.config.listen_host == "0.0.0.0"
-    assert svc.config.listen_port == 8080
+    assert svc.config.listen_port == 8101  # 8080 is llama-swap's
     assert svc.config.health_probe_path == "/"
     assert svc.config.compose_template.startswith("version:")
     assert "rommapp/romm:" in svc.config.compose_template
@@ -636,7 +636,7 @@ def test_romm_runtime_port_follows_option(tmp_path: Path) -> None:
     """
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
-    assert svc.config.listen_port == 8080
+    assert svc.config.listen_port == 8101
     assert svc.config.listen_host == "0.0.0.0"
 
     svc2 = load_service_spec(
@@ -652,7 +652,7 @@ def test_romm_options_have_configure_panel(tmp_path: Path) -> None:
     """ROMM declares an ``options:`` block so ``configure`` auto-includes."""
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
-    assert svc.options.listen_port == 8080  # type: ignore[attr-defined]
+    assert svc.options.listen_port == 8101  # type: ignore[attr-defined]
     assert svc.options.romm_version == "latest"  # type: ignore[attr-defined]
     assert svc.options.db_name == "romm"  # type: ignore[attr-defined]
     assert svc.options.db_user == "romm"  # type: ignore[attr-defined]
@@ -681,7 +681,7 @@ def test_romm_compose_template_resolves_placeholders(tmp_path: Path) -> None:
     # data_dir used by compose is ctx.data_dir / "data").
     assert "library" in template  # $state_dir/library
     assert "config" in template  # $state_dir/config
-    assert "roms" in template  # $data_dir/roms
+    assert "/roms:/romm/roms" in template  # $options.roms_dir -> <media vault>/roms
 
 
 def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
@@ -712,7 +712,7 @@ def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
     # state/data dir-derived volume paths are concrete, not empty
     assert not re.search(r"^\s*- :/", rendered, re.MULTILINE)
     assert f"{tmp_path}/state/library:/romm/library" in rendered
-    assert f"{tmp_path}/data/roms:/romm/roms" in rendered
+    assert f"{tmp_path}/media-vault/roms:/romm/roms" in rendered
     assert f"{tmp_path}/state/db:/var/lib/postgresql/data" in rendered
 
 
