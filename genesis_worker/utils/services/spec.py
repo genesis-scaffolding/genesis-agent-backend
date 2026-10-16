@@ -221,9 +221,11 @@ class ComposeServiceSpec(BaseModel):
     compose_template: str
     compose_version: str = "3.8"
 
-    # Port / health
+    # Port / health. Optional at top level: when the service declares a
+    # ``listen_port`` option (the norm), the loader derives the runtime
+    # port from the resolved option so there is a single source of truth.
     listen_host: str = "0.0.0.0"
-    listen_port: int
+    listen_port: int = 0
     health_probe_path: str = "/"
 
     # Top-level compose env / volumes (project-wide, not per-service)

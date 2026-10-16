@@ -627,6 +627,27 @@ def test_romm_compose_config_fields(tmp_path: Path) -> None:
     assert "romm-db" in svc.config.compose_template
 
 
+def test_romm_runtime_port_follows_option(tmp_path: Path) -> None:
+    """config.listen_port tracks options.listen_port — single source of truth.
+
+    The health probe and web UI endpoint use config.listen_port; the
+    compose file binds options.listen_port. They must be the same value,
+    including when the user overrides the option.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert svc.config.listen_port == 8080
+    assert svc.config.listen_host == "0.0.0.0"
+
+    svc2 = load_service_spec(
+        _DECLARATIVE_DIR / "romm.yaml",
+        ctx=service_ctx(tmp_path, name="romm", options={"listen_port": 9090}),
+    )
+    assert svc2.config.listen_port == 9090
+    # the compose file binds the same overridden port
+    assert "0.0.0.0:9090:8080" in svc2.config.compose_template
+
+
 def test_romm_options_have_configure_panel(tmp_path: Path) -> None:
     """ROMM declares an ``options:`` block so ``configure`` auto-includes."""
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))

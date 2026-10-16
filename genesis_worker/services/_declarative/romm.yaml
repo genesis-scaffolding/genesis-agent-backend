@@ -24,8 +24,11 @@ resource_estimate:
   cpu_cores_recommended: 2
 
 compose_version: "3.8"
-listen_port: 8080
 health_probe_path: /
+
+# No top-level listen_host / listen_port: the options block is the single
+# source of truth (options.listen_port), and the loader derives the
+# runtime port (health probe, web UI endpoint) from the resolved option.
 
 # The compose_template is a plain string populated by the standard
 # $placeholder mechanism ($state_dir, $data_dir, $options.X) at load

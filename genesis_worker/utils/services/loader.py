@@ -264,6 +264,12 @@ def _build_compose_config(
         k: ("true" if v is True else "false" if v is False else v) for k, v in merged_env.items()
     }
     merged_volumes = {**(resolved.get("volumes") or {}), **extra_mounts}
+    # The runtime port (health probe, web UI endpoint) follows the
+    # resolved ``listen_port`` option when one exists — the same value the
+    # compose template binds to — so the probe and the container can never
+    # desync. Top-level ``listen_port`` is a fallback for specs without it.
+    option_port = options_resolved.get("listen_port")
+    option_host = options_resolved.get("listen_host")
     return ComposeServiceConfig(
         name=resolved["name"],
         display_name=resolved["display_name"],
@@ -275,11 +281,10 @@ def _build_compose_config(
         log_filename=resolved["log_filename"],
         ui_pages=tuple(ui["status_panels"]),
         option_specs=option_specs,
-        # compose-specific
         compose_template=resolved["compose_template"],
         compose_version=resolved.get("compose_version", "3.8"),
-        listen_host=resolved["listen_host"],
-        listen_port=resolved["listen_port"],
+        listen_host=str(option_host) if option_host is not None else resolved["listen_host"],
+        listen_port=int(option_port) if option_port is not None else resolved["listen_port"],
         health_probe_path=resolved.get("health_probe_path", "/"),
         extra_env=merged_env,
         extra_volumes=merged_volumes,

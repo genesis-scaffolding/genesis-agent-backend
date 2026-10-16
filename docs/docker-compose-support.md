@@ -68,9 +68,12 @@ class ComposeServiceSpec(BaseModel):
     compose_template: str          # plain string, $placeholder-resolved at load time (the compose file body)
     compose_version: str = "3.8"  # compose file format version; emitted in the rendered output
 
-    # Port mapping for the web UI
+    # Port mapping for the web UI. Optional at top level: when the spec
+    # declares a ``listen_port`` option (the norm), the loader derives
+    # the runtime port from the resolved option — single source of truth
+    # for both the compose bind and the health probe.
     listen_host: str = "0.0.0.0"
-    listen_port: int
+    listen_port: int = 0
     health_probe_path: str = "/"
 
     # Env / volumes / args all come from the compose template
@@ -198,8 +201,10 @@ resource_estimate:
   cpu_cores_recommended: 2
 
 compose_version: "3.8"
-listen_port: 8080
 health_probe_path: /
+
+# No top-level listen_port — options.listen_port is the single source of
+# truth; the loader derives the runtime port from the resolved option.
 
 compose_template: |
   version: "3.8"
