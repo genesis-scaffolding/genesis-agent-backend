@@ -234,12 +234,6 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         return path
 
     def start(self) -> StartResult:
-        if not self.is_available():
-            return StartResult(
-                ok=False,
-                message=f"not all images are available: {self._stack_images()}; install the service first",
-            )
-
         self._ensure_volume_dirs()
 
         if self.config.pre_start_hooks:
@@ -255,7 +249,17 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
                 ),
             )
 
+        # Render with the effective tags, then pull anything missing. A full
+        # ``docker compose pull`` makes start() self-sufficient: it fetches
+        # every declared image at its rendered tag (idempotent — present
+        # images are skipped), so a fresh install never hits a half-pulled
+        # stack. The UI install axis still records version selections;
+        # this just guarantees the whole stack exists before ``up``.
         self._render_compose_file()
+
+        pull = self._stack.pull()
+        if not pull.ok:
+            return pull
 
         env: dict[str, str] = {k: str(v) for k, v in self.config.extra_env.items()}
         return self._stack.up(env=env)

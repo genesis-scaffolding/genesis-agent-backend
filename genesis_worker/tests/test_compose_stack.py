@@ -56,6 +56,16 @@ class TestDockerComposeStack:
         assert "stdout" in logs
         assert "stderr" in logs
 
+    def test_is_running_false_when_project_dir_missing(self, tmp_path: Path) -> None:
+        """A never-started stack (compose dir absent) is not running — no crash.
+
+        Regression: subprocess.run(cwd=<missing>) raises FileNotFoundError.
+        """
+        missing = tmp_path / "does-not-exist" / "compose"
+        stack = DockerComposeStack(missing, "never-started")
+        assert stack.is_running() is False
+        assert stack.logs() == ""
+
     def test_is_running_true_when_container_running(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -56,17 +56,23 @@ compose_template: |
       ports:
         - "$options.listen_host:$options.listen_port:8080"
       environment:
-        ROMM_DB_HOST: romm-db
-        ROMM_DB_NAME: $options.db_name
-        ROMM_DB_USER: $options.db_user
-        ROMM_DB_PASS: "$options.db_password"
+        # ROMM 5.x env scheme (bare DB_* + ROMM_DB_DRIVER), not the
+        # legacy ROMM_DB_* names. Driver must be postgresql and port 5432
+        # — the defaults (mariadb / 3306) do not match our postgres db.
+        ROMM_DB_DRIVER: postgresql
+        DB_HOST: romm-db
+        DB_PORT: "5432"
+        DB_USER: $options.db_user
+        DB_PASSWD: "$options.db_password"
+        DB_NAME: $options.db_name
         ROMM_FRONTEND: "1"
       volumes:
         - $state_dir/library:/romm/library
         - $state_dir/config:/romm/config
         - $data_dir/roms:/romm/roms
       healthcheck:
-        test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
+        # ROMM 5.x serves /health (not /api/health, which 404s).
+        test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
         interval: 10s
         timeout: 5s
         retries: 5

@@ -17,6 +17,8 @@ from genesis_worker.contracts import StartResult, StopResult
 
 _DEFAULT_TIMEOUT_S = 60.0
 _DEFAULT_PS_TIMEOUT_S = 10.0
+# Image pulls can be large; the old ComposePullSession used 1800s per image.
+_PULL_TIMEOUT_S = 1800.0
 
 
 def _run(
@@ -42,7 +44,12 @@ class DockerComposeStack:
     # --- lifecycle ---------------------------------------------------------
 
     def is_running(self) -> bool:
-        """True iff at least one container in the project is in ``running`` state."""
+        """True iff at least one container in the project is in ``running`` state.
+
+        A missing project dir (stack never started) means nothing is running.
+        """
+        if not self._project_dir.is_dir():
+            return False
         result = _run(
             ["docker", "compose", "-p", self._project_name, "ps", "--format", "json"],
             timeout=_DEFAULT_PS_TIMEOUT_S,
@@ -101,6 +108,30 @@ class DockerComposeStack:
             )
         return StartResult(ok=True, message=f"{self._project_name} started")
 
+    def pull(self) -> StartResult:
+        """``docker compose pull`` — fetch every image in the file at its
+        rendered tag. Idempotent: present images are skipped. The compose
+        file must exist (caller renders it first)."""
+        if not self._project_dir.is_dir():
+            self._project_dir.mkdir(parents=True, exist_ok=True)
+        if not (self._project_dir / "docker-compose.yml").exists():
+            return StartResult(
+                ok=False,
+                message=f"docker-compose.yml not found in {self._project_dir}; render before pull",
+            )
+        result = _run(
+            ["docker", "compose", "-p", self._project_name, "pull"],
+            timeout=_PULL_TIMEOUT_S,
+            cwd=self._project_dir,
+        )
+        if result.returncode != 0:
+            return StartResult(
+                ok=False,
+                message=f"docker compose pull failed (rc={result.returncode}): "
+                f"{(result.stderr or result.stdout or '').strip()[-500:]}",
+            )
+        return StartResult(ok=True, message=f"{self._project_name} images pulled")
+
     def down(self) -> StopResult:
         """Stop and remove containers, networks (but not named volumes)."""
         result = _run(
@@ -134,6 +165,8 @@ class DockerComposeStack:
 
     def logs(self, tail_lines: int = 200) -> str:
         """Last ``tail_lines`` of combined stdout/stderr from all containers."""
+        if not self._project_dir.is_dir():
+            return ""
         result = _run(
             [
                 "docker",
