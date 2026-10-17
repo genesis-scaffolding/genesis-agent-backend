@@ -46,11 +46,17 @@ from .spec import (
 )
 from .uv_service import UvService, UvServiceConfig
 
-_PLACEHOLDER_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)")
+_PLACEHOLDER_RE = re.compile(
+    r"\$([a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)*)"
+)
 
 
 def _resolve_string(
-    value: str, ctx: ServiceContext, options: Mapping[str, Any], auth_token: Any
+    value: str,
+    ctx: ServiceContext,
+    options: Mapping[str, Any],
+    auth_token: Any,
+    images: Mapping[str, str] | None = None,
 ) -> Any:
     """Resolve ``$placeholders`` in ``value``.
 
@@ -69,7 +75,7 @@ def _resolve_string(
     """
     match = _PLACEHOLDER_RE.fullmatch(value)
     if match:
-        resolved = _resolve_placeholder(match.group(1), ctx, options, auth_token)
+        resolved = _resolve_placeholder(match.group(1), ctx, options, auth_token, images)
         if resolved is None:
             return None
         if isinstance(resolved, str):
@@ -79,13 +85,17 @@ def _resolve_string(
         return str(resolved)  # Path / int from $data_dir etc.
 
     def _replace(match: re.Match[str]) -> str:
-        return str(_resolve_placeholder(match.group(1), ctx, options, auth_token))
+        return str(_resolve_placeholder(match.group(1), ctx, options, auth_token, images))
 
     return _PLACEHOLDER_RE.sub(_replace, value)
 
 
 def _resolve_placeholder(
-    key: str, ctx: ServiceContext, options: Mapping[str, Any], auth_token: Any
+    key: str,
+    ctx: ServiceContext,
+    options: Mapping[str, Any],
+    auth_token: Any,
+    images: Mapping[str, str] | None = None,
 ) -> Any:
     """Resolve a single placeholder key to its typed value.
 
@@ -112,9 +122,13 @@ def _resolve_placeholder(
         return ctx.config_dir
     if key.startswith("options."):
         return options.get(key.split(".", 1)[1])
-    # Image markers ($images.<name>) are substituted at render time by
-    # ComposeService, not at load time — leave them intact.
+    # Image markers ($images.<name>) resolve when the caller supplies
+    # the effective refs (ComposeService render time, when the recorded
+    # version selection is known). At load time images is None and the
+    # generic fallback below leaves the marker intact.
     if key.startswith("images."):
+        if images is not None:
+            return images.get(key.split(".", 1)[1], f"${key}")
         return f"${key}"
     # Unknown placeholder -- leave the marker intact so callers can spot it.
     return f"${key}"
@@ -125,6 +139,7 @@ def resolve_placeholders(
     ctx: ServiceContext,
     options: Mapping[str, Any],
     auth_token: Any = None,
+    images: Mapping[str, str] | None = None,
 ) -> Any:
     """Recursively replace ``$state_dir`` / ``$options.X`` markers in ``value``.
 
@@ -132,20 +147,26 @@ def resolve_placeholders(
     for mixed); ``Path`` objects get stringified so the recursive walk
     over a model_dump output (where ``Path`` survives as a Path
     object) still substitutes correctly; dicts and lists are walked;
-    everything else is returned untouched.
+    everything else is returned untouched. ``images`` supplies the
+    effective ``$images.<name>`` refs (name -> ``repo:tag``); when
+    omitted, image markers survive untouched (load-time pass).
     """
     if isinstance(value, str):
-        return _resolve_string(value, ctx, options, auth_token)
+        return _resolve_string(value, ctx, options, auth_token, images)
     if isinstance(value, Path):
         # Path objects can survive ``model_dump`` with their string
         # form containing ``$variable`` markers (e.g. option defaults
         # like ``"$data_dir/.."``). Stringify so the substitution
         # path picks them up; the next pass replaces the marker.
-        return _resolve_string(str(value), ctx, options, auth_token)
+        return _resolve_string(str(value), ctx, options, auth_token, images)
     if isinstance(value, dict):
-        return {k: resolve_placeholders(v, ctx, options, auth_token) for k, v in value.items()}
+        return {
+            k: resolve_placeholders(v, ctx, options, auth_token, images) for k, v in value.items()
+        }
     if isinstance(value, list):
-        return [resolve_placeholders(v, ctx, options, auth_token) for v in value]
+        return [
+            resolve_placeholders(v, ctx, options, auth_token, images) for v in value
+        ]
     return value
 
 

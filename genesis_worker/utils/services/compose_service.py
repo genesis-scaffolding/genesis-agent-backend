@@ -52,31 +52,6 @@ class ComposeImage:
     default_tag: str = "latest"
 
 
-def _substitute_image_markers(
-    text: str,
-    images: tuple["ComposeImage", ...],
-    installables: list["DockerImageInstall"],
-) -> str:
-    """Replace ``$images.<name>`` markers with the effective image ref.
-
-    ``$images.<name>`` → ``<repo>:<tag>`` where the tag is the recorded
-    selection (a version the user picked in the GUI) if one exists, else
-    ``default_tag``. These markers are deliberately NOT ``$placeholder``s
-    (the loader leaves ``$images.*`` intact), so they survive to render
-    time — this is what makes a GUI version pick reach the compose file.
-    """
-    for img, installable in zip(images, installables):
-        tag = installable.installed_version() or img.default_tag
-        # Negative lookahead so ``$images.romm`` does not clobber the
-        # prefix of ``$images.romm-db`` (the trailing ``-db`` is excluded).
-        text = re.sub(
-            r"\$images\." + re.escape(img.name) + r"(?![-\w])",
-            f"{img.repo}:{tag}",
-            text,
-        )
-    return text
-
-
 @dataclass(frozen=True)
 class ComposeServiceConfig(DeclarativeServiceConfig):
     """Per-service compose config. Add identity / capabilities / options_model in caller."""
@@ -174,10 +149,31 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
     def description(self) -> str:
         return self.config.description
 
+    def _image_refs(self) -> dict[str, str]:
+        """Effective ``$images.<name>`` refs: recorded selection wins over ``default_tag``."""
+        return {
+            img.name: f"{img.repo}:{installable.installed_version() or img.default_tag}"
+            for img, installable in zip(self.config.images, self._installables)
+        }
+
+    def _rendered_template(self) -> str:
+        """The compose template with ``$images.<name>`` at its effective ref.
+
+        Same placeholder engine as the load-time pass, supplied with the
+        image refs — the only thing that can't be known at load time is
+        the user's recorded version selection (the installables are
+        constructed in ``__init__``).
+        """
+        from .loader import resolve_placeholders
+
+        ctx = self._ctx
+        return resolve_placeholders(
+            self.config.compose_template, ctx, {}, None, images=self._image_refs()
+        )
+
     def _stack_images(self) -> list[str]:
         """Every image in the template, at its effective ref."""
-        body = _substitute_image_markers(self.config.compose_template, self.config.images, self._installables)
-        return _IMAGE_RE.findall(body)
+        return _IMAGE_RE.findall(self._rendered_template())
 
     def is_available(self) -> bool:
         return all(DockerContainer.image_present(img) for img in self._stack_images())
@@ -216,12 +212,10 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         """Write the compose file to disk.
 
         The loader substituted every ``$placeholder`` at load time, except
-        the image markers (``$images.<name>``), which are substituted here
+        the image markers (``$images.<name>``), which are resolved here
         with the effective ref — recorded selection wins over default_tag.
         """
-        body = _substitute_image_markers(
-            self.config.compose_template, self.config.images, self._installables
-        )
+        body = self._rendered_template()
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
         path.write_text(body)

@@ -459,6 +459,38 @@ def test_resolve_placeholders_direct_call(tmp_path: Path) -> None:
     assert out["flag"] is True
 
 
+def test_resolve_placeholders_images_refs(tmp_path: Path) -> None:
+    """$images.<name> resolves when the caller supplies effective refs.
+
+    This is the single placeholder engine's image path — the same
+    mechanism ComposeService render uses, replacing the bespoke
+    negative-lookahead regex. Hyphenated names (romm-db) must not be
+    clobbered by a shorter name (romm); unknown markers stay intact.
+    """
+    ctx = service_ctx(tmp_path, name="svc")
+    refs = {"romm": "rommapp/romm:2.9.1", "romm-db": "postgres:16-alpine"}
+    out = resolve_placeholders(
+        {
+            "a": "$images.romm",
+            "b": "$images.romm-db",
+            "mixed": "port $images.romm and db $images.romm-db",
+            "unknown": "$images.other",
+        },
+        ctx,
+        {},
+        None,
+        images=refs,
+    )
+    assert out["a"] == "rommapp/romm:2.9.1"
+    assert out["b"] == "postgres:16-alpine"
+    assert out["mixed"] == "port rommapp/romm:2.9.1 and db postgres:16-alpine"
+    assert out["unknown"] == "$images.other"
+    # No images mapping -> markers survive (the load-time pass).
+    out2 = resolve_placeholders({"a": "$images.romm", "b": "$images.romm-db"}, ctx, {}, None)
+    assert out2["a"] == "$images.romm"
+    assert out2["b"] == "$images.romm-db"
+
+
 # --- spec_to_options_model ------------------------------------------------
 
 
