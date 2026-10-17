@@ -686,7 +686,7 @@ def test_romm_compose_template_resolves_placeholders(tmp_path: Path) -> None:
     # data_dir used by compose is ctx.data_dir / "data").
     assert "library" in template  # $state_dir/library
     assert "config" in template  # $state_dir/config
-    assert "/roms:/romm/roms" in template  # $options.roms_dir -> <media vault>/roms
+    assert "/roms:/romm/library" in template  # $options.roms_dir -> <media vault>/roms
 
 
 def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
@@ -716,8 +716,7 @@ def test_romm_render_includes_options_and_dirs(tmp_path: Path) -> None:
     assert "$options." not in rendered
     # state/data dir-derived volume paths are concrete, not empty
     assert not re.search(r"^\s*- :/", rendered, re.MULTILINE)
-    assert f"{tmp_path}/state/library:/romm/library" in rendered
-    assert f"{tmp_path}/media-vault/roms:/romm/roms" in rendered
+    assert f"{tmp_path}/media-vault/roms:/romm/library" in rendered
     assert f"{tmp_path}/state/db:/var/lib/postgresql/data" in rendered
 
 

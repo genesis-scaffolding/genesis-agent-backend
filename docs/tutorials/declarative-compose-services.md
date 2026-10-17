@@ -179,7 +179,7 @@ compose_template: |
         DB_PASSWD: "$options.db_password"   # -> the user's value at load
         DB_NAME: $options.db_name            # -> "romm" (or the override)
       volumes:
-        - $options.roms_dir:/romm/roms       # -> /home/<user>/media/roms:/romm/roms
+        - $options.roms_dir:/romm/library    # -> /home/<user>/media/roms:/romm/library
 ```
 
 Notes that matter when writing compose templates:
@@ -249,9 +249,8 @@ compose_template: |
         DB_NAME: $options.db_name
         ROMM_FRONTEND: "1"
       volumes:
-        - $state_dir/library:/romm/library
+        - $options.roms_dir:/romm/library
         - $state_dir/config:/romm/config
-        - $options.roms_dir:/romm/roms
       healthcheck:
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
         interval: 10s
@@ -309,6 +308,16 @@ options:
     ui_group: Database
 ```
 
+Note the storage model: `$options.roms_dir` mounts at `/romm/library`,
+ROMM's *library* location, not its scan source. ROMM has two storage
+concepts — the library (where UI uploads and managed files live) and the
+scanned directories (an optional read-mostly source for Import). Mounting
+the media vault at the library makes the vault the single source of truth:
+uploads and scan results both land in `~/media/roms`. The earlier
+`$state_dir/library` + `$options.roms_dir:/romm/roms` split put uploads in
+XDG state and left the vault empty — confusing, and it fought the vault-as-
+source-of-truth principle.
+
 Trace one line through both phases:
 
 - `"$options.listen_host:$options.listen_port:8080"` → load →
@@ -343,6 +352,7 @@ assert "$options." not in rendered
 assert "$state_dir" not in rendered
 assert "image: rommapp/romm:latest" in rendered
 assert "image: postgres:16-alpine" in rendered
+assert "/tmp/media-vault/roms:/romm/library" in rendered  # vault is the store
 
 # Port override flows through to both the template and the runtime config.
 ctx2 = service_ctx(Path("/tmp"), name="romm", options={"listen_port": 9090})

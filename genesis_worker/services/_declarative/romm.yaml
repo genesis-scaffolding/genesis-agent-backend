@@ -43,6 +43,12 @@ images:
 # No top-level listen_host / listen_port: the options block is the single
 # source of truth (options.listen_port), and the loader derives the
 # runtime port (health probe, web UI endpoint) from the resolved option.
+#
+# ROM storage model: $options.roms_dir (default <media vault>/roms) is
+# mounted at /romm/library — ROMM's library location. UI uploads AND
+# import scans read/write the same media-vault directory, so the vault
+# is the single source of truth for the collection. There is no
+# separate state-backed library mount.
 
 # The compose_template is a plain string populated by the standard
 # $placeholder mechanism ($state_dir, $data_dir, $options.X) at load
@@ -69,9 +75,8 @@ compose_template: |
         DB_NAME: $options.db_name
         ROMM_FRONTEND: "1"
       volumes:
-        - $state_dir/library:/romm/library
+        - $options.roms_dir:/romm/library
         - $state_dir/config:/romm/config
-        - $options.roms_dir:/romm/roms
       healthcheck:
         # ROMM 5.x serves /health (not /api/health, which 404s).
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
