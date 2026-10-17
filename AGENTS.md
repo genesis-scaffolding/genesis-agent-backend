@@ -94,10 +94,14 @@ For any docker-backed service that the worker should install, run, and expose,
 needed for bifrost, crawl4ai, sillytavern, and most other docker services we
 ship. The full how-to is in
 [`docs/tutorials/declarative-services.md`](docs/tutorials/declarative-services.md)
-— read it before adding a service. Drop into Python (subclass `DockerService`
-or `UvService`) only when the YAML can't express what you need: post-install
-file patches, custom installables, multi-process orchestration, dynamic port
-discovery. The tutorial covers the boundary.
+— read it before adding a service. Multi-container stacks (app + database)
+use `kind: compose` with the same one-file approach; see
+[`docs/tutorials/declarative-compose-services.md`](docs/tutorials/declarative-compose-services.md)
+for the `images:` block and the two-phase `$images` placeholder resolution.
+Drop into Python (subclass `DockerService` or `UvService`) only when the
+YAML can't express what you need: post-install file patches, custom
+installables, `build:`-based stacks, dynamic port discovery. The tutorials
+cover the boundary.
 
 ## Stack
 

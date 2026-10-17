@@ -129,6 +129,9 @@ session_name: my-service   # tmux session name; defaults to `name`
 Everything in this doc applies to `kind: docker`. The uv path is the same shape
 but with different lifecycle internals.
 
+A third kind, `kind: compose`, covers multi-container stacks (app + database).
+See [`declarative-compose-services.md`](declarative-compose-services.md).
+
 ## The `$variable` substitution
 
 This is the part that makes the YAML powerful. Anywhere a string value can
