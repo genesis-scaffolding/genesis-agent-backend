@@ -286,8 +286,19 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     # --- introspection ----------------------------------------------------
 
     @property
+    def has_image_page(self) -> bool:
+        return True
+
+    @property
     def image_ref(self) -> str:
-        return f"{self.config.image_repo}:{self.config.image_tag}"
+        """Effective ref: recorded version selection wins over the default tag.
+
+        Mirrors ``ComposeService._image_refs`` so picking a tag on the
+        Images page changes what ``start()`` runs, not just what
+        ``is_available()`` reports.
+        """
+        tag = self._install_obj.installed_version() or self.config.image_tag
+        return f"{self.config.image_repo}:{tag}"
 
     @property
     def container_name(self) -> str:

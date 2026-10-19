@@ -741,7 +741,9 @@ def test_romm_images_are_real_installables(tmp_path: Path) -> None:
         assert i.installed_version() in (None, i.image_ref.split(":", 1)[1])
 
 
-def test_romm_render_uses_recorded_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_romm_render_uses_recorded_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A recorded version selection reaches the rendered compose file.
 
     Simulates the user having installed rommapp/romm:2.9.1 from the GUI:

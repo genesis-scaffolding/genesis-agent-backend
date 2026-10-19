@@ -38,10 +38,14 @@ def _run(args: list[str], *, timeout: float) -> subprocess.CompletedProcess:
 
 
 def _http_get_json(
-    url: str, *, headers: dict[str, str] | None = None, timeout: float = 30.0
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float = 30.0,
+    accept: str = "application/json",
 ) -> Any:
     """Fetch ``url`` and parse JSON. Headers default to UA."""
-    h = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
+    h = {"User-Agent": _USER_AGENT, "Accept": accept}
     if headers:
         h.update(headers)
     req = urllib.request.Request(url, headers=h)
@@ -288,18 +292,27 @@ class DockerContainer:
         return out
 
     @staticmethod
-    def list_remote_tags(repo: str, *, auth_token: str | None = None) -> list[str]:
-        """Tags for ``repo`` from the GHCR v2 registry.
+    def list_remote_tags(repo: str) -> list[str]:
+        """Tags for ``repo`` from its registry, newest-first where known.
 
-        Public packages are reachable without a token. The two-step
-        GHCR flow: token endpoint → tags endpoint. Caller caches the
-        result; this method does not. Returns ``[]`` on any network
-        or parsing failure.
+        Dispatches on the registry prefix: GHCR repos use the v2
+        token → tags flow; everything else (Docker Hub and other
+        registries) uses the library/namespace v2 catalog. Both
+        endpoints are public for public images. Returns ``[]`` on any
+        network or parsing failure — the caller treats that as
+        "registry unreachable", not an error state.
+
+        Caller caches the result; this method does not.
         """
-        token = auth_token
-        if token is None:
-            token = DockerContainer._fetch_ghcr_token(repo)
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if repo.startswith("ghcr.io/"):
+            return DockerContainer._ghcr_tags(repo)
+        return DockerContainer._hub_tags(repo)
+
+    @staticmethod
+    def _ghcr_tags(repo: str) -> list[str]:
+        """GHCR v2 flow: anonymous token endpoint → tags endpoint."""
+        token = DockerContainer._fetch_ghcr_token(repo)
+        headers = {"Authorization": f"Bearer {token}"} if token else None
         url = f"{_GHCR_BASE}/v2/{repo}/tags/list"
         try:
             data = _http_get_json(url, headers=headers, timeout=30.0)
@@ -311,6 +324,67 @@ class DockerContainer:
         return [t for t in tags if isinstance(t, str)]
 
     @staticmethod
+    def _hub_tags(repo: str) -> list[str]:
+        """Docker Hub v2 catalog: ``/v2/<name>/tags/list?n=<max>``.
+
+        Anonymous token from ``auth.docker.io`` (public images are
+        pullable without credentials — the token just authorises the
+        read), then the tags endpoint. Hub lists tags alphabetically
+        (oldest first), so the result is reversed to newest-first —
+        the order installables display in their pickers. 429s under
+        heavy load surface as ``[]`` like any other failure.
+        """
+        # ``docker.io/org/img`` is the canonical spelling of ``org/img``;
+        # strip it. A leading path component with a dot or colon is a
+        # registry host (``registry.example.com/org/img``,
+        # ``localhost:5000/img``) — query that host instead of the hub.
+        repo = repo.removeprefix("docker.io/")
+        repo = repo.rstrip("/")
+        host = ""
+        if "/" in repo:
+            first = repo.split("/", 1)[0]
+            if "." in first or ":" in first:
+                host, repo = first, repo.split("/", 1)[1]
+        if not host and "/" not in repo:
+            repo = f"library/{repo}"  # bare names are official library images
+        if host:
+            # Non-hub registries don't share the auth.docker.io flow;
+            # best-effort unauthenticated (most public mirrors allow it).
+            token = None
+            base = f"https://{host}"
+        else:
+            token = DockerContainer._fetch_hub_token(repo)
+            base = "https://registry-1.docker.io"
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        url = f"{base}/v2/{repo}/tags/list?n=1000"
+        try:
+            data = _http_get_json(url, headers=headers, timeout=30.0, accept="*")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return []
+        if not isinstance(data, dict):
+            return []
+        tags = data.get("tags")
+        if tags is None:
+            return []
+        return [t for t in reversed(tags) if isinstance(t, str)]
+
+    @staticmethod
+    def _fetch_hub_token(repo: str) -> str | None:
+        """Anonymous Docker Hub pull token scoped to ``repo``."""
+        url = (
+            f"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull"
+        )
+        try:
+            data = _http_get_json(url, timeout=15.0, accept="*")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return None
+        if isinstance(data, dict):
+            token = data.get("token")
+            if isinstance(token, str):
+                return token
+        return None
+
+    @staticmethod
     def _fetch_ghcr_token(repo: str) -> str | None:
         """Fetch an anonymous GHCR pull token scoped to ``repo``.
 
@@ -319,7 +393,7 @@ class DockerContainer:
         """
         url = f"{_GHCR_BASE}/token?service=ghcr.io&scope=repository:{repo}:pull"
         try:
-            data = _http_get_json(url, timeout=15.0)
+            data = _http_get_json(url, timeout=15.0, accept="*")
         except (urllib.error.URLError, TimeoutError, OSError):
             return None
         if isinstance(data, dict):

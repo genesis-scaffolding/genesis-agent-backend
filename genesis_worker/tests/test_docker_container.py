@@ -453,13 +453,12 @@ def test_list_remote_tags_fetches_token_then_tags(monkeypatch: pytest.MonkeyPatc
     assert tags == ["v0.34.0-cuda-13.0-amd64", "v0.33.0-cuda-12.8-amd64"]
 
 
-def test_list_remote_tags_uses_provided_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When ``auth_token`` is supplied, the token endpoint is not called."""
-    seen_urls: list[str] = []
+def test_list_remote_tags_non_ghcr_dispatches_to_hub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-GHCR repos hit the hub v2 catalog, not the GHCR token flow."""
+    urls: list[str] = []
 
     def _fake_urlopen(req, **kw):  # type: ignore[no-untyped-def]
-        seen_urls.append(req.full_url)
-        body = json.dumps({"name": "repo", "tags": ["v1"]}).encode()
+        urls.append(req.full_url)
 
         class _Resp:
             def __enter__(self) -> _Resp:  # noqa: PYI034
@@ -469,15 +468,15 @@ def test_list_remote_tags_uses_provided_token(monkeypatch: pytest.MonkeyPatch) -
                 pass
 
             def read(self) -> bytes:
-                return body
+                return json.dumps({"name": "repo", "tags": ["v1"]}).encode()
 
         return _Resp()
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
-    tags = DockerContainer.list_remote_tags("repo/x", auth_token="explicit")
+    tags = DockerContainer.list_remote_tags("repo/x")
     assert tags == ["v1"]
-    assert len(seen_urls) == 1
-    assert seen_urls[0].endswith("/v2/repo/x/tags/list")
+    assert all("ghcr.io" not in u for u in urls)
+    assert any(u.endswith("/v2/repo/x/tags/list?n=1000") for u in urls)
 
 
 def test_list_remote_tags_returns_empty_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -486,6 +485,71 @@ def test_list_remote_tags_returns_empty_on_unreachable(monkeypatch: pytest.Monke
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
     assert DockerContainer.list_remote_tags("repo/x") == []
+    assert DockerContainer.list_remote_tags("ghcr.io/org/x") == []
+
+
+# --- list_remote_tags (Docker Hub) ------------------------------------------
+
+
+def _patch_hub(monkeypatch: pytest.MonkeyPatch, *, tags: list[str], urls: list[str]) -> None:
+    def _fake_urlopen(req, **kw):  # type: ignore[no-untyped-def]
+        url = req.full_url
+        urls.append(url)
+        if url.startswith("https://auth.docker.io/"):
+            body = json.dumps({"token": "tok"}).encode()
+        else:
+            body = json.dumps({"name": "repo", "tags": tags}).encode()
+
+        class _Resp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def __enter__(self) -> _Resp:  # noqa: PYI034
+                return self
+
+            def __exit__(self, *a: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return self._body
+
+        return _Resp(body=body)
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+
+def test_hub_tags_uses_library_for_single_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls: list[str] = []
+    _patch_hub(monkeypatch, tags=["16-alpine", "16"], urls=urls)
+    tags = DockerContainer.list_remote_tags("postgres")
+    assert tags == ["16", "16-alpine"]  # hub lists oldest-first; we reverse
+    tag_urls = [u for u in urls if "registry-1.docker.io" in u]
+    assert tag_urls[0].startswith("https://registry-1.docker.io/v2/library/postgres/tags/list")
+
+
+def test_hub_tags_namespaced_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls: list[str] = []
+    _patch_hub(monkeypatch, tags=["latest"], urls=urls)
+    tags = DockerContainer.list_remote_tags("rommapp/romm")
+    assert tags == ["latest"]
+    assert any("/v2/rommapp/romm/tags/list" in u for u in urls)
+
+
+def test_hub_tags_custom_registry_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls: list[str] = []
+    _patch_hub(monkeypatch, tags=["latest"], urls=urls)
+    tags = DockerContainer.list_remote_tags("registry.example.com/org/img")
+    assert tags == ["latest"]
+    assert "auth.docker.io" not in " ".join(urls)  # hub auth flow not used
+    assert any(u.startswith("https://registry.example.com/v2/org/img/tags/list") for u in urls)
+
+
+def test_hub_tags_empty_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_urlopen(req, **kw):  # type: ignore[no-untyped-def]
+        raise OSError("rate limited")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    assert DockerContainer.list_remote_tags("rommapp/romm") == []
 
 
 # --- pull ------------------------------------------------------------------

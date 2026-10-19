@@ -152,17 +152,35 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
         comfyui's Models page, etc.) override this and point at their
         own scripts under ``services/<name>/ui/``.
         """
-        default_status_path = (
-            Path(__file__).resolve().parents[2] / "ui" / "default_service_status.py"
-        )
-        return [
+        ui_dir = Path(__file__).resolve().parents[2] / "ui"
+        pages = [
             UiPage(
                 "Status",
                 ":material/monitor:",
-                default_status_path,
+                ui_dir / "default_service_status.py",
                 url_path=f"{self.name}_status",
             )
         ]
+        if self.has_image_page:
+            pages.append(
+                UiPage(
+                    "Images",
+                    ":material/inventory_2:",
+                    ui_dir / "default_service_images.py",
+                    url_path=f"{self.name}_images",
+                )
+            )
+        return pages
+
+    @property
+    def has_image_page(self) -> bool:
+        """Whether this service ships the shared Images page.
+
+        True for docker and compose services (registry-backed images with
+        version picking). Uv-tool services install Python packages, not
+        images — their install axis is covered elsewhere.
+        """
+        return False
 
     @property
     def ui_panels(self) -> tuple[str, ...]:

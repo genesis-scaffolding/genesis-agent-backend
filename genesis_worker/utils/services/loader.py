@@ -46,9 +46,7 @@ from .spec import (
 )
 from .uv_service import UvService, UvServiceConfig
 
-_PLACEHOLDER_RE = re.compile(
-    r"\$([a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)*)"
-)
+_PLACEHOLDER_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)*)")
 
 
 def _resolve_string(
@@ -164,9 +162,7 @@ def resolve_placeholders(
             k: resolve_placeholders(v, ctx, options, auth_token, images) for k, v in value.items()
         }
     if isinstance(value, list):
-        return [
-            resolve_placeholders(v, ctx, options, auth_token, images) for v in value
-        ]
+        return [resolve_placeholders(v, ctx, options, auth_token, images) for v in value]
     return value
 
 
