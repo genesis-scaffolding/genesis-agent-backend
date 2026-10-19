@@ -131,6 +131,9 @@ def test_facade_start_service_returns_start_result(tmp_path: Path, monkeypatch) 
         "start",
         lambda self: StartResult(ok=True, message="mock-start"),
     )
+    # Hermetic: skip the facade's install-first branch (the real install
+    # would hit the network for the llama-server release).
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
     settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
     w = _GW(settings=settings)
     result = w.start_service("llama_swap")
@@ -742,6 +745,8 @@ def test_start_service_with_config_sets_pending_attribute(
         return StartResult(ok=True, message="mock-start")
 
     monkeypatch.setattr(LlamaSwapService, "start", _capture)
+    # Hermetic: skip the facade's install-first branch (real network).
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     cfg = {"providers": {"openai": {"keys": [{"name": "k"}]}}}
@@ -760,6 +765,8 @@ def test_start_service_clears_pending_attribute_after_completion(
     monkeypatch.setattr(
         LlamaSwapService, "start", lambda self: StartResult(ok=True, message="mock-start")
     )
+    # Hermetic: skip the facade's install-first branch (real network).
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     w.start_service("llama_swap", config={"x": 1})
@@ -779,6 +786,9 @@ def test_start_service_clears_pending_attribute_on_failure(
         raise RuntimeError("start exploded")
 
     monkeypatch.setattr(LlamaSwapService, "start", _raise)
+    # Hermetic: the error must come from the start path, not from a real
+    # install (rate-limited network would fake the assertion).
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     with pytest.raises(RuntimeError):
@@ -806,6 +816,8 @@ def test_start_service_without_config_leaves_pending_none(
         return StartResult(ok=True, message="mock-start")
 
     monkeypatch.setattr(LlamaSwapService, "start", _capture)
+    # Hermetic: skip the facade's install-first branch (real network).
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     w.start_service("llama_swap")
@@ -903,6 +915,8 @@ def test_restart_service_delegates_to_start_service(
     monkeypatch.setattr(
         LlamaSwapService, "start", lambda self: StartResult(ok=True, message="mock-start")
     )
+    # Hermetic: skip the facade's install-first branch (real network).
+    monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     seen: dict = {}
