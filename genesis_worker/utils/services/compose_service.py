@@ -114,6 +114,10 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
     # --- introspection ----------------------------------------------------
 
     @property
+    def has_image_page(self) -> bool:
+        return True
+
+    @property
     def compose_dir(self) -> Path:
         return self._compose_dir
 
@@ -153,7 +157,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         """Effective ``$images.<name>`` refs: recorded selection wins over ``default_tag``."""
         return {
             img.name: f"{img.repo}:{installable.installed_version() or img.default_tag}"
-            for img, installable in zip(self.config.images, self._installables)
+            for img, installable in zip(self.config.images, self._installables, strict=True)
         }
 
     def _rendered_template(self) -> str:
