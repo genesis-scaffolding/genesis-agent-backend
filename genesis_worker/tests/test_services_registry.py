@@ -52,6 +52,7 @@ def test_registry_all_returns_every_service() -> None:
         "cptr",
         "crawl4ai",
         "freshrss",
+        "genesis-productivity",
         "kavita",
         "llama_swap",
         "ntfy",

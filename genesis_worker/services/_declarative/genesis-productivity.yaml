@@ -1,0 +1,125 @@
+# genesis-productivity declarative service spec.
+#
+# The Genesis productivity system (tasks, projects, journals, CalDAV /
+# CardDAV). Runs as a single container built from the project's own
+# Dockerfile (python:3.12-slim + uv + tini + `make serve`), which
+# supervises both the Streamlit UI (:3000) and the FastAPI server
+# (:8765) the way `make serve` does on a host install.
+#
+# Data model: the container starts as root only long enough for its
+# entrypoint to chown the mounts to the host user (PUID/PGID,
+# linuxserver-style -- same convention as comfyui), then drops
+# privileges via setpriv and runs the app as that user (uid 1000 by
+# default, home /home/genesis). The four mounts below place the
+# worker's per-service pre-prepared directories onto the user's XDG
+# roots. Cutover from a host install: copy the live
+# ~/.local/{share,state,config}/genesis data into these dirs before the
+# first start.
+#
+# compose kind (not docker kind) because two ports must be published;
+# the docker kind supports exactly one. The runtime port (health probe
+# + web UI endpoint) is the Streamlit UI port, per framework convention.
+
+version: 1
+kind: compose
+name: genesis-productivity
+display_name: Genesis Productivity
+description: Tasks, projects, journals, calendar, contacts, XP
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+compose_version: "3.8"
+# Health probe: the FastAPI /health endpoint. The probe runs against the
+# Streamlit port (framework derives it from options.listen_port), and
+# streamlit answers 200 on /, so this path just needs to exist there.
+health_probe_path: /
+
+# Built by the project's GitHub Actions workflow (master + tags); the
+# worker pulls from GHCR. default_tag follows the rolling master image;
+# pin a versioned tag (e.g. 0.1.0) via the GUI once one is cut.
+images:
+  - name: app
+    repo: ghcr.io/genesis-scaffolding/genesis-productivity
+    default_tag: latest
+
+compose_template: |
+  version: "3.8"
+  services:
+    app:
+      image: $images.app
+      container_name: genesis-productivity
+      restart: unless-stopped
+      ports:
+        - "$options.listen_host:$options.listen_port:3000"   # Streamlit UI
+        - "$options.listen_host:$options.api_port:8765"      # FastAPI
+      environment:
+        TZ: "$options.tz"
+        # Consumed by the image's entrypoint, which chowns the mounts to
+        # this uid:gid and drops to it via setpriv before exec'ing the
+        # app (the image itself stays unversioned on this -- the user is
+        # a runtime concern).
+        PUID: "$options.puid"
+        PGID: "$options.pgid"
+      volumes:
+        # The app's four XDG roots, mapped onto the worker's per-service
+        # pre-prepared directories (created by the framework pre-start).
+        - $config_dir:/home/genesis/.config
+        - $data_dir:/home/genesis/.local/share
+        - $state_dir:/home/genesis/.local/state
+        - $cache_dir:/home/genesis/.cache
+      healthcheck:
+        test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/health"]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 30s
+
+options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
+    ui_label: Listen host
+    ui_group: Network
+  listen_port:
+    type: port
+    default: 3000
+    ui_label: Web UI port
+    ui_help: Host-side port for the Streamlit UI
+    ui_group: Network
+  api_port:
+    type: port
+    default: 8765
+    ui_label: API port
+    ui_help: Host-side port for the FastAPI server (CLI/agent access)
+    ui_group: Network
+  tz:
+    type: string
+    default: "Australia/Adelaide"
+    ui_label: Timezone
+    ui_help: IANA timezone name for the container
+    ui_group: General
+  puid:
+    type: int
+    default: 1000
+    ui_label: User ID (PUID)
+    ui_help: Numeric UID the app process runs as; set to your host UID (usually 1000) so files stay host-owned
+    ui_group: Permissions
+  pgid:
+    type: int
+    default: 1000
+    ui_label: Group ID (PGID)
+    ui_help: Numeric GID the app process runs as; set to your host GID (usually 1000)
+    ui_group: Permissions
