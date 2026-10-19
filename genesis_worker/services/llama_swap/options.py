@@ -46,6 +46,12 @@ class LlamaSwapOptions(BaseModel):
     # → ``{vendor, index, label}``, CpuDevice → ``{}``). Override via
     # ``GENESIS_SERVICES__LLAMA_SWAP__DEFAULT_DEVICE``.
     default_device: ComputeDevice | None = None
+    # Always-injected llama-server cmd flags (see generate_config's
+    # DEFAULT_HARDCODED_FLAGS). ``None`` = use the framework defaults;
+    # a non-empty list replaces them wholesale. Persisted through the
+    # per-service JSON sidecar (list-typed, like comfyui's extra_args);
+    # edited on the status page's "Server flags" section.
+    hardcoded_flags: list[str] | None = None
 
     config_path: Path | None = None
     recipes_path: Path | None = None

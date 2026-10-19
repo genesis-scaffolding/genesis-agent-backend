@@ -35,6 +35,29 @@ DEFAULT_KV_QUANT_OVER = 25_000_000_000  # add -ctk q8_0 -ctv q8_0 above this
 DEFAULT_MMPROJ_OFFLOAD_OVER = 25_000_000_000  # add --no-mmproj-offload above this
 DEFAULT_BINARY_REL = "vendor/llama.cpp/build/bin/llama-server"
 
+# Flags always injected into every generated llama-server cmd. These are the
+# service-level "contract" flags: ``--port ${PORT}`` / ``--host 127.0.0.1``
+# are structural (llama-swap assigns the port, the proxy binds localhost),
+# and the runtime-tuning pair below is the multi-user memory policy.
+#
+# ``--ctx-checkpoints 4`` keeps a small set of tail context checkpoints for
+# drift-restore while bounding the per-checkpoint partial-state cost (the
+# stock default of 32 overflows the cache budget for long sessions).
+# ``--cache-ram 16384`` (16 GiB) is the idle-slot prompt-cache budget that
+# lets a full-length session's KV actually fit in RAM instead of being
+# dropped (see the 2026-10-19 llama-swap KV-cache clobbering investigation).
+# Operators can override the whole set per machine via the status page
+# (``hardcoded_flags`` option) without touching code.
+DEFAULT_HARDCODED_FLAGS: tuple[str, ...] = (
+    "--kv-unified",
+    "--jinja",
+    "-fa on",
+    "--ctx-checkpoints 4",
+    "--cache-ram 16384",
+    "--port ${PORT}",
+    "--host 127.0.0.1",
+)
+
 _SAMPLING_FLAGS: dict[str, str] = {
     "temp": "--temp",
     "top_p": "--top-p",
@@ -82,6 +105,10 @@ class BuildOptions:
     # to this when no recipe / override sets ``device`` explicitly
     # (ADR-039 §3).
     service_default_device: ComputeDevice | None = None
+    # Always-injected cmd flags. ``None`` → :data:`DEFAULT_HARDCODED_FLAGS`;
+    # a non-empty tuple replaces the default set wholesale. Supplied from
+    # the service's ``hardcoded_flags`` option (status-page editable).
+    hardcoded_flags: tuple[str, ...] | None = None
 
 
 def _env_for(binary_variant: str | None, device: ComputeDevice | None) -> tuple[str, ...]:
@@ -159,13 +186,7 @@ class EvaluatedConfig:
     # the YAML payload; llama-swap injects them before exec'ing ``cmd``
     # (ADR-039 §4).
     env: tuple[str, ...] = ()
-    hardcoded_flags: tuple[str, ...] = (
-        "--kv-unified",
-        "--jinja",
-        "-fa on",
-        "--port ${PORT}",
-        "--host 127.0.0.1",
-    )
+    hardcoded_flags: tuple[str, ...] = DEFAULT_HARDCODED_FLAGS
 
 
 @dataclass(frozen=True)
@@ -570,6 +591,11 @@ def evaluate_recipe(
         provenance=provenance,
         device=device,
         binary_variant=options.binary_variant,
+        hardcoded_flags=(
+            tuple(options.hardcoded_flags)
+            if options.hardcoded_flags is not None
+            else DEFAULT_HARDCODED_FLAGS
+        ),
     )
 
     return EvaluatedConfig(
@@ -593,6 +619,11 @@ def evaluate_recipe(
         cmd=cmd,
         device=device,
         env=_env_for(options.binary_variant, device),
+        hardcoded_flags=(
+            tuple(options.hardcoded_flags)
+            if options.hardcoded_flags is not None
+            else DEFAULT_HARDCODED_FLAGS
+        ),
     )
 
 
@@ -615,6 +646,7 @@ def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
         provenance=evaluated.provenance,
         device=evaluated.device,
         binary_variant=None,  # legacy path; evaluate_recipe threads the real value
+        hardcoded_flags=evaluated.hardcoded_flags,
     )
 
 
@@ -637,6 +669,7 @@ def cmd_from_evaluated_dict(
     extra_flags: tuple[str, ...] = (),
     device: ComputeDevice | None = None,
     binary_variant: str | None = None,
+    hardcoded_flags: tuple[str, ...] | None = None,
 ) -> str:
     """Format the llama-server cmd string from resolved fields.
 
@@ -695,10 +728,13 @@ def cmd_from_evaluated_dict(
     if reasoning_budget_message:
         runtime.extend(["--reasoning-budget-message", shlex.quote(reasoning_budget_message)])
 
-    runtime.extend(["--kv-unified", "--jinja", "-fa", "on"])
     sections.append("  " + " ".join(runtime) + " \\")
 
-    sections.append("  --port ${PORT} --host 127.0.0.1 \\")
+    # Always-injected flags (structural + the multi-user memory policy),
+    # one per line so the generated cmd reads like the hand-authored
+    # configs the generator predates.
+    for flag in hardcoded_flags if hardcoded_flags is not None else DEFAULT_HARDCODED_FLAGS:
+        sections.append(f"  {flag} \\")
 
     if chat_template_file:
         resolved = _resolve_chat_template_file(chat_template_file)
@@ -973,6 +1009,7 @@ def is_config_stale(config_path: Path, *, catalog_generated_at: str) -> bool:
 
 __all__ = [
     "DEFAULT_BINARY_REL",
+    "DEFAULT_HARDCODED_FLAGS",
     "DEFAULT_KV_QUANT_OVER",
     "DEFAULT_MMPROJ_OFFLOAD_OVER",
     "BuildOptions",
