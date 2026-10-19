@@ -35,9 +35,9 @@ from .uv_service import UvService, UvServiceConfig, UvToolInstall
 
 __all__ = [
     "AuthConfig",
+    "ComposeImage",
     "ComposeService",
     "ComposeServiceConfig",
-    "ComposeImage",
     "ComposeServiceSpec",
     "DeclarativeServiceBase",
     "DeclarativeServiceConfig",

@@ -202,6 +202,33 @@ class LlamaSwapService(InferenceService):
         """
         return self._ctx.host_info
 
+    # --- always-injected cmd flags ---------------------------------------
+    # The set of flags the config generator appends to every llama-server
+    # cmd (kv-unified / jinja / flash-attn / checkpoint + prompt-cache
+    # sizing / port + host). ``None`` means "use the framework defaults";
+    # an explicit list replaces them wholesale. Same ADR-041 split as
+    # comfyui's ``extra_args``: the service only updates in-memory state,
+    # the UI persists through ``worker.write_service_overrides``.
+
+    @property
+    def hardcoded_flags(self) -> list[str] | None:
+        return self._options.hardcoded_flags
+
+    def set_hardcoded_flags(self, flags: list[str] | None) -> None:
+        """Update ``hardcoded_flags`` in memory.
+
+        Persistence is the UI's job: the caller writes the value to the
+        per-service JSON sidecar via ``worker.write_service_overrides``.
+        The in-memory update means the next config regen picks up the new
+        flags without a worker restart; the sidecar write means a worker
+        restart also picks them up via ``Settings.options_for``.
+
+        Empty input normalizes to ``None`` (revert to defaults) so the
+        sidecar never carries a redundant empty list.
+        """
+        cleaned = [f.strip() for f in (flags or []) if f and f.strip()]
+        self._options.hardcoded_flags = cleaned or None  # type: ignore[assignment]
+
     def _default_llama_server_binary(self) -> str | None:
         """Resolve the configured variant to an installed binary path."""
         variant = self.llama_server_variant
@@ -273,6 +300,11 @@ class LlamaSwapService(InferenceService):
             default_binary_rel=self._options.default_binary_rel,
             binary_variant=resolved_variant,
             service_default_device=self.effective_default_device,
+            hardcoded_flags=(
+                tuple(self._options.hardcoded_flags)
+                if self._options.hardcoded_flags is not None
+                else None
+            ),
         )
 
     def is_ready_to_serve(self) -> bool:

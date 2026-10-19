@@ -14,6 +14,7 @@ import pytest
 
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
 from genesis_worker.services.llama_swap.generate_config import (
+    DEFAULT_HARDCODED_FLAGS,
     BuildOptions,
     DetectedFileSet,
     EvaluatedConfig,
@@ -248,6 +249,53 @@ def test_cmd_emits_kv_unified_hardcoded(options: BuildOptions) -> None:
     evaluated = _evaluate(recipe, options)
     assert "--kv-unified" in evaluated.cmd
     assert "--kv-unified" in evaluated.hardcoded_flags
+
+
+def test_cmd_emits_multiuser_memory_policy_defaults(options: BuildOptions) -> None:
+    """Checkpoint + prompt-cache sizing defaults are injected into every cmd.
+
+    2026-10-19 investigation: idle-slot cache entries include per-checkpoint
+    partial state; the stock defaults (32 checkpoints, 8 GiB cache) overflowed
+    the budget for long sessions and dropped them on the floor.
+    """
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, options)
+    assert "--ctx-checkpoints 4" in evaluated.cmd
+    assert "--cache-ram 16384" in evaluated.cmd
+    assert "--port ${PORT}" in evaluated.cmd
+    assert "--host 127.0.0.1" in evaluated.cmd
+
+
+def test_cmd_hardcoded_flags_override_replaces_defaults(options: BuildOptions) -> None:
+    """A service-level ``hardcoded_flags`` override replaces the full set."""
+    opts = BuildOptions(
+        repo_root=options.repo_root,
+        hardcoded_flags=(
+            "--kv-unified",
+            "--ctx-checkpoints 0",
+            "--cache-ram 12288",
+            "--port ${PORT}",
+        ),
+    )
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, opts)
+    assert "--ctx-checkpoints 0" in evaluated.cmd
+    assert "--ctx-checkpoints 4" not in evaluated.cmd
+    assert "--cache-ram 12288" in evaluated.cmd
+    assert "--cache-ram 16384" not in evaluated.cmd
+    assert "--port ${PORT}" in evaluated.cmd
+    # ``--host 127.0.0.1`` is part of the defaults, not the override → gone.
+    assert "--host 127.0.0.1" not in evaluated.cmd
+    assert evaluated.hardcoded_flags == opts.hardcoded_flags
+
+
+def test_cmd_hardcoded_flags_none_uses_defaults(options: BuildOptions) -> None:
+    """Explicit ``None`` (no override) falls back to the framework defaults."""
+    opts = BuildOptions(repo_root=options.repo_root, hardcoded_flags=None)
+    recipe = _recipe()
+    evaluated = _evaluate(recipe, opts)
+    assert "--ctx-checkpoints 4" in evaluated.cmd
+    assert evaluated.hardcoded_flags == DEFAULT_HARDCODED_FLAGS
 
 
 def test_cmd_emits_kv_unified_even_with_recipe_binary(tmp_path: Path) -> None:

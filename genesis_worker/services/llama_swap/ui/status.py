@@ -7,6 +7,7 @@ from typing import Any
 import streamlit as st
 
 from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
+from genesis_worker.services.llama_swap.generate_config import DEFAULT_HARDCODED_FLAGS
 from genesis_worker.utils.ui._nav import to_relative
 from genesis_worker.utils.ui._service_controls import render_service_controls
 from genesis_worker.utils.ui._tail_log import render_tail_log
@@ -175,6 +176,75 @@ with st.container(border=True):
                 f"Pinned to {chosen.vendor} idx {chosen.index}. "
                 f"Requires `llama-server-{chosen.variant}` to be installed."
             )
+
+
+# --- Server flags (always-injected cmd flags) ------------------------------
+# Service-level override of the flags the config generator appends to
+# every llama-server cmd (kv-unified / jinja / flash-attn / checkpoint +
+# prompt-cache sizing / port + host). The defaults live in code
+# (``DEFAULT_HARDCODED_FLAGS``); a non-empty edit here replaces the whole
+# set. ``--kv-unified`` / ``--jinja`` / ``-fa on`` / ``--port ${PORT}`` /
+# ``--host 127.0.0.1`` are effectively non-optional (llama-swap owns the
+# port bind, and the recipes presume the unified KV); the flags worth
+# re-tuning per machine are the checkpoint / cache-ram pair (the
+# multi-user memory policy). Persistence follows the ADR-041 pattern: in-memory set
+# + per-service JSON sidecar via the worker, then regenerate.
+def _on_save_server_flags() -> None:
+    raw = st.session_state.get("status-server-flags") or ""
+    flags = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    svc.set_hardcoded_flags(flags)
+    values: dict = {}
+    if flags:
+        values["hardcoded_flags"] = flags
+    worker.write_service_overrides(SERVICE_NAME, values)
+    ok = worker.regenerate_service_config(SERVICE_NAME)
+    if ok:
+        st.success("Saved + regenerated. Restart llama-swap to apply.")
+    else:
+        st.info("Saved (config already up to date). Restart llama-swap to apply.")
+    st.rerun()
+
+
+with st.container(border=True):
+    st.subheader("Server flags")
+    st.caption(
+        "Flags always injected into every generated llama-server cmd. "
+        "One per line. Leave empty to use the framework defaults. "
+        "Keep `--port ${PORT}` and `--host 127.0.0.1` — llama-swap owns the bind. "
+        "Typical tune: `--ctx-checkpoints N` (checkpoint count; 0 disables) "
+        "and `--cache-ram MiB` (RAM prompt-cache budget)."
+    )
+    current = (
+        svc.hardcoded_flags if svc.hardcoded_flags is not None else list(DEFAULT_HARDCODED_FLAGS)
+    )
+    using_override = svc.hardcoded_flags is not None
+    st.text_area(
+        "Server flags",
+        value="\n".join(current),
+        key="status-server-flags",
+        height=200,
+        help="Defaults (shown when no override is saved): " + ", ".join(DEFAULT_HARDCODED_FLAGS),
+    )
+    if using_override:
+        st.caption(f"Custom override active ({len(svc.hardcoded_flags)} flags).")  # type: ignore[arg-type]
+    else:
+        st.caption("No override saved — framework defaults in effect.")
+    flag_cols = st.columns(2)
+    with flag_cols[0]:
+        if st.button("Save", key="status-server-flags-save", use_container_width=True):
+            _on_save_server_flags()
+    with flag_cols[1]:
+        if st.button(
+            "Revert to defaults", key="status-server-flags-revert", use_container_width=True
+        ):
+            svc.set_hardcoded_flags(None)
+            worker.write_service_overrides(SERVICE_NAME, {})
+            ok = worker.regenerate_service_config(SERVICE_NAME)
+            if ok:
+                st.success("Reverted + regenerated. Restart llama-swap to apply.")
+            else:
+                st.info("Reverted (config already up to date).")
+            st.rerun()
 
 
 # --- Binaries --------------------------------------------------------------
