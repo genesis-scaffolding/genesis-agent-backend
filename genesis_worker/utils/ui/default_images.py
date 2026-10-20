@@ -127,6 +127,53 @@ def _render_one(svc: InferenceService, row: ImageRow) -> None:
                 "No tags returned from the registry (rate-limited or unreachable). "
                 "Use **Refresh tags** to retry."
             )
+            # Still offer Install at the resolved tag so docker pull can proceed
+            # via its own code path (no registry tag-listing needed).
+            fallback_tag: str | None = None
+            if row.version:
+                fallback_tag = row.version
+            elif row.ref and ":" in row.ref:
+                fallback_tag = row.ref.rsplit(":", 1)[1]
+            if fallback_tag:
+                cols = st.columns([1, 1, 1])
+                with cols[0]:
+                    if st.button(
+                        "Install" if not row.present else "Update",
+                        key=f"install-{svc.name}-{inst.name}",
+                        disabled=in_flight,
+                        help="An install is already in progress." if in_flight else None,
+                    ):
+                        st.session_state[sess_key] = inst.install(version=fallback_tag)
+                        st.rerun()
+                with cols[1]:
+                    uninstall_disabled = svc.is_running() or row.version is None
+                    uninstall_help = (
+                        "Stop the service first."
+                        if svc.is_running()
+                        else "No version recorded."
+                        if row.version is None
+                        else None
+                    )
+                    uninstall = getattr(svc, "uninstall_installable", None)
+                    if st.button(
+                        "Uninstall",
+                        key=f"uninstall-{svc.name}-{inst.name}",
+                        disabled=uninstall_disabled or not callable(uninstall),
+                        help=uninstall_help,
+                    ) and callable(uninstall):
+                        try:
+                            uninstall(inst.name, version=row.version)
+                        except RuntimeError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.session_state.pop(sess_key, None)
+                            st.rerun()
+                with cols[2]:
+                    if st.button("Refresh tags", key=f"refresh-{svc.name}-{inst.name}"):
+                        invalidate = getattr(inst, "invalidate_versions_cache", None)
+                        if callable(invalidate):
+                            invalidate()
+                        st.rerun()
         else:
             labels = [v.version for v in versions]
             try:

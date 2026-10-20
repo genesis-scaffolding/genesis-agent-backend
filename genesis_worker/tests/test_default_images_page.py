@@ -302,3 +302,92 @@ def test_uninstall_refused_while_running(tmp_path: Path, monkeypatch: pytest.Mon
     assert not at.exception
     uninstall = [b for b in at.button if (b.key or "").startswith("uninstall-")]
     assert uninstall and uninstall[0].disabled
+
+
+def _patch_unreachable_registry(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Patch that simulates registry returning no tags (unreachable / rate-limited)."""
+    calls: dict[str, Any] = {"install": [], "uninstall": []}
+
+    def _install(self: Any, *, version: str | None = None) -> Any:
+        calls["install"].append((self.name, version))
+        return _FinishedSession()
+
+    monkeypatch.setattr(DockerImageInstall, "install", _install)
+    monkeypatch.setattr(DockerImageInstall, "available_versions", lambda self: [])
+    monkeypatch.setattr(DockerImageInstall, "installed_version", lambda self: "1.0.0")
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda ref: False))
+    return calls
+
+
+def test_registry_unreachable_still_shows_install_at_resolved_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _make_worker(tmp_path)
+    calls = _patch_unreachable_registry(monkeypatch)
+    at = _render(worker, "bifrost")
+    at.run()
+    assert not at.exception
+    # No selectbox since registry had no tags.
+    assert len(at.selectbox) == 0
+    # Install button must still be present (not hidden behind empty tag list).
+    install_btn = [b for b in at.button if (b.key or "").startswith("install-")]
+    assert len(install_btn) == 1
+    assert install_btn[0].label == "Install"
+    assert not install_btn[0].disabled
+    # Uninstall is enabled because row.version is set (recorded selection);
+    # the recorded file is removed on uninstall, not the local image.
+    uninstall_btn = [b for b in at.button if (b.key or "").startswith("uninstall-")]
+    assert uninstall_btn and not uninstall_btn[0].disabled
+    # Clicking Install passes the recorded version as the tag.
+    install_btn[0].click()
+    at.run()
+    assert calls["install"] == [("bifrost", "1.0.0")]
+
+
+def test_registry_unreachable_update_button_when_image_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _make_worker(tmp_path)
+    _patch_unreachable_registry(monkeypatch)
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda ref: True))
+    at = _render(worker, "bifrost")
+    at.run()
+    assert not at.exception
+    install_btn = [b for b in at.button if (b.key or "").startswith("install-")]
+    assert install_btn and install_btn[0].label == "Update"
+
+
+def test_registry_unreachable_install_at_default_tag_when_no_recorded_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When available_versions is empty and no version is recorded, Install
+    still works — it falls back to the image's default tag (e.g. 'latest').
+    Uninstall is correctly disabled because row.version is None.
+    """
+    worker = _make_worker(tmp_path)
+    calls: dict[str, Any] = {"install": []}
+
+    def _install(self: Any, *, version: str | None = None) -> Any:
+        calls["install"].append((self.name, version))
+        return _FinishedSession()
+
+    monkeypatch.setattr(DockerImageInstall, "install", _install)
+    monkeypatch.setattr(DockerImageInstall, "available_versions", lambda self: [])
+    monkeypatch.setattr(DockerImageInstall, "installed_version", lambda self: None)
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda ref: False))
+    at = _render(worker, "bifrost")
+    at.run()
+    assert not at.exception
+    # No selectbox.
+    assert len(at.selectbox) == 0
+    # Install button still present (falls back to default tag 'latest' from image_ref).
+    install_btn = [b for b in at.button if (b.key or "").startswith("install-")]
+    assert len(install_btn) == 1
+    assert install_btn[0].label == "Install"
+    # Uninstall disabled: no version recorded.
+    uninstall_btn = [b for b in at.button if (b.key or "").startswith("uninstall-")]
+    assert uninstall_btn and uninstall_btn[0].disabled
+    # Clicking install falls back to the default tag from image_ref.
+    install_btn[0].click()
+    at.run()
+    assert calls["install"] == [("bifrost", "latest")]
