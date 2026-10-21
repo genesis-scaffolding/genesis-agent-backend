@@ -1,0 +1,152 @@
+# genesis-agent-context declarative service spec.
+#
+# The Genesis agent-context system (agent persona, operating protocol,
+# per-day memory journals, daily handover). Runs as a single container
+# built from the project's own Dockerfile (python:3.12-slim + uv + tini
+# + `make serve`), which supervises both the Streamlit UI (:3001) and
+# the FastAPI server (:8766) the way `make serve` does on a host
+# install.
+#
+# Data model: the container starts as root only long enough for its
+# entrypoint to chown the mounts to the host user (PUID/PGID,
+# linuxserver-style -- same convention as comfyui and
+# genesis-productivity), then drops privileges via setpriv and runs the
+# app as that user (uid 1000 by default). The image's home is /home/gac
+# (NOT /home/genesis -- the GAC entrypoint chowns and drops to the
+# /home/gac XDG roots), so the four mounts below place the worker's
+# per-service pre-prepared directories onto that user's XDG roots.
+#
+# Cutover from a host install: the worker keeps the data under its own
+# per-service directories (data/, config/, state/, cache/ for
+# genesis-agent-context). A host install keeps the same tree under
+# ~/.local/share/agent-context and ~/.config/agent-context, so copy
+# those two directories into the worker's per-service data and config
+# directories before the first start to carry the existing personas,
+# protocol versions, journals, and handovers over.
+#
+# compose kind (not docker kind) because two ports must be published;
+# the docker kind supports exactly one. The runtime port (health probe
+# + web UI endpoint) is the Streamlit UI port, per framework
+# convention.
+
+version: 1
+kind: compose
+name: genesis-agent-context
+display_name: Genesis Agent Context
+description: Agent persona, protocol, memory, handover stores
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+compose_version: "3.8"
+# Health probe: the FastAPI /health endpoint. The probe runs against the
+# Streamlit port (framework derives it from options.listen_port), and
+# streamlit answers 200 on /, so this path just needs to exist there.
+health_probe_path: /
+
+# Built by the project's GitHub Actions workflow (main + tags); the
+# worker pulls from GHCR. default_tag follows the rolling main image;
+# pin a versioned tag (e.g. sha-<short>) via the GUI once one is cut.
+images:
+  - name: app
+    repo: ghcr.io/genesis-scaffolding/genesis-agent-context
+    default_tag: latest
+
+compose_template: |
+  version: "3.8"
+  services:
+    app:
+      image: $images.app
+      container_name: genesis-agent-context
+      restart: unless-stopped
+      ports:
+        - "$options.listen_host:$options.listen_port:3001"   # Streamlit UI
+        - "$options.listen_host:$options.api_port:8766"      # FastAPI
+      environment:
+        TZ: "$options.tz"
+        # Consumed by the image's entrypoint, which chowns the mounts to
+        # this uid:gid and drops to it via setpriv before exec'ing the
+        # app (the image itself stays unversioned on this -- the user is
+        # a runtime concern).
+        PUID: "$options.puid"
+        PGID: "$options.pgid"
+        # Optional first-boot bootstrap: the entrypoint creates the
+        # first account only when BOTH are set to a non-empty value.
+        # Left empty (the default) the bootstrap is skipped and the
+        # first account is created through the UI sign-up form.
+        GAC_BOOTSTRAP_USER: "$options.bootstrap_user"
+        GAC_BOOTSTRAP_PASSWORD: "$options.bootstrap_password"
+      volumes:
+        # The app's four XDG roots, mapped onto the worker's per-service
+        # pre-prepared directories (created by the framework pre-start).
+        - $config_dir:/home/gac/.config
+        - $data_dir:/home/gac/.local/share
+        - $state_dir:/home/gac/.local/state
+        - $cache_dir:/home/gac/.cache
+      healthcheck:
+        test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8766/health"]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 30s
+
+options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
+    ui_label: Listen host
+    ui_group: Network
+  listen_port:
+    type: port
+    default: 3001
+    ui_label: Web UI port
+    ui_help: Host-side port for the Streamlit UI
+    ui_group: Network
+  api_port:
+    type: port
+    default: 8766
+    ui_label: API port
+    ui_help: Host-side port for the FastAPI server (CLI/agent access)
+    ui_group: Network
+  tz:
+    type: string
+    default: "Australia/Adelaide"
+    ui_label: Timezone
+    ui_help: IANA timezone name for the container
+    ui_group: General
+  puid:
+    type: int
+    default: 1000
+    ui_label: User ID (PUID)
+    ui_help: Numeric UID the app process runs as; set to your host UID (usually 1000) so files stay host-owned
+    ui_group: Permissions
+  pgid:
+    type: int
+    default: 1000
+    ui_label: Group ID (PGID)
+    ui_help: Numeric GID the app process runs as; set to your host GID (usually 1000)
+    ui_group: Permissions
+  bootstrap_user:
+    type: string
+    default: ""
+    ui_label: Bootstrap user
+    ui_help: Optional first-boot account name; set together with the bootstrap password to create the first account automatically. Leave empty to create the first account in the UI sign-up form.
+    ui_group: Bootstrap
+  bootstrap_password:
+    type: string
+    default: ""
+    ui_label: Bootstrap password
+    ui_help: Optional first-boot account password; set together with the bootstrap user. Leave empty to create the first account in the UI sign-up form.
+    ui_group: Bootstrap
