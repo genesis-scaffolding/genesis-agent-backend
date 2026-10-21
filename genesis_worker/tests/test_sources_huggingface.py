@@ -153,3 +153,170 @@ def test_lmstudio_cannot_acquire(tmp_path: Path) -> None:
     assert src.can_acquire is False
     with pytest.raises(NotImplementedError):
         src.start_acquire("acme/demo")
+
+
+# ---------------------------------------------------------------------------
+# .rad acquisition support
+# ---------------------------------------------------------------------------
+
+
+def test_classify_path_radiance():
+    from genesis_worker.sources.huggingface.acquire import classify_path
+
+    assert classify_path("qwen3.8-27b-mxfp4.rad") == "radiance"
+    assert classify_path("model.RAD") == "radiance"
+    assert classify_path("path/to/file.rad") == "radiance"
+    # Ensure gguf/safetensor still work
+    assert classify_path("model.Q4_K_M.gguf") == "main"
+    assert classify_path("weights.safetensors") == "safetensor"
+
+
+def test_group_files_radiance_single():
+    from genesis_worker.sources.huggingface.acquire import _RemoteFile, group_files
+
+    files = [
+        _RemoteFile(path="qwen3.8-27b-mxfp4.rad", size=19 * 1024**3),
+    ]
+    groups = group_files(files)
+    assert len(groups) == 1
+    assert groups[0].role == "radiance"
+    assert groups[0].is_sharded is False
+    assert groups[0].paths == ["qwen3.8-27b-mxfp4.rad"]
+
+
+class _FakeTreeItem:
+    def __init__(self, path: str, size: int) -> None:
+        self.path = path
+        self.size = size
+
+
+class _FakeApi:
+    def list_repo_tree(self, *args: object, **kwargs: object):
+        return iter([])
+
+
+def test_inspect_rad_only_repo_selects(tmp_path: Path) -> None:
+    from genesis_worker.contracts import AcquireStateKind
+    from genesis_worker.sources.huggingface.acquire import HfAcquireSession, HfAcquireState
+
+    fake_api = _FakeApi()
+    fake_api.list_repo_tree = lambda *a, **k: iter([_FakeTreeItem("qwen3.8-27b.rad", 19 * 1024**3)])
+
+    session = HfAcquireSession(
+        api=fake_api,  # type: ignore[arg-type]
+        hf_state=HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="stilldeadcode/test"),
+        cache_dir=tmp_path,
+    )
+    session.view()
+    assert session._state.kind == AcquireStateKind.SELECTING
+    assert len(session._groups) == 1
+    assert session._groups[0].role == "radiance"
+
+
+def test_inspect_mixed_rad_and_gguf(tmp_path: Path) -> None:
+    from genesis_worker.contracts import AcquireStateKind
+    from genesis_worker.sources.huggingface.acquire import HfAcquireSession, HfAcquireState
+
+    fake_api = _FakeApi()
+    fake_api.list_repo_tree = lambda *a, **k: iter(
+        [
+            _FakeTreeItem("model.Q4_K_M.gguf", 1024 * 1024 * 1024),
+            _FakeTreeItem("qwen3.8-27b.rad", 19 * 1024**3),
+        ]
+    )
+
+    session = HfAcquireSession(
+        api=fake_api,  # type: ignore[arg-type]
+        hf_state=HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="stilldeadcode/test"),
+        cache_dir=tmp_path,
+    )
+    session.view()
+    assert session._state.kind == AcquireStateKind.SELECTING
+    roles = {g.role for g in session._groups}
+    assert "main" in roles
+    assert "radiance" in roles
+
+
+def test_inspect_no_weights_fails(tmp_path: Path) -> None:
+    from genesis_worker.contracts import AcquireStateKind
+    from genesis_worker.sources.huggingface.acquire import HfAcquireSession, HfAcquireState
+
+    session = HfAcquireSession(
+        api=_FakeApi(),  # type: ignore[arg-type]
+        hf_state=HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="stilldeadcode/empty"),
+        cache_dir=tmp_path,
+    )
+    session.view()
+    assert session._state.kind == AcquireStateKind.FAILED
+    assert (
+        session._state.failure is not None
+        and "no .gguf, .safetensors, or .rad files" in session._state.failure
+    )
+
+
+def test_submit_select_radiance_succeeds(tmp_path: Path) -> None:
+    from genesis_worker.contracts import AcquireStateKind
+    from genesis_worker.sources.huggingface.acquire import (
+        HfAcquireChoice,
+        HfAcquireSession,
+        HfAcquireState,
+    )
+
+    fake_api = _FakeApi()
+    fake_api.list_repo_tree = lambda *a, **k: iter([_FakeTreeItem("qwen3.8-27b.rad", 19 * 1024**3)])
+
+    session = HfAcquireSession(
+        api=fake_api,  # type: ignore[arg-type]
+        hf_state=HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="stilldeadcode/test"),
+        cache_dir=tmp_path,
+    )
+    session.view()
+    session.submit(HfAcquireChoice(main_indexes=[1]))
+    assert session._state.kind == AcquireStateKind.CONFIRMING
+
+
+def test_submit_select_radiance_plus_safetensor_fails(tmp_path: Path) -> None:
+    from genesis_worker.contracts import AcquireStateKind
+    from genesis_worker.sources.huggingface.acquire import (
+        HfAcquireChoice,
+        HfAcquireSession,
+        HfAcquireState,
+    )
+
+    fake_api = _FakeApi()
+    fake_api.list_repo_tree = lambda *a, **k: iter(
+        [
+            _FakeTreeItem("qwen3.8-27b.rad", 19 * 1024**3),
+            _FakeTreeItem("weights.safetensors", 1024 * 1024 * 500),
+        ]
+    )
+
+    session = HfAcquireSession(
+        api=fake_api,  # type: ignore[arg-type]
+        hf_state=HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="stilldeadcode/test"),
+        cache_dir=tmp_path,
+    )
+    session.view()
+    session.submit(HfAcquireChoice(main_indexes=[1, 2]))
+    assert session._state.kind == AcquireStateKind.SELECTING
+    assert session._last_select_error is not None and "radiance" in session._last_select_error
+
+
+def test_walk_classifies_rad_as_main(fake_hub: Path) -> None:
+    """Catalog walk: .rad files in WEIGHT_EXTS get role 'main'."""
+    from genesis_worker.sources.huggingface import HuggingFaceSource
+
+    # Add a .rad file to the existing fake_hub snapshot
+    rad_path = fake_hub / "models--acme--demo" / "snapshots" / "abc123" / "qwen3.8-27b.rad"
+    rad_path.write_bytes(b"\x00" * 100)
+
+    src = HuggingFaceSource(source_ctx(local_path=fake_hub))
+    models = src.walk()
+    assert len(models) == 1
+    m = models[0]
+    roles = {p.role for p in m.pieces}
+    assert "main" in roles
+    # The .rad piece has role 'main' via classify.py
+    rad_pieces = [p for p in m.pieces if p.filename.endswith(".rad")]
+    assert len(rad_pieces) == 1
+    assert rad_pieces[0].role == "main"
