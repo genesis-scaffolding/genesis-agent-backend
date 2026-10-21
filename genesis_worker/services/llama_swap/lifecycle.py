@@ -11,6 +11,9 @@ from ...contracts import ServiceState, ServiceStatus, StartResult, StopResult
 from ...utils.net import HealthProbe
 from ...utils.process import TmuxProcess
 
+#: How long to wait after a child-kill for the port to be released.
+_PORT_SETTLE_S = 1.0
+
 _DEFAULT_HEALTH_POLL_S = 1.0
 _DEFAULT_HEALTH_TIMEOUT_S = 60.0
 
@@ -39,11 +42,40 @@ class _LlamaSwapTmuxProcess(TmuxProcess):
     """TmuxProcess with llama-server child-drain baked in."""
 
     def _kill_children(self) -> None:
-        subprocess.run(
-            ["pkill", "-9", "-f", "llama-server"],
+        """Kill llama-server children of each pane's shell, scoped to the session.
+
+        Uses ``tmux list-panes -t {session} -F '#{pane_pid}'`` to enumerate
+        each pane's PID, then ``pkill -9 --parent <pane_pid>`` for each.
+
+        Before t-b8ozcx, ``#{pid}`` (tmux server pid) was used; pkill then
+        SIGKILLed every process whose parent was the tmux server — all panes
+        in all sessions — and a server with zero sessions exits.  The fix
+        targets per-pane PIDs so only the session under management is touched.
+        """
+        session_name = getattr(self, "_session_name", None)
+        if not session_name:
+            return
+        pane_result = subprocess.run(
+            ["tmux", "list-panes", "-t", session_name, "-F", "#{pane_pid}"],
             check=False,
             capture_output=True,
+            text=True,
         )
+        if pane_result.returncode != 0:
+            return
+        for line in pane_result.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pane_pid = int(line)
+            except ValueError:
+                continue
+            subprocess.run(
+                ["pkill", "-9", "--parent", str(pane_pid)],
+                check=False,
+                capture_output=True,
+            )
 
 
 def start_swap(
@@ -67,13 +99,9 @@ def start_swap(
 
     tmux = _LlamaSwapTmuxProcess(session_name)
 
-    # Drop any stray llama-server so llama-swap can own the port.
-    subprocess.run(
-        ["pkill", "-9", "-f", "llama-server"],
-        check=False,
-        capture_output=True,
-    )
-    time.sleep(1)
+    # Session teardown is handled by tmux.start() (which calls kill() first).
+    # No system-wide pkill here — that was the bug (t-b8ozcx).
+    time.sleep(_PORT_SETTLE_S)
 
     cmd = (
         f"{shlex.quote(str(binary))} --config {shlex.quote(str(config))} "
@@ -129,9 +157,16 @@ def _has_session(name: str) -> bool:
     return TmuxProcess.has_session(name)
 
 
-def is_running(session_name: str) -> bool:
-    """True iff the named tmux session exists."""
-    return TmuxProcess(session_name).exists()
+def is_running(session_name: str, listen_addr: str) -> bool:
+    """True iff the tmux session exists AND the health endpoint responds.
+
+    A session that exists with a dead server returns False. This prevents
+    callers from believing a crashed service is still up.
+    """
+    if not _has_session(session_name):
+        return False
+    host, port_str = listen_addr.rsplit(":", 1)
+    return _probe_models(host, int(port_str))
 
 
 def status(session_name: str, listen_addr: str) -> ServiceStatus:

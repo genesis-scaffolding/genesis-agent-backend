@@ -134,6 +134,10 @@ def test_facade_start_service_returns_start_result(tmp_path: Path, monkeypatch) 
     # Hermetic: skip the facade's install-first branch (the real install
     # would hit the network for the llama-server release).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    # Hermetic: prevent the facade's stop-before-start path (ADR-038) from
+    # hitting the real LlamaSwapService.is_running / stop.
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
     w = _GW(settings=settings)
     result = w.start_service("llama_swap")
@@ -747,6 +751,12 @@ def test_start_service_with_config_sets_pending_attribute(
     monkeypatch.setattr(LlamaSwapService, "start", _capture)
     # Hermetic: skip the facade's install-first branch (real network).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    # Hermetic: prevent the facade's stop-before-start path (ADR-038) from
+    # hitting the real LlamaSwapService.is_running / stop — those call
+    # lifecycle.is_running() which probes the real tmux session / HTTP
+    # endpoint and would stop the production llama-swap if it is running.
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     cfg = {"providers": {"openai": {"keys": [{"name": "k"}]}}}
@@ -789,6 +799,10 @@ def test_start_service_clears_pending_attribute_on_failure(
     # Hermetic: the error must come from the start path, not from a real
     # install (rate-limited network would fake the assertion).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    # Hermetic: prevent the facade's stop-before-start path from hitting the
+    # real LlamaSwapService.is_running / stop.
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     with pytest.raises(RuntimeError):
@@ -818,6 +832,10 @@ def test_start_service_without_config_leaves_pending_none(
     monkeypatch.setattr(LlamaSwapService, "start", _capture)
     # Hermetic: skip the facade's install-first branch (real network).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    # Hermetic: prevent the facade's stop-before-start path (ADR-038) from
+    # hitting the real LlamaSwapService.is_running / stop.
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     w.start_service("llama_swap")
@@ -917,6 +935,10 @@ def test_restart_service_delegates_to_start_service(
     )
     # Hermetic: skip the facade's install-first branch (real network).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
+    # Hermetic: prevent the facade's stop-before-start path from hitting the
+    # real LlamaSwapService.is_running / stop.
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
+    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     seen: dict = {}

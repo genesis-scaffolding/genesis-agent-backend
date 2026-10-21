@@ -124,3 +124,31 @@ def _stub_collect_metrics(request, monkeypatch: pytest.MonkeyPatch) -> None:
     if "integration" in request.keywords:
         return
     monkeypatch.setattr(_metrics_module, "collect_metrics", _stub_metrics)
+
+
+@pytest.fixture(autouse=True)
+def _tmux_integration_isolation(request, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Isolate every ``@pytest.mark.integration`` test to a private tmux server.
+
+    tmux uses a server process whose socket lives at ``$TMUX_TMPDIR/default``
+    (or the compiled-in default ``/tmp/tmux-<uid>/default``).  Setting
+    ``TMUX_TMPDIR`` redirects the socket to a temp directory that pytest
+    destroys when the test ends — killing the private server with it.
+
+    Why this matters on the dev box: the production llama-swap runs in a
+    tmux session named ``swap`` on the default server.  Before this
+    fixture, an integration test that called ``tmux kill-session -t swap``
+    (directly or via ``lifecycle.stop_swap``) would kill the real session.
+    After this fixture every integration test hits its own tmux server on
+    a private socket; the default server and its sessions are completely
+    untouched.
+
+    The fixture is keyed on the ``integration`` marker so unit tests are
+    unaffected (they have no reason to spawn a tmux server and the
+    monkeypatch.setenv call would be a pointless process-env mutation).
+    """
+    if "integration" not in request.keywords:
+        return
+    private_dir = tmp_path / "tmux"
+    private_dir.mkdir()
+    monkeypatch.setenv("TMUX_TMPDIR", str(private_dir))
