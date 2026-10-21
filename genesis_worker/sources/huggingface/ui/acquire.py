@@ -40,13 +40,16 @@ elif view.kind == AcquireStateKind.SELECTING and isinstance(view, HfAcquireView)
     # HfAcquireChoice are 1-based into view.targets.
     groups = view.targets
     main_groups = [
-        (i, g) for i, g in enumerate(groups, start=1) if g.role in ("main", "safetensor")
+        (i, g)
+        for i, g in enumerate(groups, start=1)
+        if g.role in ("main", "safetensor", "radiance")
     ]
     aux_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role in ("mmproj", "mtp")]
 
     def _label(g) -> str:
         if g.paths:
-            return f"{g.label}  ({g.paths[0]})"
+            suffix = f"  [{g.role}]" if g.role == "radiance" else f"  ({g.paths[0]})"
+            return f"{g.label}{suffix}"
         return g.label
 
     if view.error:

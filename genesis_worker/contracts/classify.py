@@ -25,6 +25,7 @@ COMPONENT_DIRS: set[str] = {
 WEIGHT_EXTS: set[str] = {
     ".gguf",
     ".safetensors",
+    ".rad",
     ".bin",
     ".pt",
     ".pth",
@@ -77,6 +78,7 @@ def role_sort_key(role: str) -> tuple[int, str]:
     # then configs.
     order = {
         "main": 0,
+        "rad": 0,
         "transformer": 1,
         "unet": 1,
         "denoiser": 1,

@@ -22,6 +22,7 @@ from ...contracts import (
 from ...utils.background_session import BackgroundSession, _Canceled
 
 GGUF_EXT = ".gguf"
+RAD_EXT = ".rad"
 
 # Mirror bin/hf-model.py: sharded GGUF naming pattern.
 SHARD_RE = re.compile(
@@ -42,7 +43,7 @@ AUX_MARKERS = (
     "draft",
 )
 
-_ROLE_ORDER = {"main": 0, "mmproj": 1, "mtp": 2, "safetensor": 0, "unsupported": 3}
+_ROLE_ORDER = {"main": 0, "mmproj": 1, "mtp": 2, "safetensor": 0, "radiance": 0, "unsupported": 3}
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,8 @@ def classify_path(path: str) -> str:
         return "main"
     if path.lower().endswith(".safetensors"):
         return "safetensor"
+    if path.lower().endswith(RAD_EXT):
+        return "radiance"
     return "unsupported"
 
 
@@ -318,6 +321,7 @@ class HfAcquireSession(BackgroundSession):
 
         gguf_files: list[_RemoteFile] = []
         st_files: list[_RemoteFile] = []
+        rad_files: list[_RemoteFile] = []
         for item in tree:
             path = getattr(item, "path", None)
             if not path:
@@ -329,6 +333,8 @@ class HfAcquireSession(BackgroundSession):
                 gguf_files.append(_RemoteFile(path=path, size=size))
             elif path.lower().endswith(".safetensors"):
                 st_files.append(_RemoteFile(path=path, size=size))
+            elif path.lower().endswith(RAD_EXT):
+                rad_files.append(_RemoteFile(path=path, size=size))
 
         self._files = sorted(gguf_files, key=lambda f: f.path.lower())
         self._groups = group_files(self._files)
@@ -343,11 +349,22 @@ class HfAcquireSession(BackgroundSession):
                     is_sharded=False,
                 )
             )
+        # Each .rad file is its own unsplittable group.
+        for f in rad_files:
+            self._groups.append(
+                AcquireFileGroup(
+                    paths=[f.path],
+                    size=f.size,
+                    role="radiance",
+                    label=f.path,
+                    is_sharded=False,
+                )
+            )
         self._groups.sort(key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
         if not self._groups:
             self._state.kind = AcquireStateKind.FAILED
-            self._state.failure = "repository has no .gguf or .safetensors files"
+            self._state.failure = "repository has no .gguf, .safetensors, or .rad files"
             return
 
         self._state.kind = AcquireStateKind.SELECTING
@@ -369,13 +386,19 @@ class HfAcquireSession(BackgroundSession):
             selected_groups.append(self._groups[idx - 1])
 
         main_roles = {g.role for g in selected_groups}
-        if not (
-            "safetensor" in main_roles or (main_roles == {"main"} and len(selected_groups) == 1)
-        ):
+        if "radiance" in main_roles and len(main_roles) > 1:
             roles_seen = "/".join(sorted(main_roles)) or "(none)"
             self._last_select_error = (
-                f"selected roles [{roles_seen}]; GGUF needs exactly one 'main' group"
+                f"selected roles [{roles_seen}]; radiance must be selected alone"
             )
+            return
+        if not (
+            "safetensor" in main_roles
+            or (main_roles == {"main"} and len(selected_groups) == 1)
+            or (main_roles == {"radiance"} and len(selected_groups) == 1)
+        ):
+            roles_seen = "/".join(sorted(main_roles)) or "(none)"
+            self._last_select_error = f"selected roles [{roles_seen}]; need exactly one 'main', 'safetensor', or 'radiance' group"
             return
 
         aux: list[AcquireFileGroup] = []
