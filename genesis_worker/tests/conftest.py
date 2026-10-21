@@ -20,10 +20,13 @@ their captured original reference and exercise the real path.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
+from genesis_worker.contracts import ServiceState, ServiceStatus
 from genesis_worker.contracts.host import HostInfo
+from genesis_worker.services import llama_swap as _llama_swap_module
 from genesis_worker.utils.collectors import host_info as _host_info_module
 from genesis_worker.utils.collectors import metrics as _metrics_module
 from genesis_worker.utils.models import MachineMetrics
@@ -152,3 +155,66 @@ def _tmux_integration_isolation(request, monkeypatch: pytest.MonkeyPatch, tmp_pa
     private_dir = tmp_path / "tmux"
     private_dir.mkdir()
     monkeypatch.setenv("TMUX_TMPDIR", str(private_dir))
+
+
+# ---------------------------------------------------------------------------
+# Llama-swap lifecycle seam (autouse, function-scoped, non-integration only)
+# ---------------------------------------------------------------------------
+
+
+def _llama_swap_seam_error(name: str) -> None:
+    msg = (
+        f"unit test reached the real llama-swap lifecycle seam ({name}). "
+        "This would touch the production tmux session 'swap' on the default "
+        "socket and/or port 8080. "
+        "Add @pytest.mark.integration and run under the TMUX_TMPDIR fixture, "
+        "or mock the seam explicitly."
+    )
+    raise RuntimeError(msg)
+
+
+@pytest.fixture(autouse=True)
+def _llama_swap_lifecycle_seam(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Block all llama-swap host-touching calls in non-integration unit tests.
+
+    The production llama-swap runs in tmux session ``swap`` on 0.0.0.0:8080
+    on the same box as this dev repo.  ``genesis_worker/services/llama_swap/``
+    is the only package that calls the lifecycle functions
+    (``start_swap``, ``stop_swap``, ``is_running``, ``status``, ``wait_ready``),
+    and it does so via ``from . import lifecycle; lifecycle.<fn>(...)``.
+
+    This fixture replaces those functions at the module level so that
+    every call-site in the codebase — including indirect ones through
+    ``LlamaSwapService.start()`` / ``LlamaSwapService.stop()`` /
+    ``LlamaSwapService.is_running()`` / ``LlamaSwapService.status()`` /
+    ``LlamaSwapService.wait_ready()`` — hits the stub instead of the real
+    shell-out code.
+
+    - Mutating calls (``start_swap``, ``stop_swap``): raise ``RuntimeError``
+      loudly so any unit test that accidentally reaches them fails fast.
+    - Read calls (``is_running``): return ``False`` — unit tests assume the
+      service is not running and should not probe the real socket.
+    - Read calls (``status``): return a ``STOPPED`` ``ServiceStatus`` so
+      callers that inspect the state see a coherent stub.
+    - Read calls (``wait_ready``): return ``False`` — same rationale.
+
+    ``@pytest.mark.integration`` tests are skipped (they get the
+    ``TMUX_TMPDIR`` isolation fixture instead and exercise the real path).
+    """
+    if "integration" in request.keywords:
+        return
+
+    lifecycle = _llama_swap_module.lifecycle
+
+    monkeypatch.setattr(lifecycle, "start_swap", lambda *args, **kwargs: _llama_swap_seam_error("start_swap"))
+    monkeypatch.setattr(lifecycle, "stop_swap", lambda *args, **kwargs: _llama_swap_seam_error("stop_swap"))
+    monkeypatch.setattr(lifecycle, "is_running", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        lifecycle,
+        "status",
+        lambda session_name, listen_addr: ServiceStatus(
+            state=ServiceState.STOPPED,
+            endpoint=f"http://{listen_addr}/v1",
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "wait_ready", lambda *args, **kwargs: False)

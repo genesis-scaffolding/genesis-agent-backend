@@ -27,7 +27,7 @@ from genesis_worker.utils.models import MachineMetrics
 
 def test_facade_lists_services(tmp_path: Path) -> None:
     """Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
-    services on the real install."""
+    services on the real install."""""
     from genesis_worker.settings import PathsSettings, Settings
 
     settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
@@ -134,10 +134,6 @@ def test_facade_start_service_returns_start_result(tmp_path: Path, monkeypatch) 
     # Hermetic: skip the facade's install-first branch (the real install
     # would hit the network for the llama-server release).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
-    # Hermetic: prevent the facade's stop-before-start path (ADR-038) from
-    # hitting the real LlamaSwapService.is_running / stop.
-    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
-    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
     w = _GW(settings=settings)
     result = w.start_service("llama_swap")
@@ -148,14 +144,17 @@ def test_facade_start_service_returns_start_result(tmp_path: Path, monkeypatch) 
 def test_facade_stop_service_returns_stop_result(tmp_path: Path, monkeypatch) -> None:
     """Facade wiring: ``stop_service`` delegates to the service's ``stop``.
 
-    Hermetic: same isolation strategy as the start test. Without it,
-    this test stops the real llama-server every time pytest runs —
-    which is how a dev-loop llama-server gets repeatedly killed.
+    Hermetic: ``LlamaSwapService.stop`` is mocked so the call chain
+    (service.stop() → lifecycle.stop_swap()) never reaches the seam.
+    The ``is_running`` mock is not strictly necessary — the seam stubs
+    ``lifecycle.is_running`` to ``False`` so the stop-before-start path
+    is never entered — but kept for belt-and-suspenders clarity.
     """
     from genesis_worker import GenesisWorker as _GW
     from genesis_worker.services.llama_swap import LlamaSwapService
     from genesis_worker.settings import PathsSettings, Settings
 
+    monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
     monkeypatch.setattr(
         LlamaSwapService,
         "stop",
@@ -751,10 +750,9 @@ def test_start_service_with_config_sets_pending_attribute(
     monkeypatch.setattr(LlamaSwapService, "start", _capture)
     # Hermetic: skip the facade's install-first branch (real network).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
-    # Hermetic: prevent the facade's stop-before-start path (ADR-038) from
-    # hitting the real LlamaSwapService.is_running / stop — those call
-    # lifecycle.is_running() which probes the real tmux session / HTTP
-    # endpoint and would stop the production llama-swap if it is running.
+    # Hermetic: the seam stubs ``lifecycle.is_running`` to ``False``, so the
+    # stop-before-start path is never entered — the ``is_running`` mock is
+    # belt-and-suspenders and kept for clarity.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
     monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)
@@ -799,8 +797,9 @@ def test_start_service_clears_pending_attribute_on_failure(
     # Hermetic: the error must come from the start path, not from a real
     # install (rate-limited network would fake the assertion).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
-    # Hermetic: prevent the facade's stop-before-start path from hitting the
-    # real LlamaSwapService.is_running / stop.
+    # Hermetic: the seam stubs ``lifecycle.is_running`` to ``False`` so the
+    # stop-before-start path is never entered; the ``stop`` mock is kept
+    # in case a refactor ever calls ``stop`` outside that path.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
     monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)
@@ -832,8 +831,9 @@ def test_start_service_without_config_leaves_pending_none(
     monkeypatch.setattr(LlamaSwapService, "start", _capture)
     # Hermetic: skip the facade's install-first branch (real network).
     monkeypatch.setattr(LlamaSwapService, "is_available", lambda self: True)
-    # Hermetic: prevent the facade's stop-before-start path (ADR-038) from
-    # hitting the real LlamaSwapService.is_running / stop.
+    # Hermetic: the seam stubs ``lifecycle.is_running`` to ``False`` so the
+    # stop-before-start path is never entered; the ``stop`` mock is kept
+    # in case a refactor ever calls ``stop`` outside that path.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
     monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
     settings = _hermetic_settings(tmp_path)

@@ -393,6 +393,7 @@ def test_is_running_false_when_session_exists_but_server_dead(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_start_swap_does_not_pkill_unrelated_llama_server(
     monkeypatch,
     tmp_path: Path,
@@ -424,14 +425,19 @@ def test_start_swap_does_not_pkill_unrelated_llama_server(
     config = tmp_path / "config.yaml"
     config.write_text("port: 8080\n")
 
-    lifecycle.start_swap(
-        binary=binary,
-        config=config,
-        listen_addr="127.0.0.1:19999",
-        session_name="swap-pkill-audit-test",
-        log_file=tmp_path / "swap.log",
-        health_timeout_s=0.1,
-    )
+    session = "swap-pkill-audit-test"
+    try:
+        lifecycle.start_swap(
+            binary=binary,
+            config=config,
+            listen_addr="127.0.0.1:19999",
+            session_name=session,
+            log_file=tmp_path / "swap.log",
+            health_timeout_s=0.1,
+        )
+    finally:
+        # Teardown: kill the session if it was created.
+        subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
 
     # The fix removed the unconditional pkill from start_swap.
     # No call in the recorded list may contain the system-wide pattern.
