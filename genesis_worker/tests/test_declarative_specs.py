@@ -630,6 +630,41 @@ def test_romm_compose_config_fields(tmp_path: Path) -> None:
     assert repos == {"rommapp/romm", "postgres"}
 
 
+# --- genesis-agent-context-specific ------------------------------------------
+
+
+def test_gac_is_compose_service(tmp_path: Path) -> None:
+    """GAC is a compose-kind service (two published ports: UI + API)."""
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-agent-context.yaml", ctx=service_ctx(tmp_path, name="genesis-agent-context")
+    )
+    assert isinstance(svc, ComposeService)
+    assert not isinstance(svc, DockerService)
+    assert svc.name == "genesis-agent-context"
+    assert svc.display_name == "Genesis Agent Context"
+    assert svc.category.value == "utility"
+    caps = svc.capabilities()
+    assert caps.has_web_ui is True
+    assert caps.can_install is True
+
+
+def test_gac_compose_config_fields(tmp_path: Path) -> None:
+    """GAC compose config: ports 3001/8766, health on the API /health, GHCR image."""
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-agent-context.yaml", ctx=service_ctx(tmp_path, name="genesis-agent-context")
+    )
+    assert isinstance(svc, ComposeService)
+    assert svc.config.compose_version == "3.8"
+    assert svc.config.listen_port == 3001
+    assert svc.config.health_probe_path == "/"
+    template = svc.config.compose_template
+    assert ":3001" in template and ":8766" in template
+    assert "127.0.0.1:8766/health" in template
+    assert ":/home/gac/.config" in template  # image home is /home/gac, not /home/genesis
+    repos = {img.repo for img in svc.config.images}
+    assert repos == {"ghcr.io/genesis-scaffolding/genesis-agent-context"}
+
+
 def test_romm_runtime_port_follows_option(tmp_path: Path) -> None:
     """config.listen_port tracks options.listen_port — single source of truth.
 

@@ -53,6 +53,7 @@ def test_registry_all_returns_every_service() -> None:
         "crawl4ai",
         "freshrss",
         "genesis-productivity",
+        "genesis-agent-context",
         "kavita",
         "llama_swap",
         "ntfy",
