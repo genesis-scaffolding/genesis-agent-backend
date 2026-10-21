@@ -198,14 +198,14 @@ def test_start_then_status_running_then_stop(fake_swap_env) -> None:
     assert result.ok, f"start_swap failed: {result.message}"
     assert result.message == f"started {session}"
 
-    assert lifecycle.is_running(session) is True
+    assert lifecycle.is_running(session, listen) is True
     s = lifecycle.status(session, listen)
     assert s.state == ServiceState.RUNNING
     assert s.endpoint == f"http://{listen}/v1"
 
     stop = lifecycle.stop_swap(session)
     assert stop.ok
-    assert lifecycle.is_running(session) is False
+    assert lifecycle.is_running(session, listen) is False
     assert lifecycle.status(session, listen).state == ServiceState.STOPPED
 
 
@@ -269,7 +269,7 @@ def test_stop_swap_waits_for_children_before_tearing_down_tmux(
 
     assert result.ok
     assert "forced child cleanup" not in result.message
-    assert lifecycle.is_running(session) is False
+    assert lifecycle.is_running(session, "127.0.0.1:1") is False
 
 
 @pytest.mark.integration
@@ -312,7 +312,7 @@ def test_stop_swap_falls_back_to_hard_cleanup_on_timeout(
     result = lifecycle.stop_swap(session, shutdown_timeout_s=1.5)
     assert result.ok
     assert "forced child cleanup" in result.message
-    assert lifecycle.is_running(session) is False
+    assert lifecycle.is_running(session, "127.0.0.1:1") is False
 
 
 @pytest.mark.integration
@@ -330,7 +330,7 @@ def test_start_fails_when_binary_missing(tmp_path: Path) -> None:
     )
     assert result.ok is False
     assert "binary not found" in result.message
-    assert not lifecycle.is_running("swap-noop-binary")
+    assert not lifecycle.is_running("swap-noop-binary", "127.0.0.1:1")
 
 
 @pytest.mark.integration
@@ -353,5 +353,98 @@ def test_start_fails_when_config_missing(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_is_running_false_when_session_absent() -> None:
-    """Integration: ``lifecycle.is_running`` calls ``tmux has-session``."""
-    assert lifecycle.is_running("never-created-session") is False
+    """Integration: ``lifecycle.is_running`` returns False when the tmux session doesn't exist."""
+    assert lifecycle.is_running("never-created-session", "127.0.0.1:1") is False
+
+@pytest.mark.integration
+def test_is_running_false_when_session_exists_but_server_dead(
+    tmp_path: Path,
+) -> None:
+    """is_running returns False when the tmux session exists but the server is dead.
+
+    Before t-b8ozcx, ``is_running`` only checked ``tmux has-session`` and would
+    return True even after the server had crashed. After the fix it also probes
+    the health endpoint, so a dead server is correctly reported as not-running.
+    """
+    if subprocess.run(["which", "tmux"], capture_output=True, check=False).returncode != 0:
+        pytest.skip("tmux not available")
+
+    session = "swap-dead-server-test"
+    subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
+
+    # Create a tmux session that runs a bash loop (NOT a llama-server).
+    # The session exists but nothing listens on the port.
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session, "while true; do sleep 60; done"],
+        check=False,
+    )
+    import time
+    time.sleep(0.2)
+
+    try:
+        # Session is up, but nothing is listening on port 1 (the test port).
+        assert lifecycle.is_running(session, "127.0.0.1:1") is False
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — no integration markers (use mocks, not real subprocesses)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_start_swap_does_not_pkill_unrelated_llama_server(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """start_swap must not run a system-wide ``pkill -9 -f llama-server``.
+
+    Before t-b8ozcx, start_swap() unconditionally fired
+    ``pkill -9 -f llama-server`` on every call. Any llama-server
+    running on the host — including the production one — would be killed.
+
+    This unit test mocks subprocess.run and verifies the pattern never
+    appears among the calls made during a start_swap() invocation.
+    """
+    # Track all pkill invocations so we can assert the system-wide pattern is absent.
+    pkill_calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def _tracking_run(cmd, *args, **kwargs):  # type: ignore[reportGeneralTypeIssues]
+        if isinstance(cmd, list) and cmd and cmd[0] == "pkill":
+            pkill_calls.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _tracking_run)
+
+    # Minimal valid inputs to reach the pkill call path.
+    binary = tmp_path / "llama-swap"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    config = tmp_path / "config.yaml"
+    config.write_text("port: 8080\n")
+
+    session = "swap-pkill-audit-test"
+    try:
+        lifecycle.start_swap(
+            binary=binary,
+            config=config,
+            listen_addr="127.0.0.1:19999",
+            session_name=session,
+            log_file=tmp_path / "swap.log",
+            health_timeout_s=0.1,
+        )
+    finally:
+        # Teardown: kill the session if it was created.
+        subprocess.run(["tmux", "kill-session", "-t", session], check=False, capture_output=True)
+
+    # The fix removed the unconditional pkill from start_swap.
+    # No call in the recorded list may contain the system-wide pattern.
+    for cmd in pkill_calls:
+        assert not (
+            cmd[0] == "pkill"
+            and "-9" in cmd
+            and "-f" in cmd
+            and "llama-server" in cmd
+        ), f"system-wide pkill found: {cmd}  (t-b8ozcx regression)"

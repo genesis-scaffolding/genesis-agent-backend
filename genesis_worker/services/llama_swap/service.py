@@ -344,7 +344,7 @@ class LlamaSwapService(InferenceService):
     # --- Lifecycle ---------------------------------------------------------
 
     def is_running(self) -> bool:
-        return lifecycle.is_running(self._options.session_name)
+        return lifecycle.is_running(self._options.session_name, self._options.listen_addr)
 
     def tail_log(self, n_bytes: int = 8192) -> str:
         """Return the last ``n_bytes`` of the log file, or "" if missing.
