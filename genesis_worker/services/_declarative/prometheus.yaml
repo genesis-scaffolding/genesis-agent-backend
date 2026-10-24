@@ -1,0 +1,190 @@
+# Prometheus declarative service spec.
+#
+# Metrics / time-series store (prom/prometheus). The image's entrypoint
+# is ``/bin/prometheus`` and its default CMD is
+# ``--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus``
+# (see the upstream Dockerfile:
+# https://github.com/prometheus/prometheus/blob/main/Dockerfile). The
+# framework passes ``extra_args`` as the container COMMAND, which
+# REPLACES the image CMD rather than extending it, so both flags are
+# re-declared below. Upstream note: "If you want to add extra command
+# line parameters to the docker run command, you will need to re-add
+# these yourself as they will be overwritten."
+# (https://prometheus.io/docs/prometheus/latest/installation/).
+#
+# Host 9095 -> container 9090 (the worker API owns 9090).
+#
+# CONFIG DIR — what the orchestrator is expected to write
+# -------------------------------------------------------
+# ``$config_dir`` (the per-service config directory) is bind-mounted at
+# ``/etc/prometheus`` inside the container. The fleet orchestrator owns
+# that directory's contents: it passes ONE config dict in the start /
+# restart body, and the ``materialize_orchestrator_config`` pre-start
+# hooks below split that dict across three files.
+#
+# The config body is a mapping with these keys:
+#
+#   "prometheus"  the server config, written to ``prometheus.yml``:
+#                 ``global`` (e.g. ``scrape_interval: 15s``,
+#                 ``scrape_timeout``), one ``scrape_configs`` entry per
+#                 service, optionally ``rule_files`` pointing at
+#                 ``/etc/prometheus/rules/*.yml`` (the container path of
+#                 the rules file written below), optionally an
+#                 ``alerting`` section, and optionally
+#                 ``storage: tsdb: retention: time:`` for retention
+#                 (the config-file retention field takes precedence
+#                 over the deprecated ``--storage.tsdb.retention.time``
+#                 flag — https://prometheus.io/docs/prometheus/latest/configuration/configuration/).
+#   "targets"     the file-based service-discovery target list, written
+#                 to ``file_sd/targets.json``. A JSON list of
+#                 static_configs, e.g.
+#                 ``[{"targets": ["host:port"], "labels": {"job": "x"}}]``,
+#                 referenced from prometheus.yml as
+#                 ``file_sd_configs: - files: ["/etc/prometheus/file_sd/targets.json"]``.
+#   "rules"       the alert rules file, written to ``rules/fleet.yml``.
+#                 A list of rule groups. The key must be present in the
+#                 body (an empty list is fine — Prometheus accepts an
+#                 empty rule file); a body that omits it makes the
+#                 start fail loudly rather than leave a stale rules file
+#                 from an earlier run in place.
+#
+# All three keys are required when the orchestrator passes a config at
+# all: the keyed hooks raise on a missing key, so a half-supplied body
+# can never fall back to a stale on-disk file.
+#
+# Until ``prometheus.yml`` exists Prometheus refuses to start ("error
+# loading config file"): mounting the host dir over ``/etc/prometheus``
+# also hides the sample config baked into the image. That is expected —
+# the orchestrator owns the config. Starting without a config body is a
+# no-op for the hooks (the on-disk config is left untouched), which
+# leaves Prometheus without a config file and it will refuse to start.
+#
+# PERMISSIONS — why the data dir needs a pre-start hook
+# -----------------------------------------------------
+# The image runs as ``nobody`` (upstream Dockerfile: ``USER nobody``;
+# uid/gid 65534 in the Alpine-based busybox base image). A bind mount
+# keeps the HOST directory's ownership, so the TSDB directory has to be
+# writable by 65534 or Prometheus dies at startup with "opening storage
+# failed: permission denied". The ``ensure_writable_dir`` pre-start
+# hook prepares the data dir: it chowns it to 65534 when the worker
+# runs as root, and falls back to a world-writable mode when it cannot
+# (an unprivileged worker cannot chown a directory it owns to a
+# different uid). The config dir is only ever read by Prometheus, so it
+# needs no such treatment.
+#
+# NOTE: ``puid_default`` / ``pgid_default`` are false because the
+# image ignores the PUID/PGID env vars the framework injects and
+# always runs as nobody; letting the framework chown the mounted dirs
+# to the host user would only strip write access from 65534.
+
+version: 1
+kind: docker
+name: prometheus
+display_name: Prometheus
+description: Metrics collection and time-series database
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: prom/prometheus
+  tag: latest
+  install_name: prometheus
+  source_url: https://hub.docker.com/r/prom/prometheus
+
+container:
+  name: prometheus
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 9090    # prometheus's own port; we map host 9095 -> container 9090
+  health_probe_path: /-/healthy
+  web_ui_path: /
+  restart_policy: unless-stopped
+  puid_default: false
+  pgid_default: false
+
+volumes:
+  # Config dir — the orchestrator's config body is split across
+  # prometheus.yml + file_sd/targets.json + rules/fleet.yml here.
+  /etc/prometheus: "$config_dir"
+  # TSDB — must be writable by uid 65534 (nobody); see the header comment.
+  /prometheus: "$data_dir/data"
+
+# The TSDB dir must be writable by the container's ``nobody`` user (65534).
+# See the PERMISSIONS section in the header comment.
+#
+# The three ``materialize_orchestrator_config`` hooks split ONE
+# orchestrator config dict across three files in the mounted config dir
+# (host paths here, container paths in the CONFIG DIR section above).
+# Each hook reads its own key out of that dict; a missing key fails the
+# start loudly (no stale on-disk file is ever reused by accident).
+pre_start_hooks:
+  - kind: ensure_writable_dir
+    target: "$data_dir/data"
+    uid: 65534
+    gid: 65534
+  - kind: materialize_orchestrator_config
+    key: prometheus
+    target: "$config_dir/prometheus.yml"
+    format: yaml
+  - kind: materialize_orchestrator_config
+    key: targets
+    target: "$config_dir/file_sd/targets.json"
+    format: json
+  - kind: materialize_orchestrator_config
+    key: rules
+    target: "$config_dir/rules/fleet.yml"
+    format: yaml
+
+# The container COMMAND. This REPLACES the image's CMD, so the two
+# upstream defaults are re-declared here. ``--config.file`` points at
+# the orchestrator-written config in the mounted config dir;
+# ``--storage.tsdb.path`` points at the mounted TSDB dir. The retention
+# flag is deprecated upstream in favour of the config file's
+# ``storage: tsdb: retention: time:`` field (which wins when set);
+# the default retention is 15d.
+extra_args:
+  - --config.file=/etc/prometheus/prometheus.yml
+  - --storage.tsdb.path=/prometheus
+  - --storage.tsdb.retention.time=$options.retention_time
+
+options:
+  listen_port:
+    type: port
+    default: 9095
+    ui_label: Web UI port
+    ui_help: Host-side port the Prometheus web UI listens on
+    ui_group: Network
+  retention_time:
+    type: string
+    default: "15d"
+    ui_label: Retention time
+    ui_help: "How long to keep samples in the TSDB (Prometheus duration syntax: 15d, 30d, 52w). The config file's storage.tsdb.retention.time field overrides this when set."
+    ui_group: Storage
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional environment variables passed to the Prometheus container
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host to container bind mounts
+    ui_group: Advanced
+
+data_dir_subpath: data
+log_filename: prometheus.log

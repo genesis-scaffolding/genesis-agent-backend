@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import stat
 from pathlib import Path
 
 import pytest
+import yaml
 
 from genesis_worker.utils.services.hooks import (
     PreStartHookContext,
@@ -147,6 +149,296 @@ def test_ensure_persistent_token_unknown_generator(tmp_path: Path) -> None:
                     "kind": "ensure_persistent_token",
                     "target": str(tmp_path / "state" / "token"),
                     "generator": "no_such_generator",
+                }
+            ],
+            ctx,
+        )
+
+
+# --- ensure_writable_dir --------------------------------------------------
+
+
+def test_ensure_writable_dir_creates_and_world_writes_when_chown_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unprivileged worker cannot chown to another uid — fall back to 0777.
+
+    prometheus runs as ``nobody`` (65534) inside the container while the
+    bind-mounted host dir belongs to the desktop user, so the dir must
+    be world-writable for the container user to write the TSDB.
+    """
+    target = tmp_path / "data" / "tsdb"
+
+    def _no_chown(*_args, **_kwargs):
+        raise PermissionError("not permitted")
+
+    monkeypatch.setattr("genesis_worker.utils.services.hooks.os.chown", _no_chown)
+    ctx = PreStartHookContext(
+        service=None, state_dir=tmp_path / "state", data_dir=tmp_path / "data"
+    )
+    run(
+        [{"kind": "ensure_writable_dir", "target": str(target), "uid": 65534, "gid": 65534}],
+        ctx,
+    )
+    assert target.is_dir()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o777
+
+
+def test_ensure_writable_dir_chowns_when_privileged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the chown succeeds the dir is 0755 owned by the container uid."""
+    target = tmp_path / "data" / "tsdb"
+    calls: list[tuple[int, int]] = []
+
+    def _fake_chown(path: Path, uid: int, gid: int) -> None:
+        calls.append((uid, gid))
+        path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("genesis_worker.utils.services.hooks.os.chown", _fake_chown)
+    ctx = PreStartHookContext(
+        service=None, state_dir=tmp_path / "state", data_dir=tmp_path / "data"
+    )
+    run(
+        [
+            {
+                "kind": "ensure_writable_dir",
+                "target": str(target),
+                "uid": 65534,
+                "gid": 65534,
+            }
+        ],
+        ctx,
+    )
+    assert calls == [(65534, 65534)]
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+
+
+def test_ensure_writable_dir_is_idempotent(tmp_path: Path) -> None:
+    """Re-running the hook on an existing dir keeps it usable."""
+    target = tmp_path / "data" / "tsdb"
+    target.mkdir(parents=True)
+    ctx = PreStartHookContext(
+        service=None, state_dir=tmp_path / "state", data_dir=tmp_path / "data"
+    )
+    entry = {"kind": "ensure_writable_dir", "target": str(target), "mode": "0o770"}
+    run([entry], ctx)
+    run([entry], ctx)
+    assert target.is_dir()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o770
+
+
+# --- materialize_orchestrator_config (keyed selector) ----------------------
+
+
+class _PendingConfigService:
+    """Stand-in for ``InferenceService``: carries the pending config body.
+
+    The facade stashes the orchestrator's JSON body on the service as
+    ``_pending_orchestrator_config`` before ``start()``; the hook reads
+    it from there.
+    """
+
+    def __init__(self, config: object) -> None:
+        self._pending_orchestrator_config = config
+
+
+def test_materialize_orchestrator_config_without_key_writes_whole_body(
+    tmp_path: Path,
+) -> None:
+    """No ``key`` -> the whole config dict is written (unchanged behaviour)."""
+    target = tmp_path / "config" / "config.json"
+    body = {"providers": {"openai": {"keys": []}}, "other": 1}
+    ctx = PreStartHookContext(
+        service=_PendingConfigService(body),
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+    )
+    run(
+        [{"kind": "materialize_orchestrator_config", "target": str(target)}],
+        ctx,
+    )
+    assert json.loads(target.read_text()) == body
+
+
+def test_materialize_orchestrator_config_keyed_entry_writes_only_that_key(
+    tmp_path: Path,
+) -> None:
+    """``key`` set -> only ``config[key]`` lands in the target file.
+
+    One orchestrator config dict is split across several files by
+    declaring one keyed entry per file (prometheus: server config,
+    file-SD targets, alert rules).
+    """
+    target = tmp_path / "config" / "prometheus.yml"
+    body = {
+        "prometheus": {"global": {"scrape_interval": "15s"}},
+        "targets": [{"targets": ["host:9090"], "labels": {"job": "worker"}}],
+        "rules": [],
+    }
+    ctx = PreStartHookContext(
+        service=_PendingConfigService(body),
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+    )
+    run(
+        [
+            {
+                "kind": "materialize_orchestrator_config",
+                "key": "prometheus",
+                "target": str(target),
+                "format": "yaml",
+            }
+        ],
+        ctx,
+    )
+    assert yaml.safe_load(target.read_text()) == body["prometheus"]
+
+
+def test_materialize_orchestrator_config_several_keyed_entries_share_one_body(
+    tmp_path: Path,
+) -> None:
+    """Three keyed entries consume ONE body and write three files."""
+    body = {
+        "prometheus": {"global": {"scrape_interval": "15s"}},
+        "targets": [{"targets": ["host:9090"]}],
+        "rules": [{"name": "x"}],
+    }
+    ctx = PreStartHookContext(
+        service=_PendingConfigService(body),
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+    )
+    run(
+        [
+            {
+                "kind": "materialize_orchestrator_config",
+                "key": "prometheus",
+                "target": str(tmp_path / "config" / "prometheus.yml"),
+                "format": "yaml",
+            },
+            {
+                "kind": "materialize_orchestrator_config",
+                "key": "targets",
+                "target": str(tmp_path / "config" / "file_sd" / "targets.json"),
+                "format": "json",
+            },
+            {
+                "kind": "materialize_orchestrator_config",
+                "key": "rules",
+                "target": str(tmp_path / "config" / "rules" / "fleet.yml"),
+                "format": "yaml",
+            },
+        ],
+        ctx,
+    )
+    assert (
+        yaml.safe_load((tmp_path / "config" / "prometheus.yml").read_text()) == body["prometheus"]
+    )
+    assert (
+        json.loads((tmp_path / "config" / "file_sd" / "targets.json").read_text())
+        == body["targets"]
+    )
+    assert (
+        yaml.safe_load((tmp_path / "config" / "rules" / "fleet.yml").read_text()) == body["rules"]
+    )
+
+
+def test_materialize_orchestrator_config_missing_key_raises(tmp_path: Path) -> None:
+    """A keyed entry whose key is absent from the body fails the start loudly.
+
+    The stale on-disk file must not be used by accident: the hook
+    raises before writing anything, so the previous file survives
+    untouched and the container never starts.
+    """
+    target = tmp_path / "config" / "rules" / "fleet.yml"
+    target.parent.mkdir(parents=True)
+    target.write_text("stale: true\n")
+
+    ctx = PreStartHookContext(
+        service=_PendingConfigService({"prometheus": {}, "targets": []}),
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+    )
+    with pytest.raises(ValueError, match="missing from the orchestrator config body"):
+        run(
+            [
+                {
+                    "kind": "materialize_orchestrator_config",
+                    "key": "rules",
+                    "target": str(target),
+                    "format": "yaml",
+                }
+            ],
+            ctx,
+        )
+    # The stale file was not overwritten.
+    assert target.read_text() == "stale: true\n"
+
+
+def test_materialize_orchestrator_config_keyed_entry_is_noop_without_pending_config(
+    tmp_path: Path,
+) -> None:
+    """No config body stashed -> no-op, even with a ``key`` set.
+
+    The start was called without an orchestrator config, so the
+    on-disk config is preserved and the hook does nothing.
+    """
+    target = tmp_path / "config" / "prometheus.yml"
+    ctx = PreStartHookContext(
+        service=None, state_dir=tmp_path / "state", data_dir=tmp_path / "data"
+    )
+    run(
+        [
+            {
+                "kind": "materialize_orchestrator_config",
+                "key": "prometheus",
+                "target": str(target),
+                "format": "yaml",
+            }
+        ],
+        ctx,
+    )
+    assert not target.exists()
+
+
+def test_materialize_orchestrator_config_keyed_entry_requires_a_mapping_body(
+    tmp_path: Path,
+) -> None:
+    """A keyed entry against a non-mapping body fails loudly."""
+    ctx = PreStartHookContext(
+        service=_PendingConfigService(["not", "a", "mapping"]),
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+    )
+    with pytest.raises(ValueError, match="not a mapping"):
+        run(
+            [
+                {
+                    "kind": "materialize_orchestrator_config",
+                    "key": "prometheus",
+                    "target": str(tmp_path / "config" / "prometheus.yml"),
+                    "format": "yaml",
+                }
+            ],
+            ctx,
+        )
+
+
+def test_materialize_orchestrator_config_empty_key_rejects(tmp_path: Path) -> None:
+    """An empty ``key`` is a spec typo, not "the whole body"."""
+    ctx = PreStartHookContext(
+        service=_PendingConfigService({"prometheus": {}}),
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+    )
+    with pytest.raises(ValueError, match="non-empty string"):
+        run(
+            [
+                {
+                    "kind": "materialize_orchestrator_config",
+                    "key": "",
+                    "target": str(tmp_path / "config" / "prometheus.yml"),
                 }
             ],
             ctx,

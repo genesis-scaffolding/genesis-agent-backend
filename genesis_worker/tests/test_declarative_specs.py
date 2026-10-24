@@ -17,10 +17,12 @@ without starting the container.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from genesis_worker.contracts import (
     ServiceCapabilities,
@@ -34,6 +36,8 @@ from genesis_worker.utils.services import (
     DockerService,
     load_service_spec,
 )
+from genesis_worker.utils.services.hooks import PreStartHookContext, registered_kinds
+from genesis_worker.utils.services.hooks import run as run_hooks
 
 _DECLARATIVE_DIR = Path(__file__).resolve().parent.parent / "services" / "_declarative"
 
@@ -83,6 +87,7 @@ _BUILT_IN_SPECS = (
     "jellyfin.yaml",
     "ntfy.yaml",
     "photoprism.yaml",
+    "prometheus.yaml",
     "romm.yaml",
     "sillytavern.yaml",
     "tidarr.yaml",
@@ -175,6 +180,33 @@ def test_built_in_spec_is_available_reflects_image_present(
         staticmethod(lambda image: False),
     )
     assert _load_spec(spec_name, tmp_path).is_available() is False
+
+
+@pytest.mark.parametrize("spec_name", _DOCKER_SPECS)
+def test_built_in_spec_pre_start_hooks_are_well_formed(spec_name: str, tmp_path: Path) -> None:
+    """Every pre-start hook entry names a registered kind and an absolute target.
+
+    The spec matrix: a YAML hook typo must fail at load time (unknown
+    kind) or at least be caught by this gate, not at container start.
+    Entries carry no ``None`` values — the loader strips them, so a
+    handler's ``entry.get("key", default)`` sees its own default.
+    """
+    svc = _load_spec(spec_name, tmp_path)
+    kinds = set(registered_kinds())
+    for entry in svc.config.pre_start_hooks:
+        assert entry["kind"] in kinds, f"{spec_name}: unknown hook kind {entry['kind']!r}"
+        target = entry.get("target")
+        assert isinstance(target, str) and target, (
+            f"{spec_name}: hook {entry['kind']} has no target"
+        )
+        assert Path(target).is_absolute(), f"{spec_name}: hook target {target!r} is not absolute"
+        assert None not in entry.values(), f"{spec_name}: hook entry carries a None value: {entry}"
+        if entry["kind"] == "materialize_orchestrator_config":
+            assert entry.get("format", "json") in ("json", "yaml")
+            key = entry.get("key")
+            assert key is None or (isinstance(key, str) and key), (
+                f"{spec_name}: bad hook key {key!r}"
+            )
 
 
 # --- bifrost-specific -----------------------------------------------------
@@ -498,6 +530,151 @@ def test_ntfy_options_have_configure_panel(tmp_path: Path) -> None:
     assert "configure" in svc.ui_panels
 
 
+# --- prometheus-specific ---------------------------------------------------
+
+
+def test_prometheus_identity(tmp_path: Path) -> None:
+    """Prometheus's identity / category / description match the spec's surface."""
+    svc = _load_spec("prometheus.yaml", tmp_path)
+    assert svc.name == "prometheus"
+    assert svc.display_name == "Prometheus"
+    assert svc.category == ServiceCategory.UTILITY
+    assert svc.description == "Metrics collection and time-series database"
+
+
+def test_prometheus_image_and_container(tmp_path: Path) -> None:
+    """Image ref + container name + port mapping + health probe match upstream."""
+    svc = _load_spec("prometheus.yaml", tmp_path)
+    assert svc.image_ref == "prom/prometheus:latest"
+    assert svc.container_name == "prometheus"
+    # Host 9095 (9090 is the worker API's) -> container 9090.
+    assert svc.config.listen_port == 9095
+    assert svc.config.internal_port == 9090
+    assert svc.listen_address == "0.0.0.0:9095"
+    # Prometheus exposes /-/healthy ("Prometheus Server is Healthy.").
+    assert svc.config.health_probe_path == "/-/healthy"
+
+
+def test_prometheus_mounts_config_and_data_dirs(tmp_path: Path) -> None:
+    """The config dir and the TSDB dir are bind-mounted at the image's paths.
+
+    Upstream's Dockerfile declares ``VOLUME ["/prometheus"]`` and its
+    default CMD points ``--config.file`` at
+    ``/etc/prometheus/prometheus.yml``; the docs tell operators to bind
+    mount the config dir onto ``/etc/prometheus`` and the data dir onto
+    ``/prometheus``.
+    """
+    ctx = service_ctx(tmp_path, name="prometheus")
+    svc = load_service_spec(_DECLARATIVE_DIR / "prometheus.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    volumes = svc.config.extra_volumes
+    assert volumes["/etc/prometheus"] == str(ctx.config_dir)
+    assert volumes["/prometheus"] == str(ctx.data_dir / "data")
+
+
+def test_prometheus_command_args_replace_image_cmd(tmp_path: Path) -> None:
+    """``extra_args`` re-declares the image CMD's flags plus retention.
+
+    The framework passes ``extra_args`` as the container COMMAND, which
+    REPLACES the image CMD (upstream's CMD is
+    ``--config.file=... --storage.tsdb.path=...``), so both flags have
+    to be present here.
+    """
+    ctx = service_ctx(tmp_path, name="prometheus")
+    svc = load_service_spec(_DECLARATIVE_DIR / "prometheus.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    args = svc.config.extra_args
+    assert "--config.file=/etc/prometheus/prometheus.yml" in args
+    assert "--storage.tsdb.path=/prometheus" in args
+    assert "--storage.tsdb.retention.time=15d" in args
+    # The retention flag tracks the option (default 15d).
+    assert svc.options.retention_time == "15d"  # type: ignore[attr-defined]
+
+
+def test_prometheus_retention_option_feeds_command_arg(tmp_path: Path) -> None:
+    """Overriding the retention option changes the container flag."""
+    ctx = service_ctx(tmp_path, name="prometheus", options={"retention_time": "30d"})
+    svc = load_service_spec(_DECLARATIVE_DIR / "prometheus.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert "--storage.tsdb.retention.time=30d" in svc.config.extra_args
+
+
+def test_prometheus_data_dir_hook_makes_tsdb_writable(tmp_path: Path) -> None:
+    """The TSDB dir is prepared for uid 65534 (the image runs as ``nobody``).
+
+    The upstream Dockerfile does ``USER nobody``, so the bind-mounted
+    host dir has to be writable by 65534 or Prometheus fails to open
+    the storage. The spec declares the ``ensure_writable_dir``
+    pre-start hook for it.
+    """
+    svc = _load_spec("prometheus.yaml", tmp_path)
+    hooks = [h for h in svc.config.pre_start_hooks if h["kind"] == "ensure_writable_dir"]
+    assert len(hooks) == 1
+    assert hooks[0]["uid"] == 65534
+    assert hooks[0]["gid"] == 65534
+    assert hooks[0]["target"] == str(tmp_path / "data" / "data")
+
+
+def test_prometheus_keyed_config_hooks_split_one_config_body(tmp_path: Path) -> None:
+    """Three keyed hooks consume ONE orchestrator body, writing three files.
+
+    Each entry picks its slice out of the same config dict via ``key``;
+    the targets are host paths in the mounted config dir (which the
+    container sees at ``/etc/prometheus``).
+    """
+    ctx = service_ctx(tmp_path, name="prometheus")
+    svc = load_service_spec(_DECLARATIVE_DIR / "prometheus.yaml", ctx=ctx)
+    materialize = [
+        h for h in svc.config.pre_start_hooks if h["kind"] == "materialize_orchestrator_config"
+    ]
+    assert len(materialize) == 3
+    by_key = {h["key"]: h for h in materialize}
+    assert set(by_key) == {"prometheus", "targets", "rules"}
+    assert by_key["prometheus"]["target"] == str(ctx.config_dir / "prometheus.yml")
+    assert by_key["prometheus"]["format"] == "yaml"
+    assert by_key["targets"]["target"] == str(ctx.config_dir / "file_sd" / "targets.json")
+    assert by_key["targets"]["format"] == "json"
+    assert by_key["rules"]["target"] == str(ctx.config_dir / "rules" / "fleet.yml")
+    assert by_key["rules"]["format"] == "yaml"
+
+
+def test_prometheus_keyed_hooks_write_one_body_across_three_files(
+    tmp_path: Path,
+) -> None:
+    """Running the spec's hooks splits the pending body into the three files."""
+    ctx = service_ctx(tmp_path, name="prometheus")
+    svc = load_service_spec(_DECLARATIVE_DIR / "prometheus.yaml", ctx=ctx)
+    body = {
+        "prometheus": {"global": {"scrape_interval": "15s"}},
+        "targets": [{"targets": ["127.0.0.1:9090"], "labels": {"job": "worker"}}],
+        "rules": [{"name": "always", "rules": []}],
+    }
+    svc._pending_orchestrator_config = body  # type: ignore[attr-defined]
+    run_hooks(
+        list(svc.config.pre_start_hooks),
+        PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir),
+    )
+    assert yaml.safe_load((ctx.config_dir / "prometheus.yml").read_text()) == body["prometheus"]
+    assert json.loads((ctx.config_dir / "file_sd" / "targets.json").read_text()) == body["targets"]
+    assert yaml.safe_load((ctx.config_dir / "rules" / "fleet.yml").read_text()) == body["rules"]
+
+
+def test_prometheus_disables_puid_pgid_defaults(tmp_path: Path) -> None:
+    """The image ignores PUID/PGID and runs as nobody — no host-uid chown."""
+    svc = _load_spec("prometheus.yaml", tmp_path)
+    assert svc.config.puid_default is False
+    assert svc.config.pgid_default is False
+
+
+def test_prometheus_options_have_configure_panel(tmp_path: Path) -> None:
+    """Prometheus declares an ``options:`` block so ``configure`` auto-includes."""
+    svc = _load_spec("prometheus.yaml", tmp_path)
+    assert svc.options.listen_port == 9095  # type: ignore[attr-defined]
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+    assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
+    assert "configure" in svc.ui_panels
+
+
 # --- freshrss-specific ----------------------------------------------------
 
 
@@ -636,7 +813,8 @@ def test_romm_compose_config_fields(tmp_path: Path) -> None:
 def test_gac_is_compose_service(tmp_path: Path) -> None:
     """GAC is a compose-kind service (two published ports: UI + API)."""
     svc = load_service_spec(
-        _DECLARATIVE_DIR / "genesis-agent-context.yaml", ctx=service_ctx(tmp_path, name="genesis-agent-context")
+        _DECLARATIVE_DIR / "genesis-agent-context.yaml",
+        ctx=service_ctx(tmp_path, name="genesis-agent-context"),
     )
     assert isinstance(svc, ComposeService)
     assert not isinstance(svc, DockerService)
@@ -651,7 +829,8 @@ def test_gac_is_compose_service(tmp_path: Path) -> None:
 def test_gac_compose_config_fields(tmp_path: Path) -> None:
     """GAC compose config: ports 3001/8766, health on the API /health, GHCR image."""
     svc = load_service_spec(
-        _DECLARATIVE_DIR / "genesis-agent-context.yaml", ctx=service_ctx(tmp_path, name="genesis-agent-context")
+        _DECLARATIVE_DIR / "genesis-agent-context.yaml",
+        ctx=service_ctx(tmp_path, name="genesis-agent-context"),
     )
     assert isinstance(svc, ComposeService)
     assert svc.config.compose_version == "3.8"

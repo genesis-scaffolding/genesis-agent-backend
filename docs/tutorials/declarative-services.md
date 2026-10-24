@@ -314,6 +314,7 @@ pre_start_hooks:
   - kind: materialize_orchestrator_config
     target: "$data_dir/data/config.json"
     # format: json   # default; 'yaml' also supported
+    # key: some_key  # optional; write config[key] instead of the whole body
 ```
 
 `ensure_persistent_token` reads-or-creates a token file. Idempotent.
@@ -333,6 +334,28 @@ so the service sees the freshly-written config.
 The hook target is `$variable`-resolved at construction time, so the runtime
 handler just reads an absolute path string. No `ctx.data_dir` /
 `ctx.state_dir` lookups at hook time.
+
+**Splitting one config body across several files.** A hook entry may
+declare an optional `key`. When set, the handler writes `config[key]` —
+one slice of the body — instead of the whole body, so several keyed
+entries can consume ONE body and write several files:
+
+```yaml
+pre_start_hooks:
+  - kind: materialize_orchestrator_config
+    key: prometheus
+    target: "$config_dir/prometheus.yml"
+    format: yaml
+  - kind: materialize_orchestrator_config
+    key: targets
+    target: "$config_dir/file_sd/targets.json"
+    format: json
+```
+
+If `key` is set but the body doesn't carry it, the hook raises
+`ValueError` and the start fails: a stale on-disk file must never be
+picked up by accident because the new body happened to omit a key. With
+`key` unset the behaviour is unchanged (the whole body is written).
 
 **Adding a new hook kind** is one function in `utils/services/hooks.py`:
 

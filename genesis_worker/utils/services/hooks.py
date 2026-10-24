@@ -18,6 +18,11 @@ Three handlers ship today:
   orchestrator-supplied config blob (``ctx.service._pending_orchestrator_config``)
   to ``entry["target"]`` before the container starts. No-op when no
   config was passed. Atomic write; JSON by default, YAML supported.
+  An optional ``key`` selector writes ``config[key]`` instead of the
+  whole body, so one config dict can be split across several files.
+- ``ensure_writable_dir`` -- make a bind-mount target writable by a
+  container user that is not the host user (e.g. prometheus, which runs
+  as ``nobody`` / uid 65534).
 
 Adding a new hook kind is one function in this module + a registered name.
 """
@@ -114,7 +119,7 @@ def _resolve_mode(value: Any) -> int:
 @register("seed_yaml_whitelist")
 def _seed_yaml_whitelist(entry: dict, ctx: PreStartHookContext) -> None:
     target = Path(entry["target"])
-    key = entry.get("key", "whitelist")
+    key = entry.get("key") or "whitelist"
     extras = entry.get("extras") or []
     disable = entry.get("disable_docker_hosts", True)
     if not isinstance(extras, list):
@@ -135,6 +140,53 @@ def _ensure_persistent_token(entry: dict, ctx: PreStartHookContext) -> None:
     ensure_persistent_file(target, mode=mode, generator=generator)
 
 
+@register("ensure_writable_dir")
+def _ensure_writable_dir(entry: dict, ctx: PreStartHookContext) -> None:
+    """Prepare a bind-mount target so a non-host-user container can write to it.
+
+    Some images run as a fixed uid inside the container regardless of
+    the host user — prometheus runs as ``nobody`` (65534). A bind mount
+    keeps the HOST directory's ownership and mode, so that uid needs
+    write access to the host path or the service dies at startup with
+    "permission denied".
+
+    The hook chowns the directory to ``uid``/``gid`` when the worker is
+    privileged enough to do so (it runs as root). When it cannot — the
+    common case, a worker running as the desktop user — it falls back
+    to a world-writable mode, because an unprivileged owner cannot
+    grant write access to a different uid any other way.
+
+    Entry fields:
+
+    - ``target`` -- host path (required).
+    - ``uid`` / ``gid`` -- numeric ids to chown to (optional).
+    - ``mode`` -- chmod mode used when the chown could not happen
+      (default ``0o777``). After a successful chown the directory is
+      chmod'ed ``0o755`` so the new owner keeps write access while
+      others only read.
+    """
+    target = Path(entry["target"])
+    target.mkdir(parents=True, exist_ok=True)
+
+    uid = entry.get("uid")
+    gid = entry.get("gid")
+    chowned = False
+    if isinstance(uid, int) and isinstance(gid, int):
+        try:
+            os.chown(target, uid, gid)
+            chowned = True
+        except OSError:
+            # Not privileged enough (or the filesystem refuses). The
+            # world-writable fallback below covers the common case.
+            chowned = False
+
+    mode = _resolve_mode(entry.get("mode", "0o777")) if not chowned else 0o755
+    try:
+        target.chmod(mode)
+    except OSError:
+        pass
+
+
 @register("materialize_orchestrator_config")
 def _materialize_orchestrator_config(entry: dict, ctx: PreStartHookContext) -> None:
     """Write the orchestrator-supplied config to ``entry["target"]`` before start.
@@ -152,6 +204,21 @@ def _materialize_orchestrator_config(entry: dict, ctx: PreStartHookContext) -> N
     ``format`` defaults to ``json``; ``yaml`` is also supported. Unknown
     formats raise ``ValueError`` so a typo in the YAML fails loudly at
     start time rather than silently writing the wrong shape.
+
+    Entry fields:
+
+    - ``target`` -- host path to write (required).
+    - ``format`` -- ``json`` (default) or ``yaml``.
+    - ``key`` -- optional selector. When set, the handler writes
+      ``config[key]`` — one slice of the orchestrator's config body —
+      instead of the whole body. Several keyed entries can therefore
+      consume ONE config dict and split it across several files
+      (prometheus: server config / file-SD targets / alert rules).
+
+      When ``key`` is set but absent from the config body, the handler
+      raises ``ValueError``: a stale on-disk file must never be used by
+      accident because the new body happened to omit a key. The failure
+      propagates out of ``start()``, so the container never starts.
     """
     config = getattr(ctx.service, "_pending_orchestrator_config", None)
     if config is None:
@@ -165,6 +232,25 @@ def _materialize_orchestrator_config(entry: dict, ctx: PreStartHookContext) -> N
             "expected 'json' or 'yaml'"
         )
 
+    payload = config
+    key = entry.get("key")
+    if key is not None:
+        if not isinstance(key, str) or not key:
+            raise ValueError(
+                f"materialize_orchestrator_config: 'key' must be a non-empty string, got {key!r}"
+            )
+        if not isinstance(config, dict):
+            raise ValueError(
+                "materialize_orchestrator_config: 'key' is set but the orchestrator "
+                f"config body is not a mapping (got {type(config).__name__})"
+            )
+        if key not in config:
+            raise ValueError(
+                f"materialize_orchestrator_config: key {key!r} is missing from the "
+                f"orchestrator config body; available keys: {sorted(config)}"
+            )
+        payload = config[key]
+
     target.parent.mkdir(parents=True, exist_ok=True)
     for stale in target.parent.glob(f"{target.name}.tmp.*"):
         try:
@@ -175,10 +261,10 @@ def _materialize_orchestrator_config(entry: dict, ctx: PreStartHookContext) -> N
     tmp = target.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
     if fmt == "json":
         with tmp.open("w") as f:
-            json.dump(config, f, indent=2, sort_keys=False)
+            json.dump(payload, f, indent=2, sort_keys=False)
     else:
         with tmp.open("w") as f:
-            yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+            yaml.safe_dump(payload, f, sort_keys=False, default_flow_style=False)
     os.replace(tmp, target)
 
 

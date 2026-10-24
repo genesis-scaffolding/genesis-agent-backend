@@ -86,11 +86,24 @@ class HookSpec(BaseModel):
     The framework keeps the per-kind payload opaque (``kind``-keyed
     dicts). Validation lives in the hook handler that consumes the
     entry, not here.
+
+    ``key`` is the one shared, typed field across hook kinds:
+
+    - ``materialize_orchestrator_config`` -- when set, the handler writes
+      ``config[key]`` (a slice of the orchestrator-supplied config body)
+      to ``target`` instead of the whole body. That lets one config dict
+      be split across several files (e.g. prometheus: server config,
+      file-SD target list, alert rules).
+    - ``seed_yaml_whitelist`` -- the YAML key to seed (default
+      ``whitelist``).
+
+    Left unset, the entry behaves exactly as before.
     """
 
     model_config = ConfigDict(extra="allow")
 
     kind: str
+    key: str | None = None
 
 
 class AuthSpec(BaseModel):

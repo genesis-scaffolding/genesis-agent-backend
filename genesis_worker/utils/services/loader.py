@@ -186,6 +186,25 @@ def _validate_spec(raw: dict) -> DockerServiceSpec | UvServiceSpec | ComposeServ
     raise ValueError(f"unknown service kind {kind!r}; expected 'docker', 'uv', or 'compose'")
 
 
+def _clean_hook_entries(entries: Any) -> tuple[dict, ...]:
+    """Drop ``None``-valued keys from every resolved hook entry.
+
+    Hook entries are opaque ``kind``-keyed dicts. The spec model
+    declares a few shared fields (``kind``, ``key``) with ``None``
+    defaults, so a YAML that doesn't mention them would otherwise
+    materialise a ``"key": None`` entry at runtime. Stripping the
+    ``None`` values keeps every resolved entry byte-identical to what
+    the YAML declared, so a handler's ``entry.get("key", default)``
+    still sees its own default.
+    """
+    cleaned: list[dict] = []
+    for entry in entries or ():
+        if not isinstance(entry, dict):
+            raise TypeError(f"pre_start_hooks entries must be mappings, got {type(entry).__name__}")
+        cleaned.append({k: v for k, v in entry.items() if v is not None})
+    return tuple(cleaned)
+
+
 def _build_docker_config(
     resolved: dict,
     options_model: type[BaseModel],
@@ -257,7 +276,7 @@ def _build_docker_config(
         extra_volumes=dict(resolved.get("volumes") or {}),
         extra_args=list(resolved.get("extra_args") or []),
         data_dir_subpath=resolved["data_dir_subpath"],
-        pre_start_hooks=tuple(resolved.get("pre_start_hooks") or ()),
+        pre_start_hooks=_clean_hook_entries(resolved.get("pre_start_hooks")),
         auth=auth_cfg,
     )
 
@@ -309,7 +328,7 @@ def _build_compose_config(
         health_probe_path=resolved.get("health_probe_path", "/"),
         extra_env=merged_env,
         extra_volumes=merged_volumes,
-        pre_start_hooks=tuple(resolved.get("pre_start_hooks") or ()),
+        pre_start_hooks=_clean_hook_entries(resolved.get("pre_start_hooks")),
         data_dir_subpath=resolved.get("data_dir_subpath"),
         images=tuple(
             ComposeImage(
