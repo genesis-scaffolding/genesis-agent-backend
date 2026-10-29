@@ -191,13 +191,29 @@ def test_variant_auto_picks_rocm_when_only_amd(tmp_path: Path) -> None:
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     svc._hardware = _hw(amd=True)
     assert svc.effective_gpu_variant == "rocm"
-    assert svc.image_ref == "ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64"
+    assert svc.image_ref == "ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.14-amd64"
 
 
 def test_variant_auto_falls_back_to_cuda_when_no_gpu(tmp_path: Path) -> None:
     """Preserves the pre-ROCm "no NVIDIA GPU" refusal on GPU-less hosts."""
     svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
     assert svc.effective_gpu_variant == "cuda"
+
+
+def test_set_image_tag_switches_the_image_the_service_runs(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc._hardware = _hw(amd=True)
+    assert svc.image_tag("rocm") == "latest-rocm-7.14-amd64"
+
+    svc.set_image_tag("rocm", "v0.43.0-rocm-7.14-amd64")
+    assert svc.image_tag("rocm") == "v0.43.0-rocm-7.14-amd64"
+    assert svc.image_ref == "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.43.0-rocm-7.14-amd64"
+
+
+def test_set_image_tag_leaves_the_other_variant_alone(tmp_path: Path) -> None:
+    svc = ComfyUiService(service_ctx(tmp_path, name="comfyui"))
+    svc.set_image_tag("rocm", "v0.43.0-rocm-7.14-amd64")
+    assert svc.image_tag("cuda") == "v0.43.0-cuda-13.0-amd64"
 
 
 def test_variant_explicit_pin_wins_over_snapshot(tmp_path: Path) -> None:

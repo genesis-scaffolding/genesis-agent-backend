@@ -147,6 +147,25 @@ class ComfyUiService(InferenceService):
         """
         self._options.extra_env = dict(env)
 
+    def image_tag(self, variant: str) -> str:
+        """The tag the container runs for ``variant``."""
+        installable = self._installs[variant]
+        return installable.image_ref.rsplit(":", 1)[1]
+
+    def set_image_tag(self, variant: str, tag: str) -> None:
+        """Point ``variant`` at ``tag`` (ADR-040).
+
+        The option is the single source of truth for what runs, so the
+        installable follows it. The UI persists the value to the
+        per-service JSON sidecar, same split as :meth:`set_extra_env`.
+        """
+        installable = self._installs[variant]
+        if variant == "rocm":
+            self._options.rocm_image_tag = tag
+        else:
+            self._options.image_tag = tag
+        installable.set_image_tag(tag)
+
     @property
     def effective_gpu_variant(self) -> str:
         """The variant the container runs: pinned choice or snapshot pick.

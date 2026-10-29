@@ -10,14 +10,14 @@ from pathlib import Path
 import pytest
 
 from genesis_worker.contracts import AcquireView
-from genesis_worker.services.comfyui.install import (
-    ComfyUiImage,
-    _cache_path,
-    _read_cache,
-    _write_cache,
-)
+from genesis_worker.services.comfyui.install import ComfyUiImage
 from genesis_worker.utils.background_session import _Canceled
 from genesis_worker.utils.process import DockerContainer
+from genesis_worker.utils.registry_tags import (
+    read_tag_cache,
+    tag_cache_path,
+    write_tag_cache,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -120,8 +120,8 @@ def test_installed_version_none_when_no_selection(tmp_path: Path) -> None:
 
 def test_available_versions_uses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When a fresh cache exists, ``list_remote_tags`` is not called."""
-    cache = _cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
-    _write_cache(cache, ["v0.34.0-cuda-13.0-amd64", "v0.33.0-cuda-12.8-amd64"])
+    cache = tag_cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
+    write_tag_cache(cache, ["v0.34.0-cuda-13.0-amd64", "v0.33.0-cuda-12.8-amd64"])
 
     called = {"count": 0}
 
@@ -142,7 +142,7 @@ def test_available_versions_uses_cache(tmp_path: Path, monkeypatch: pytest.Monke
 def test_available_versions_fetches_when_cache_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cache = _cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
+    cache = tag_cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
     payload = {"version": 1, "fetched_at": time.time() - 3600, "tags": ["old-tag"]}
     cache.parent.mkdir(parents=True, exist_ok=True)
     with cache.open("w") as f:
@@ -166,14 +166,44 @@ def test_available_versions_writes_cache_on_miss(
         staticmethod(lambda repo: ["v0.34.0-cuda-13.0-amd64"]),
     )
     _make_installable(tmp_path).available_versions()
-    cache = _cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
+    cache = tag_cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
     assert cache.is_file()
-    assert _read_cache(cache, ttl_s=3600) == ["v0.34.0-cuda-13.0-amd64"]
+    assert read_tag_cache(cache, ttl_s=3600) == ["v0.34.0-cuda-13.0-amd64"]
+
+
+def test_available_versions_serves_stale_cache_when_registry_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A throttled registry must not empty the picker."""
+    cache = tag_cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
+    payload = {"version": 1, "fetched_at": time.time() - 3600, "tags": ["v0.43.0-cuda-13.0-amd64"]}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with cache.open("w") as f:
+        json.dump(payload, f)
+
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.list_image_tags",
+        lambda repo, auth_token=None: [],
+    )
+    versions = _make_installable(tmp_path).available_versions()
+    assert [v.version for v in versions] == ["v0.43.0-cuda-13.0-amd64"]
+
+
+def test_available_versions_does_not_cache_an_empty_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.comfyui.install.list_image_tags",
+        lambda repo, auth_token=None: [],
+    )
+    _make_installable(tmp_path).available_versions()
+    cache = tag_cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
+    assert not cache.exists()
 
 
 def test_invalidate_versions_cache_removes_file(tmp_path: Path) -> None:
     inst = _make_installable(tmp_path)
-    cache = _cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
+    cache = tag_cache_path(tmp_path / "cache", "ghcr.io/genesis-scaffolding/comfyui-cuda")
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text("{}")
     inst.invalidate_versions_cache()

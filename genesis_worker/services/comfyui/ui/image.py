@@ -28,6 +28,9 @@ st.caption(
 _SESSION_KEY_PREFIX = "image/sessions"
 _VERSIONS_KEY_PREFIX = "image/available_versions"
 _DROP_PENDING_PREFIX = "image/drop_pending"
+_PENDING_TAG_PREFIX = "image/pending_tag"
+
+_OPTION_KEYS = {"cuda": "image_tag", "rocm": "rocm_image_tag"}
 
 
 def _session_key(name: str) -> str:
@@ -42,6 +45,18 @@ def _drop_pending_key(name: str) -> str:
     return f"{_DROP_PENDING_PREFIX}/{name}"
 
 
+def _pending_tag_key(name: str) -> str:
+    return f"{_PENDING_TAG_PREFIX}/{name}"
+
+
+def _persist_image_tag(variant: str, tag: str) -> None:
+    """Point the service at ``tag`` and persist it to the sidecar."""
+    svc.set_image_tag(variant, tag)
+    values = worker.read_service_overrides(SERVICE_NAME)
+    values[_OPTION_KEYS[variant]] = tag
+    worker.write_service_overrides(SERVICE_NAME, values)
+
+
 def _render_step(step: AcquireView) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
@@ -53,7 +68,8 @@ def _render_step(step: AcquireView) -> None:
         total = step.progress.bytes_total or step.total_bytes or 1
         pct = step.progress.bytes_done / total if total else 0
         st.progress(
-            min(pct, 1.0), text=f"{step.title or 'fetching'} · {step.progress.bytes_done}/{total}"
+            min(pct, 1.0),
+            text=f"{step.title or 'fetching'} · {step.progress.bytes_done}/{step.total_bytes}",
         )
     else:
         st.info(step.title or step.kind)
@@ -61,19 +77,22 @@ def _render_step(step: AcquireView) -> None:
 
 for installable in svc.installs():
     name = installable.name
+    variant = installable.variant
     sess_key = _session_key(name)
     drop_key = _drop_pending_key(name)
 
     with st.expander(name, expanded=False):
-        current = installable.installed_version() or "—"
-        binary = installable.binary_path()
+        resolved = svc.image_tag(variant)
         image_present = svc.is_available()
         in_flight = sess_key in st.session_state
 
         state_label = "installed" if image_present else "not installed"
-        st.write(f"State: **{state_label}** — resolved: **{current}**")
+        st.write(f"State: **{state_label}** — resolved: **{resolved}**")
         if source_url := installable.source_url():
             st.caption(f"Source: [{source_url}]({source_url})")
+        installed_tag = installable.installed_version()
+        if installed_tag and installed_tag != resolved:
+            st.caption(f"Last installed: `{installed_tag}`")
         if svc.is_running():
             st.caption(
                 "Service is currently running — stop it from the Status page before uninstalling."
@@ -81,8 +100,8 @@ for installable in svc.installs():
 
         # Disable install when this variant's GPU is required but missing
         # (cuda -> NVIDIA, rocm -> AMD; ADR-040).
-        vendor_present = svc.has_nvidia_gpu if installable.variant == "cuda" else svc.has_amd_gpu
-        vendor_name = "NVIDIA" if installable.variant == "cuda" else "AMD"
+        vendor_present = svc.has_nvidia_gpu if variant == "cuda" else svc.has_amd_gpu
+        vendor_name = "NVIDIA" if variant == "cuda" else "AMD"
         install_disabled_by_gpu = svc._options.gpu_required and not vendor_present
         if install_disabled_by_gpu:
             st.caption(
@@ -94,11 +113,15 @@ for installable in svc.installs():
         st.session_state[_versions_key(name)] = versions
 
         if not versions:
-            st.caption("No tags returned from the registry (rate-limited or unreachable).")
+            st.caption(
+                "No tags returned from the registry (rate-limited or unreachable). "
+                "Use **Refresh tags** to retry."
+            )
+            choice = resolved
         else:
             labels = [v.version for v in versions]
             try:
-                idx = labels.index(current) if current and current != "—" else 0
+                idx = labels.index(resolved)
             except ValueError:
                 idx = 0
             choice = st.selectbox(
@@ -110,51 +133,52 @@ for installable in svc.installs():
             obj = next(v for v in versions if v.version == choice)
             st.caption(f"Image ref: `{obj.url}`")
 
-            cols = st.columns(3)
-            with cols[0]:
-                install_disabled = in_flight or install_disabled_by_gpu
-                install_help = (
-                    "An install is already in progress."
-                    if in_flight
-                    else "GPU required but not detected."
-                    if install_disabled_by_gpu
-                    else None
-                )
-                if st.button(
-                    "Install" if not image_present else "Reinstall",
-                    key=f"install-{name}",
-                    disabled=install_disabled,
-                    help=install_help,
-                ):
-                    st.session_state[sess_key] = installable.install(version=choice)
+        cols = st.columns(3)
+        with cols[0]:
+            install_disabled = in_flight or install_disabled_by_gpu
+            install_help = (
+                "An install is already in progress."
+                if in_flight
+                else "GPU required but not detected."
+                if install_disabled_by_gpu
+                else None
+            )
+            if st.button(
+                "Install" if not image_present else "Reinstall",
+                key=f"install-{name}",
+                disabled=install_disabled,
+                help=install_help,
+            ):
+                st.session_state[sess_key] = installable.install(version=choice)
+                st.session_state[_pending_tag_key(name)] = choice
+                st.rerun()
+        with cols[1]:
+            uninstall_disabled = svc.is_running() or installed_tag is None
+            uninstall_help = (
+                "Stop the service first."
+                if svc.is_running()
+                else "Nothing installed."
+                if installed_tag is None
+                else None
+            )
+            if st.button(
+                "Uninstall",
+                key=f"uninstall-{name}",
+                disabled=uninstall_disabled,
+                help=uninstall_help,
+            ):
+                try:
+                    svc.uninstall_installable(name, version=installed_tag)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state.pop(sess_key, None)
                     st.rerun()
-            with cols[1]:
-                uninstall_disabled = svc.is_running() or current == "—"
-                uninstall_help = (
-                    "Stop the service first."
-                    if svc.is_running()
-                    else "Nothing installed."
-                    if current == "—"
-                    else None
-                )
-                if st.button(
-                    "Uninstall",
-                    key=f"uninstall-{name}",
-                    disabled=uninstall_disabled,
-                    help=uninstall_help,
-                ):
-                    try:
-                        svc.uninstall_installable(name, version=current)
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-                    else:
-                        st.session_state.pop(sess_key, None)
-                        st.rerun()
-            with cols[2]:
-                if st.button("Refresh tags", key=f"refresh-{name}"):
-                    installable.invalidate_versions_cache()
-                    st.session_state.pop(_versions_key(name), None)
-                    st.rerun()
+        with cols[2]:
+            if st.button("Refresh tags", key=f"refresh-{name}"):
+                installable.invalidate_versions_cache()
+                st.session_state.pop(_versions_key(name), None)
+                st.rerun()
 
         if in_flight:
             session = st.session_state[sess_key]
@@ -166,6 +190,10 @@ for installable in svc.installs():
                 AcquireStateKind.CANCELLED,
             ):
                 _render_step(current_step)
+                if current_step.kind == AcquireStateKind.COMPLETE:
+                    pending = st.session_state.pop(_pending_tag_key(name), None)
+                    if pending:
+                        _persist_image_tag(variant, pending)
                 if st.session_state.get(drop_key):
                     st.session_state.pop(sess_key, None)
                     st.session_state.pop(drop_key, None)

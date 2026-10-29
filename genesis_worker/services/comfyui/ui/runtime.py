@@ -12,12 +12,11 @@ Two editors, one Save, one Save & restart:
   ``#`` comments and blank lines are ignored. Persists to
   ``extra_env`` in the same sidecar.
 
-The page writes the full sidecar with both keys on save (the
-Runtime page is the only writer; this is by design, not a
-read-modify-write). The bake-in prefix and framework-managed
-env (PUID, PGID, ROCm) live in the service and are not editable
-from this page; they show up in the Status page's read-only
-``Env:`` block alongside the user-supplied env.
+The page writes the runtime fields of the sidecar on save (the
+Runtime page owns those two keys; other pages keep theirs). The
+bake-in prefix and framework-managed env (PUID, PGID, ROCm) live in
+the service and are not editable from this page; they show up in the
+Status page's read-only ``Env:`` block alongside the user-supplied env.
 """
 
 from __future__ import annotations
@@ -100,17 +99,20 @@ if pending_error:
 
 
 def _persist() -> dict:
-    """Write the full sidecar with both fields; update in-memory state.
+    """Write the two runtime fields; update in-memory state.
 
-    The Runtime page is the sole writer, so this is a full rewrite
-    (not read-modify-write) of the sidecar. Empty values mean the
+    The Runtime page owns ``extra_args`` and ``extra_env``; other
+    writers (the Image page owns the image tag) keep their keys, so
+    this is a read-modify-write of the sidecar. Empty values mean the
     key is dropped so the YAML default re-emerges on the next
     construction: empty ``args`` drops ``extra_args`` from the
     sidecar; empty ``env`` drops ``extra_env``.
     """
     svc.set_extra_args(parsed_args)
     svc.set_extra_env(parsed_env)
-    values: dict = {}
+    values: dict = worker.read_service_overrides(SERVICE_NAME)
+    values.pop("extra_args", None)
+    values.pop("extra_env", None)
     if parsed_args:
         values["extra_args"] = parsed_args
     if parsed_env:

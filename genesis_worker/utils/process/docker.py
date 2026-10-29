@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -25,6 +26,8 @@ _DEFAULT_INSPECT_TIMEOUT_S = 10.0
 _DEFAULT_RUN_TIMEOUT_S = 60.0
 _USER_AGENT = "genesis-worker"
 _GHCR_BASE = "https://ghcr.io"
+_GHCR_TOKEN_ATTEMPTS = 3
+_GHCR_TOKEN_BACKOFF_S = 1.5
 
 # Module-level cache for ``docker --progress=json`` support. Probed
 # once on first use; older Docker daemons (pre-23.0) don't accept
@@ -311,9 +314,10 @@ class DockerContainer:
     @staticmethod
     def _ghcr_tags(repo: str) -> list[str]:
         """GHCR v2 flow: anonymous token endpoint → tags endpoint."""
-        token = DockerContainer._fetch_ghcr_token(repo)
+        name = repo.removeprefix("ghcr.io/").strip("/")
+        token = DockerContainer._fetch_ghcr_token(name)
         headers = {"Authorization": f"Bearer {token}"} if token else None
-        url = f"{_GHCR_BASE}/v2/{repo}/tags/list"
+        url = f"{_GHCR_BASE}/v2/{name}/tags/list"
         try:
             data = _http_get_json(url, headers=headers, timeout=30.0)
         except (urllib.error.URLError, TimeoutError, OSError):
@@ -389,17 +393,22 @@ class DockerContainer:
         """Fetch an anonymous GHCR pull token scoped to ``repo``.
 
         Public packages work without auth; the token endpoint just
-        proves the requester is allowed to pull anonymously.
+        proves the requester is allowed to pull anonymously. That
+        endpoint throttles by IP and stalls the connection instead of
+        returning 429, so one attempt is not enough.
         """
         url = f"{_GHCR_BASE}/token?service=ghcr.io&scope=repository:{repo}:pull"
-        try:
-            data = _http_get_json(url, timeout=15.0, accept="*")
-        except (urllib.error.URLError, TimeoutError, OSError):
-            return None
-        if isinstance(data, dict):
-            token = data.get("token")
-            if isinstance(token, str):
-                return token
+        for attempt in range(_GHCR_TOKEN_ATTEMPTS):
+            if attempt:
+                time.sleep(_GHCR_TOKEN_BACKOFF_S * attempt)
+            try:
+                data = _http_get_json(url, timeout=15.0, accept="application/json")
+            except (urllib.error.URLError, TimeoutError, OSError):
+                continue
+            if isinstance(data, dict):
+                token = data.get("token")
+                if isinstance(token, str):
+                    return token
         return None
 
     @staticmethod

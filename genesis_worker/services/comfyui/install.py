@@ -9,13 +9,11 @@ which streams ``docker pull --progress=json`` stderr lines as
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 import re
 import secrets
 import subprocess
-import time
 from pathlib import Path
 
 from ...contracts import (
@@ -26,6 +24,12 @@ from ...contracts import (
 )
 from ...utils.acquire import DockerPullAcquireSession
 from ...utils.process import DockerContainer
+from ...utils.registry_tags import (
+    list_image_tags,
+    read_tag_cache,
+    tag_cache_path,
+    write_tag_cache,
+)
 
 _RELEASE_CACHE_TTL_S = 15 * 60  # 15 min — same as GithubReleaseTarball.
 
@@ -78,41 +82,6 @@ def _matches_host_arch(tag: str, host_arch: str) -> bool:
     return m.group("arch").lower() == host_arch.lower()
 
 
-def _cache_path(cache_root: Path, repo: str) -> Path:
-    safe = repo.replace("/", "_")
-    return cache_root / "releases-cache" / f"{safe}.json"
-
-
-def _read_cache(path: Path, ttl_s: int) -> list[str] | None:
-    if not path.is_file():
-        return None
-    try:
-        with path.open() as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("version") != 1:
-        return None
-    fetched_at = data.get("fetched_at")
-    if not isinstance(fetched_at, (int, float)):
-        return None
-    if (time.time() - fetched_at) >= ttl_s:
-        return None
-    tags = data.get("tags")
-    if not isinstance(tags, list):
-        return None
-    return [t for t in tags if isinstance(t, str)]
-
-
-def _write_cache(path: Path, tags: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
-    payload = {"version": 1, "fetched_at": time.time(), "tags": tags}
-    with tmp.open("w") as f:
-        json.dump(payload, f)
-    os.replace(tmp, path)
-
-
 class ComfyUiImage(ServiceInstall):
     """Installable for one ComfyUI Docker image variant (cuda / rocm).
 
@@ -136,7 +105,7 @@ class ComfyUiImage(ServiceInstall):
         image_repo: str,
         image_tag: str,
         host_arch: str | None = None,
-        secrets=None,  # accepted but unused for v1 (public GHCR)
+        secrets=None,
     ) -> None:
         self.variant = variant
         self.name = f"comfyui-{variant}"
@@ -146,10 +115,14 @@ class ComfyUiImage(ServiceInstall):
         self._cache_dir = cache_dir
         self._state_dir = state_dir
         self._selection_path = state_dir / variant / "current"
+        self._auth_token = secrets.get("github_token") if secrets is not None else None
 
     @property
     def image_ref(self) -> str:
         return f"{self._image_repo}:{self._image_tag}"
+
+    def set_image_tag(self, tag: str) -> None:
+        self._image_tag = tag
 
     def source_url(self) -> str | None:
         return f"https://github.com/genesis-scaffolding/{self.name}/pkgs/container/{self.name}"
@@ -172,14 +145,21 @@ class ComfyUiImage(ServiceInstall):
         an explicit arch suffix (``-amd64`` / ``-arm64``) that doesn't
         match the host are filtered out; arch-agnostic tags (e.g.
         ``v0.34.0``) pass through.
+
+        An unreachable registry falls back to the last known tag list
+        rather than to nothing, so one throttled fetch does not empty
+        the picker for the whole cache TTL.
         """
-        cache = _cache_path(self._cache_dir, self._image_repo)
-        cached = _read_cache(cache, _RELEASE_CACHE_TTL_S)
+        cache = tag_cache_path(self._cache_dir, self._image_repo)
+        cached = read_tag_cache(cache, _RELEASE_CACHE_TTL_S)
         if cached is not None:
             tags = cached
         else:
-            tags = DockerContainer.list_remote_tags(self._image_repo)
-            _write_cache(cache, tags)
+            tags = list_image_tags(self._image_repo, auth_token=self._auth_token)
+            if tags:
+                write_tag_cache(cache, tags)
+            else:
+                tags = read_tag_cache(cache, None) or []
 
         host_arch = self._host_arch if self._host_arch is not None else detect_host_arch()
         if host_arch:
@@ -188,7 +168,7 @@ class ComfyUiImage(ServiceInstall):
 
     def invalidate_versions_cache(self) -> None:
         """Force the next ``available_versions()`` call to refetch."""
-        cache = _cache_path(self._cache_dir, self._image_repo)
+        cache = tag_cache_path(self._cache_dir, self._image_repo)
         if cache.exists():
             cache.unlink()
 

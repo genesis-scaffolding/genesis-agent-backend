@@ -8,7 +8,8 @@ from genesis_worker.services.comfyui.options import ComfyUiOptions
 def test_default_image_repo_and_tag() -> None:
     opts = ComfyUiOptions()
     assert opts.image_repo == "ghcr.io/genesis-scaffolding/comfyui-cuda"
-    assert opts.image_tag == "v0.34.0-cuda-13.0-amd64"
+    assert opts.image_tag == "v0.43.0-cuda-13.0-amd64"
+    assert opts.rocm_image_tag == "latest-rocm-7.14-amd64"
 
 
 def test_default_listen_port_matches_comfyui() -> None:
