@@ -20,9 +20,19 @@ ComfyUI runs as a Docker container (`ghcr.io/genesis-scaffolding/comfyui-cuda`).
 
 ### Image source
 
-- Default image: `ghcr.io/genesis-scaffolding/comfyui-cuda:v0.34.0-cuda-13.0-amd64`.
-- Override the tag via `GENESIS_SERVICES__COMFYUI__IMAGE_TAG=...` in `.env`.
-- The Image page lists every tag from the registry; pick a tag, click Install.
+Two variants, one per GPU vendor: `comfyui-cuda` and `comfyui-rocm`. The
+active variant is chosen on the Status page.
+
+- Default CUDA image: `ghcr.io/genesis-scaffolding/comfyui-cuda:v0.43.0-cuda-13.0-amd64`.
+- Default ROCm image: `ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.14-amd64`.
+- Override the tag via `GENESIS_SERVICES__COMFYUI__IMAGE_TAG=...` or
+  `GENESIS_SERVICES__COMFYUI__ROCM_IMAGE_TAG=...` in `.env`.
+- The Image page lists every tag from the registry; pick a tag, click
+  Install. The choice is persisted to the per-service sidecar, so the
+  container runs the tag you picked.
+- When the registry is unreachable the page falls back to the tags named
+  in the image repo's GitHub releases, and to the last known list if that
+  fails too.
 
 ### Networking
 

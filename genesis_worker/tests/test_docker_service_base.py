@@ -19,16 +19,16 @@ from genesis_worker.contracts import (
 )
 from genesis_worker.tests._factories import service_ctx
 from genesis_worker.utils.process import DockerContainer
+from genesis_worker.utils.registry_tags import (
+    read_tag_cache,
+    tag_cache_path,
+    write_tag_cache,
+)
 from genesis_worker.utils.services import (
     AuthConfig,
     DockerImageInstall,
     DockerService,
     DockerServiceConfig,
-)
-from genesis_worker.utils.services.docker_service import (
-    _cache_path,
-    _read_cache,
-    _write_cache,
 )
 
 # --- helpers ---------------------------------------------------------------
@@ -573,8 +573,8 @@ def test_image_install_installed_version_none_when_no_selection(tmp_path: Path) 
 
 def test_image_install_available_versions_uses_cache(tmp_path: Path, monkeypatch) -> None:
     """A fresh cache means ``list_remote_tags`` is not called."""
-    cache = _cache_path(tmp_path / "cache", "example/svc")
-    _write_cache(cache, ["latest", "0.7.0"])
+    cache = tag_cache_path(tmp_path / "cache", "example/svc")
+    write_tag_cache(cache, ["latest", "0.7.0"])
     called: list[str] = []
 
     def _list(repo: str, *, auth_token: str | None = None):
@@ -612,24 +612,24 @@ def test_image_install_available_versions_applies_arch_filter(tmp_path: Path, mo
 
 def test_image_install_cache_round_trip(tmp_path: Path) -> None:
     """Write then read returns the same data within the TTL."""
-    p = _cache_path(tmp_path / "cache", "example/svc")
-    _write_cache(p, ["a", "b"])
-    assert _read_cache(p, ttl_s=60) == ["a", "b"]
+    p = tag_cache_path(tmp_path / "cache", "example/svc")
+    write_tag_cache(p, ["a", "b"])
+    assert read_tag_cache(p, ttl_s=60) == ["a", "b"]
 
 
 def test_image_install_cache_expired(tmp_path: Path) -> None:
-    p = _cache_path(tmp_path / "cache", "example/svc")
-    _write_cache(p, ["a", "b"])
+    p = tag_cache_path(tmp_path / "cache", "example/svc")
+    write_tag_cache(p, ["a", "b"])
     # Manually expire by rewriting fetched_at to old.
     payload = json.loads(p.read_text())
     payload["fetched_at"] = payload["fetched_at"] - 60 * 60  # 1h ago
     p.write_text(json.dumps(payload))
-    assert _read_cache(p, ttl_s=60) is None
+    assert read_tag_cache(p, ttl_s=60) is None
 
 
 def test_image_install_invalidate_versions_cache(tmp_path: Path) -> None:
-    p = _cache_path(tmp_path / "cache", "example/svc")
-    _write_cache(p, ["a"])
+    p = tag_cache_path(tmp_path / "cache", "example/svc")
+    write_tag_cache(p, ["a"])
     inst = _make_installable(tmp_path)
     inst.invalidate_versions_cache()
     assert not p.exists()

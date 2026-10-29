@@ -16,9 +16,9 @@ class ComfyUiOptions(BaseModel):
 
     # --- image (per-variant; ADR-040) ---
     image_repo: str = "ghcr.io/genesis-scaffolding/comfyui-cuda"
-    image_tag: str = "v0.34.0-cuda-13.0-amd64"
+    image_tag: str = "v0.43.0-cuda-13.0-amd64"
     rocm_image_repo: str = "ghcr.io/genesis-scaffolding/comfyui-rocm"
-    rocm_image_tag: str = "latest-rocm-7.2-amd64"
+    rocm_image_tag: str = "latest-rocm-7.14-amd64"
     # Which GPU variant's image the container runs. ``None`` = auto-pick
     # from the host snapshot (NVIDIA -> cuda, else AMD -> rocm, else
     # cuda). In-memory only (mirrors llama_swap's llama_server_variant);

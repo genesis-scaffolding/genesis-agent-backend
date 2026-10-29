@@ -9,11 +9,9 @@ class and the unified installable.
 
 from __future__ import annotations
 
-import json
 import os
 import secrets
 import subprocess
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +33,12 @@ from ...contracts import (
 from ..acquire import DockerPullAcquireSession
 from ..net import HealthProbe
 from ..process import DockerContainer
+from ..registry_tags import (
+    list_image_tags,
+    read_tag_cache,
+    tag_cache_path,
+    write_tag_cache,
+)
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 
 _RELEASE_CACHE_TTL_S = 15 * 60  # same TTL as GithubReleaseTarball.
@@ -104,41 +108,6 @@ class DockerServiceConfig(DeclarativeServiceConfig):
 # --- image install ----------------------------------------------------------
 
 
-def _cache_path(cache_root: Path, repo: str) -> Path:
-    safe = repo.replace("/", "_")
-    return cache_root / "releases-cache" / f"{safe}.json"
-
-
-def _read_cache(path: Path, ttl_s: int) -> list[str] | None:
-    if not path.is_file():
-        return None
-    try:
-        with path.open() as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("version") != 1:
-        return None
-    fetched_at = data.get("fetched_at")
-    if not isinstance(fetched_at, (int, float)):
-        return None
-    if (time.time() - fetched_at) >= ttl_s:
-        return None
-    tags = data.get("tags")
-    if not isinstance(tags, list):
-        return None
-    return [t for t in tags if isinstance(t, str)]
-
-
-def _write_cache(path: Path, tags: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
-    payload = {"version": 1, "fetched_at": time.time(), "tags": tags}
-    with tmp.open("w") as f:
-        json.dump(payload, f)
-    os.replace(tmp, path)
-
-
 class DockerImageInstall(ServiceInstall):
     """Installable for one Docker image — replaces the per-service duplicates.
 
@@ -157,6 +126,7 @@ class DockerImageInstall(ServiceInstall):
         name: str,
         source_url: str | None,
         arch_filter=None,
+        secrets=None,
     ) -> None:
         self._image_repo = image_repo
         self._image_tag = image_tag
@@ -165,6 +135,7 @@ class DockerImageInstall(ServiceInstall):
         self._selection_path = state_dir / "current"
         self._source_url = source_url
         self._arch_filter = arch_filter
+        self._auth_token = secrets.get("github_token") if secrets is not None else None
         # Plugin contract: name is a class attribute; subclasses must
         # override or pass via constructor (we do the latter).
         self.name = name
@@ -192,13 +163,16 @@ class DockerImageInstall(ServiceInstall):
         15-min on-disk cache mirrors ``GithubReleaseTarball.available_versions``.
         Optional ``arch_filter`` narrows the tag set (comfyui's arch pinning).
         """
-        cache = _cache_path(self._cache_dir, self._image_repo)
-        cached = _read_cache(cache, _RELEASE_CACHE_TTL_S)
+        cache = tag_cache_path(self._cache_dir, self._image_repo)
+        cached = read_tag_cache(cache, _RELEASE_CACHE_TTL_S)
         if cached is not None:
             tags = cached
         else:
-            tags = DockerContainer.list_remote_tags(self._image_repo)
-            _write_cache(cache, tags)
+            tags = list_image_tags(self._image_repo, auth_token=self._auth_token)
+            if tags:
+                write_tag_cache(cache, tags)
+            else:
+                tags = read_tag_cache(cache, None) or []
         if self._arch_filter is not None:
             tags = [t for t in tags if self._arch_filter(t)]
         return [
@@ -212,7 +186,7 @@ class DockerImageInstall(ServiceInstall):
         ]
 
     def invalidate_versions_cache(self) -> None:
-        cache = _cache_path(self._cache_dir, self._image_repo)
+        cache = tag_cache_path(self._cache_dir, self._image_repo)
         if cache.exists():
             cache.unlink()
 
@@ -281,6 +255,7 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
             state_dir=ctx.state_dir,
             name=config.image_install_name or config.name,
             source_url=config.source_url,
+            secrets=ctx.secrets,
         )
 
     # --- introspection ----------------------------------------------------

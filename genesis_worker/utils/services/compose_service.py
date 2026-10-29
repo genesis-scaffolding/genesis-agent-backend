@@ -105,6 +105,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
                 state_dir=ctx.state_dir / "install" / img.name,
                 name=f"{config.name}:{img.name}",
                 source_url=None,
+                secrets=ctx.secrets,
             )
             for img in config.images
         ]
