@@ -29,6 +29,72 @@ for this change.
 
 ## Endpoints
 
+### `GET /v1/services/{name}/artefacts/{artefact}`
+
+Serve a document the service plugin generates (ADR-043). Read-only; the
+orchestrator fetches it, the worker never pushes it.
+
+- **Path params** `{name}` — service name (e.g. `llama_swap`); `{artefact}` —
+  artefact name (e.g. `models.json`).
+- **Query params** — passed through to the plugin verbatim. The framework never
+  interprets them; the plugin decides what they mean.
+- **Response 200** — the artefact document (JSON). The shape is
+  plugin-defined; there is no shared response model.
+- **Response 4xx / 5xx**:
+  - `404` — `{name}` is not registered on this worker.
+  - `404` — the service serves no artefact named `{artefact}`.
+  - `500` — the plugin failed to build the artefact; the message is in
+    `detail`.
+
+**Behavior**
+
+- The framework resolves `{name}` to a registered service and asks it for the
+  artefact. A service that generates nothing answers 404.
+- The llama-swap plugin serves `models.json`: the pi-agent config it builds
+  from the same evaluation output that drives its `config.yaml`. The optional
+  `provider` query parameter selects the *gateway-addressed* shape — the
+  provider key is that name verbatim and every model id and name is prefixed
+  with it (`p3/qwen-27B`). Without the parameter the export is the standalone
+  shape: the worker's own hostname as a slugged provider key and bare model
+  ids.
+
+**Example: llama-swap's pi config**
+
+```
+GET /v1/services/llama_swap/artefacts/models.json?provider=p3
+```
+
+```json
+{
+  "providers": {
+    "p3": {
+      "baseUrl": "http://p3:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "p3/qwen-27B",
+          "name": "p3/qwen-27B",
+          "input": ["text"],
+          "contextWindow": 40960,
+          "maxTokens": 16384,
+          "reasoning": true,
+          "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+        }
+      ]
+    }
+  }
+}
+```
+
+The per-model metadata is the node's own — the orchestrator copies it verbatim
+and never re-derives it.
+
 ### `POST /v1/services/{name}/install`
 
 Install the service's primary installable if not already present. Idempotent.
@@ -144,6 +210,9 @@ orchestrator surfaces `detail` to the user verbatim in failure toasts.
   whatever it built. The worker dispatches based on `{name}` to figure out
   where to write it. Worker authors add per-service materialisation logic;
   this contract does not constrain it.
+- `{artefact}` must be an artefact the service serves. A service that serves
+  no such artefact → 404 (the same status as an unknown service name, with a
+  distinct `detail`).
 
 ## Example: bifrost start body
 
@@ -186,8 +255,10 @@ starts the bifrost container.
 - No `GET /v1/agent_config` endpoint. The orchestrator derives each
   provider's `base_url` from the existing `/v1/services` response field
   `runtime_endpoint` on the `llama_swap` entry. Per-model metadata is not
-  part of the bifrost provider entry shape.
-- No bulk endpoint. The orchestrator issues one POST at a time.
+  part of the bifrost provider entry shape — it comes from the artefact
+  route above.
+- No bulk endpoint. The orchestrator issues one POST at a time, and one GET
+  per node for artefacts.
 
 ## Testing expectations
 

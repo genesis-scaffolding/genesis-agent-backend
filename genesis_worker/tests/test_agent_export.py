@@ -91,15 +91,53 @@ def test_build_provider_returns_providers_dict() -> None:
     assert inner["compat"]["maxTokensField"] == "max_tokens"
 
 
-def test_build_provider_explicit_hostname() -> None:
-    out = build_provider_from_configs({}, hostname="My Box 2")
+def test_build_provider_explicit_provider_is_verbatim() -> None:
+    """An explicit provider name is the key a gateway holds the node under —
+    it must not be slugged."""
+    out = build_provider_from_configs({}, provider="My Box 2")
+    assert next(iter(out["providers"])) == "My Box 2"
+
+
+def test_build_provider_derived_key_is_slugged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without an explicit provider the key comes from this host's name."""
+    monkeypatch.setattr("socket.gethostname", lambda: "My Box 2")
+    out = build_provider_from_configs({})
     assert next(iter(out["providers"])) == "my-box-2"
 
 
-def test_build_provider_hostname_falls_back_when_empty() -> None:
-    out = build_provider_from_configs({}, hostname="---")
+def test_build_provider_derived_key_falls_back_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("socket.gethostname", lambda: "---")
+    out = build_provider_from_configs({})
     # _slug("---") is empty -> FALLBACK_PROVIDER_NAME
     assert next(iter(out["providers"])) == FALLBACK_PROVIDER_NAME
+
+
+def test_build_provider_explicit_provider_prefixes_model_ids() -> None:
+    out = build_provider_from_configs(
+        {"qwen-27B": _cfg("qwen-27B", name="Qwen 27B")}, provider="p3"
+    )
+    inner = out["providers"]["p3"]
+    assert inner["models"][0]["id"] == "p3/qwen-27B"
+    assert inner["models"][0]["name"] == "p3/Qwen 27B"
+
+
+def test_build_provider_explicit_provider_keeps_metadata_verbatim() -> None:
+    """Prefixing touches id and name only — the metadata is copied as-is."""
+    standalone = _provider({"m": _cfg("m", ctx_size=40960, mmproj=True)})
+    addressed = build_provider_from_configs(
+        {"m": _cfg("m", ctx_size=40960, mmproj=True)}, provider="p3"
+    )["providers"]["p3"]
+    for field in ("contextWindow", "input", "maxTokens", "reasoning", "cost"):
+        assert addressed["models"][0][field] == standalone["models"][0][field]
+
+
+def test_build_provider_without_provider_keeps_bare_ids() -> None:
+    """The standalone shape (no provider) keeps bare model ids."""
+    inner = _provider({"m": _cfg("m")})
+    assert inner["models"][0]["id"] == "m"
+    assert inner["models"][0]["name"] == "m"
 
 
 def test_build_provider_default_base_url() -> None:
