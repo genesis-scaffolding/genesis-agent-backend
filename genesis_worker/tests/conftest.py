@@ -206,8 +206,12 @@ def _llama_swap_lifecycle_seam(request, monkeypatch: pytest.MonkeyPatch) -> None
 
     lifecycle = _llama_swap_module.lifecycle
 
-    monkeypatch.setattr(lifecycle, "start_swap", lambda *args, **kwargs: _llama_swap_seam_error("start_swap"))
-    monkeypatch.setattr(lifecycle, "stop_swap", lambda *args, **kwargs: _llama_swap_seam_error("stop_swap"))
+    monkeypatch.setattr(
+        lifecycle, "start_swap", lambda *args, **kwargs: _llama_swap_seam_error("start_swap")
+    )
+    monkeypatch.setattr(
+        lifecycle, "stop_swap", lambda *args, **kwargs: _llama_swap_seam_error("stop_swap")
+    )
     monkeypatch.setattr(lifecycle, "is_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         lifecycle,

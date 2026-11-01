@@ -26,8 +26,11 @@ from genesis_worker.utils.models import MachineMetrics
 
 
 def test_facade_lists_services(tmp_path: Path) -> None:
-    """Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
-    services on the real install."""""
+    (
+        """Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
+    services on the real install."""
+        ""
+    )
     from genesis_worker.settings import PathsSettings, Settings
 
     settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
@@ -754,7 +757,9 @@ def test_start_service_with_config_sets_pending_attribute(
     # stop-before-start path is never entered — the ``is_running`` mock is
     # belt-and-suspenders and kept for clarity.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
-    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
+    monkeypatch.setattr(
+        LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop")
+    )
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     cfg = {"providers": {"openai": {"keys": [{"name": "k"}]}}}
@@ -801,7 +806,9 @@ def test_start_service_clears_pending_attribute_on_failure(
     # stop-before-start path is never entered; the ``stop`` mock is kept
     # in case a refactor ever calls ``stop`` outside that path.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
-    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
+    monkeypatch.setattr(
+        LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop")
+    )
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     with pytest.raises(RuntimeError):
@@ -835,7 +842,9 @@ def test_start_service_without_config_leaves_pending_none(
     # stop-before-start path is never entered; the ``stop`` mock is kept
     # in case a refactor ever calls ``stop`` outside that path.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
-    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
+    monkeypatch.setattr(
+        LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop")
+    )
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     w.start_service("llama_swap")
@@ -938,7 +947,9 @@ def test_restart_service_delegates_to_start_service(
     # Hermetic: prevent the facade's stop-before-start path from hitting the
     # real LlamaSwapService.is_running / stop.
     monkeypatch.setattr(LlamaSwapService, "is_running", lambda self: False)
-    monkeypatch.setattr(LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop"))
+    monkeypatch.setattr(
+        LlamaSwapService, "stop", lambda self: StopResult(ok=True, message="mock-stop")
+    )
     settings = _hermetic_settings(tmp_path)
     w = GenesisWorker(settings=settings)
     seen: dict = {}

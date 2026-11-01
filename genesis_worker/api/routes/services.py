@@ -7,13 +7,17 @@ cheap gate is the source of truth for "can this service be used".
 
 ADR-038 adds four ``POST /v1/services/{name}/{action}`` endpoints on
 this router for orchestrator-driven service control (install / start /
-stop / restart). The route layer translates facade exceptions to the
+stop / restart). ADR-043 adds the read side of the same scheme:
+``GET /v1/services/{name}/artefacts/{artefact}`` serves an artefact a
+service plugin generates.
+
+The route layer translates facade exceptions to the
 HTTP statuses the orchestrator contract requires: 404 for unknown
 services, 409 for capability refusal, 503 for concurrent installs, 500
 for start failures after materialisation.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from ... import GenesisWorker
 from ...contracts import (
@@ -212,6 +216,45 @@ def restart_service(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return StartResultSchema.from_dataclass(result)
+
+
+# --- artefacts (ADR-043) ---------------------------------------------------
+
+
+@router.get("/services/{name}/artefacts/{artefact}")
+def get_service_artefact(
+    name: str,
+    artefact: str,
+    request: Request,
+    worker: WorkerDep,
+) -> dict:
+    """Serve an artefact a service plugin generates.
+
+    Query parameters are passed through to the plugin verbatim; the
+    framework never interprets them.
+
+    Errors:
+        404 — ``{name}`` is not a registered service, or the service
+            serves no artefact named ``{artefact}``.
+        500 — the plugin failed to build the artefact.
+    """
+    try:
+        svc = worker.service(name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown service: {name}") from exc
+    try:
+        payload = svc.artefact(
+            artefact,
+            catalog=worker.catalog(),
+            params=dict(request.query_params),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if payload is None:
+        raise HTTPException(
+            status_code=404, detail=f"service {name} serves no artefact {artefact!r}"
+        )
+    return payload
 
 
 __all__ = ["router"]

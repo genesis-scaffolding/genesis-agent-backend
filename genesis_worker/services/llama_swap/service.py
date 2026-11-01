@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from ...contracts import (
@@ -523,17 +524,28 @@ class LlamaSwapService(InferenceService):
 
     # --- pi-agent export ---------------------------------------------------
 
-    def export_for_agent(self, *, catalog: Catalog, base_url: str | None = None) -> dict:
+    def export_for_agent(
+        self,
+        *,
+        catalog: Catalog,
+        base_url: str | None = None,
+        provider: str | None = None,
+    ) -> dict:
         """Build the pi-agent ``models.json`` payload from structured configs.
 
         Runs the same evaluation pipeline that produces ``config.yaml``;
         the export reads ``ctx_size``, ``ctx_min``, mmproj presence, and
         chat-template-kwargs straight off the ``EvaluatedConfig`` rather
         than regexing the rendered cmd.
+
+        ``provider`` names the provider the export is addressed to. Given,
+        it is used verbatim and the model ids and names are prefixed with
+        it — the gateway-addressed shape a cluster gateway can route.
         """
         return build_provider_from_configs(
             self.evaluate_model_config(catalog),
             base_url=base_url,
+            provider=provider,
         )
 
     def write_agent_config(
@@ -544,6 +556,25 @@ class LlamaSwapService(InferenceService):
     def agent_config_target(self) -> Path:
         base = os.environ.get("PI_INSTALL_DIR")
         return (Path(base) if base else Path.home() / ".pi" / "agent") / "models.json"
+
+    def artefact(
+        self,
+        name: str,
+        *,
+        catalog: Catalog,
+        params: Mapping[str, str] | None = None,
+    ) -> dict | None:
+        """Serve the generated pi ``models.json`` (ADR-043).
+
+        The ``provider`` query parameter selects the gateway-addressed
+        shape: the provider key is that name verbatim and the model ids
+        and names carry it as a prefix. Without it the export stays
+        standalone (this host's slugged key, bare model ids).
+        """
+        if name != "models.json":
+            return None
+        provider = (params or {}).get("provider", "").strip()
+        return self.export_for_agent(catalog=catalog, provider=provider or None)
 
     @property
     def ui_pages(self) -> list[UiPage]:

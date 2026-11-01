@@ -34,17 +34,24 @@ def build_provider_from_configs(
     configs: Mapping[str, EvaluatedConfig],
     *,
     base_url: str | None = None,
-    hostname: str | None = None,
+    provider: str | None = None,
 ) -> dict:
     """Build the pi-agent ``models.json`` payload from a dict of evaluated configs.
 
     The caller supplies the structured configs (typically
     ``service.evaluate_model_config(catalog)``). The same data drives
     ``config.yaml``; the two paths cannot drift.
+
+    ``provider`` names the provider the export is addressed to. When it is
+    given, the name is used verbatim and every model id and name is
+    prefixed with it (``p3/qwen-27B``) — the gateway-addressed shape.
+    Without it the provider key is derived from this machine's hostname
+    (slugged) and the model ids stay bare — the standalone shape.
     """
-    provider_name = _resolve_hostname(hostname)
+    provider_name = _resolve_provider(provider)
+    prefix = provider.strip() if provider and provider.strip() else None
     base = _resolve_base_url(base_url)
-    models = [_build_model(entry_id, cfg) for entry_id, cfg in configs.items()]
+    models = [_build_model(entry_id, cfg, prefix=prefix) for entry_id, cfg in configs.items()]
     return {
         "providers": {
             provider_name: {
@@ -67,7 +74,7 @@ def build_provider_for_catalog(
     *,
     evaluate,  # callable: (Catalog) -> Mapping[str, EvaluatedConfig]
     base_url: str | None = None,
-    hostname: str | None = None,
+    provider: str | None = None,
 ) -> dict:
     """Convenience wrapper for callers that already hold a catalog.
 
@@ -79,7 +86,7 @@ def build_provider_for_catalog(
     return build_provider_from_configs(
         evaluate(catalog),
         base_url=base_url,
-        hostname=hostname,
+        provider=provider,
     )
 
 
@@ -108,10 +115,10 @@ def write_models_json(target, provider: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_model(entry_id: str, cfg: EvaluatedConfig) -> dict:
+def _build_model(entry_id: str, cfg: EvaluatedConfig, *, prefix: str | None = None) -> dict:
     return {
-        "id": entry_id,
-        "name": cfg.name,
+        "id": f"{prefix}/{entry_id}" if prefix else entry_id,
+        "name": f"{prefix}/{cfg.name}" if prefix else cfg.name,
         "input": ["text", "image"] if cfg.files.mmproj else ["text"],
         # Priority: ctx_size (cap) > ctx_min (floor) > fallback.
         # The caller has already decided what gets emitted to the cmd;
@@ -139,9 +146,14 @@ def _reasoning(entry_id: str, cfg: EvaluatedConfig) -> bool:
     return INSTRUCT_TOKEN not in entry_id.lower()
 
 
-def _resolve_hostname(explicit: str | None) -> str:
-    if explicit:
-        return _slug(explicit)
+def _resolve_provider(explicit: str | None) -> str:
+    """The provider key: the caller's name verbatim, else this host's slug.
+
+    The explicit name is the key a gateway holds the node under, so it is
+    never slugged — a slugged variant would not match.
+    """
+    if explicit and explicit.strip():
+        return explicit.strip()
     try:
         return _slug(socket.gethostname())
     except OSError:
