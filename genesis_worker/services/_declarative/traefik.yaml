@@ -1,0 +1,191 @@
+# Traefik declarative service spec — the cluster's single ingress proxy.
+#
+# One reverse proxy for the whole fleet: every service gets a stable
+# hostname under the admin-supplied domain (``<service>-<node>.<domain>``)
+# and TLS termination with an automatically renewed wildcard certificate.
+#
+# WHY ``kind: compose`` (not ``kind: docker``)
+# -------------------------------------------
+# The docker kind publishes exactly ONE port, and the framework's health
+# probe is plain HTTP (``utils/net/probe.py`` -> ``http://127.0.0.1:<port>``).
+# A TLS-only listener on 443 would never answer the probe, so the
+# service would report ``starting`` forever. The compose kind publishes
+# several ports, so we expose the ingress listener (443) AND a
+# loopback-only plain-HTTP ``ping`` entrypoint (8080) that the probe
+# can reach. The ping port is bound to 127.0.0.1 — it is a health
+# endpoint, not a service.
+#
+# TLS — DNS-01, not HTTP-01
+# ------------------------
+# The proxy has no public IP and no inbound port 80, so the HTTP-01
+# challenge is impossible. We use the DNS-01 challenge, which needs a
+# DNS provider credential. The fleet's registrar is GoDaddy, and the
+# Lego library embedded in the official Traefik image ships a
+# first-party ``godaddy`` provider: it reads ``GODADDY_API_KEY`` and
+# ``GODADDY_API_SECRET`` from the environment (the key needs DNS write
+# scope for the zone). The provider name and the credential are
+# options — the orchestrator pushes them with the route table, and the
+# worker's own Configure panel can set them for single-node work.
+#
+# CONFIG DIR — what the orchestrator is expected to write
+# -------------------------------------------------------
+# ``$config_dir`` (the per-service config directory) is bind-mounted at
+# ``/etc/traefik`` inside the container, so the orchestrator's
+# ``routes`` key is written to ``dynamic/dynamic.yml`` — Traefik's
+# file-provider directory (one level below the mount, the documented
+# mitigation for fsnotify missing the atomic replace over a bind
+# mount). The file is the Traefik DYNAMIC configuration: routers,
+# services and the wildcard certificate resolver.
+#
+# The orchestrator's config body has two keys:
+#
+#   "routes"   the dynamic route table (routers + load-balancers) and
+#              the wildcard certificate declaration. Written to
+#              ``dynamic/dynamic.yml`` as YAML.
+#   "options"  the traefik service's options (DNS provider, DNS
+#              credential, ACME email). The worker applies them
+#              through its own options machinery before start — they
+#              are NOT written to a file.
+#
+# PERMISSIONS — why the data dir needs a pre-start hook
+# -----------------------------------------------------
+# Traefik refuses to use an ACME store that is group- or world-readable,
+# and the official image runs as root (uid 0). The bind mount keeps the
+# HOST directory's ownership, so the store's directory has to be
+# writable by uid 0 or the container dies with "permission denied" on
+# ``acme.json``. The ``ensure_writable_dir`` pre-start hook chowns the
+# directory to 0:0 when the worker runs as root, and falls back to a
+# world-writable mode when it cannot (an unprivileged worker cannot
+# chown a directory it owns to a different uid).
+#
+# The rendered compose file carries the DNS credential, so it is
+# written 0600 by the framework.
+
+version: 1
+kind: compose
+name: traefik
+display_name: Traefik
+description: Cluster ingress reverse proxy with TLS
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: false
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+compose_version: "3.8"
+# The health probe hits the plain-HTTP ``ping`` entrypoint (see the
+# header). The framework probes it on the loopback bind address.
+health_probe_path: /ping
+
+images:
+  - name: traefik
+    repo: traefik
+    default_tag: v3.7
+
+options:
+  listen_host:
+    type: string
+    default: "127.0.0.1"
+    ui_label: Ping bind address
+    ui_help: Host address the plain-HTTP ping entrypoint binds to. Keep it on loopback — the ping port is a health endpoint, not a service.
+    ui_group: Network
+  listen_port:
+    type: port
+    default: 8080
+    ui_label: Ping port
+    ui_help: Host port the plain-HTTP ping entrypoint listens on (health probe only)
+    ui_group: Network
+  ingress_port:
+    type: port
+    default: 443
+    ui_label: Ingress port
+    ui_help: Host port the HTTPS ingress listens on. Must be free on the proxy host.
+    ui_group: Network
+  acme_email:
+    type: string
+    default: ""
+    ui_label: ACME e-mail
+    ui_help: Contact address for the ACME account (Let's Encrypt expiry notices)
+    ui_group: TLS
+  dns_provider:
+    type: string
+    default: "godaddy"
+    ui_label: DNS provider
+    ui_help: "Traefik DNS-01 provider name (lego): godaddy, cloudflare, route53, ovh, azure, digitalocean, gandi, linode, vultr"
+    ui_group: TLS
+  dns_api_key:
+    type: string
+    default: ""
+    ui_label: DNS API key
+    ui_help: "Provider credential (GoDaddy: the API key). Needs DNS write scope for the zone."
+    ui_group: TLS
+  dns_api_secret:
+    type: string
+    default: ""
+    ui_label: DNS API secret
+    ui_help: "Provider credential (GoDaddy: the API secret that pairs with the key)"
+    ui_group: TLS
+
+pre_start_hooks:
+  # acme.json lives in the mounted data dir and must be writable by the
+  # container's root user — see the PERMISSIONS section in the header.
+  - kind: ensure_writable_dir
+    target: "$data_dir/data"
+    uid: 0
+    gid: 0
+  # The orchestrator's route table. The key must be present in the
+  # config body — a missing key fails the start loudly rather than
+  # leaving a stale route table in place.
+  - kind: materialize_orchestrator_config
+    key: routes
+    target: "$config_dir/dynamic/dynamic.yml"
+    format: yaml
+
+compose_template: |
+  version: "3.8"
+  services:
+    traefik:
+      image: $images.traefik
+      container_name: traefik
+      restart: unless-stopped
+      ports:
+        # HTTPS ingress — the fleet's single entry point.
+        - "$options.ingress_port:443"
+        # Plain-HTTP ping entrypoint, loopback only: the framework's
+        # health probe is HTTP-only.
+        - "$options.listen_host:$options.listen_port:8080"
+      environment:
+        # Lego (embedded in the official image) reads the GoDaddy
+        # credential from the environment.
+        GODADDY_API_KEY: "$options.dns_api_key"
+        GODADDY_API_SECRET: "$options.dns_api_secret"
+      volumes:
+        # The PARENT of dynamic/ is mounted — Traefik watches the
+        # directory, and a bind mount over the watched dir itself
+        # breaks the watch.
+        - "$config_dir:/etc/traefik"
+        # The ACME certificate store.
+        - "$data_dir/data:/data"
+      command:
+        - --entryPoints.websecure.address=:443
+        - --entryPoints.ping.address=:8080
+        - --ping=true
+        - --ping.entryPoint=ping
+        - --providers.file.directory=/etc/traefik/dynamic
+        - --certificatesResolvers.letsencrypt.acme.dnschallenge=true
+        - --certificatesResolvers.letsencrypt.acme.tlschallenge=false
+        - --certificatesResolvers.letsencrypt.acme.dnschallenge.provider=$options.dns_provider
+        - --certificatesResolvers.letsencrypt.acme.email=$options.acme_email
+        - --certificatesResolvers.letsencrypt.acme.storage=/data/acme.json
+        - --accesslog=true
+        - --log.level=INFO

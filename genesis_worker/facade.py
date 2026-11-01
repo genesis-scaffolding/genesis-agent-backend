@@ -450,6 +450,9 @@ class GenesisWorker:
         - Start failure after materialisation raises ``RuntimeError``;
           the on-disk config has been written and the service is
           stopped. The route layer translates this to ``500``.
+        - A config body carrying an ``options`` section applies those
+          values to the service's own options before the start (see
+          :meth:`_apply_orchestrator_options`).
         """
         svc = self._service_registry.get(name)  # KeyError → 404
 
@@ -466,11 +469,43 @@ class GenesisWorker:
                     message=f"failed to stop before start: {stop_result.message}",
                 )
 
+        svc = self._apply_orchestrator_options(name, config)
         svc._pending_orchestrator_config = config
         try:
             return svc.start()
         finally:
             svc._pending_orchestrator_config = None
+
+    def _apply_orchestrator_options(self, name: str, config: dict | None):
+        """Apply the config body's ``options`` section to the service.
+
+        A shared-utility config body may carry an ``options`` key: the
+        values the service's own options should take (the ingress
+        proxy's DNS provider, DNS credential and ACME e-mail). They
+        are written to the service's override sidecar — the same store
+        the Configure panel writes to (ADR-036) — and the service is
+        rebuilt so the next start renders the new values.
+
+        Nothing happens when the body has no ``options`` section: the
+        service keeps whatever its options currently say.
+        """
+        section = (config or {}).get("options")
+        if not isinstance(section, dict) or not section:
+            return self._service_registry.get(name)
+
+        from .utils.config_overrides import read_service_overrides, service_overrides_path
+
+        path = service_overrides_path(self._settings.paths.config_dir, name)
+        merged = {**read_service_overrides(path), **section}
+        self.write_service_overrides(name, merged)
+
+        try:
+            return self._service_registry.rebuild(name)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"cannot apply orchestrator options to {name!r}: "
+                "only declarative services expose an options schema"
+            ) from exc
 
     def restart_service(self, name: str, *, config: dict | None = None):
         """Convenience for start with optional config.

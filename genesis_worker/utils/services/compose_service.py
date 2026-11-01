@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ...contracts import (
     ServiceCapabilities,
@@ -238,12 +238,17 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         with the effective ref — recorded selection wins over default_tag —
         and the auto-port markers (``$auto_port.<name>``), which are
         resolved here with the allocator's port (ADR-043).
+
+        Mode 0600: the rendered file can carry credentials (the ingress
+        proxy's DNS token, a database password), so it is not world
+        readable.
         """
         body = self._rendered_template(ports)
         assert_no_markers(body, f"{self.name} compose template")
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
         path.write_text(body)
+        path.chmod(0o600)
         return path
 
     def start(self) -> StartResult:
@@ -314,7 +319,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
     # --- install axis -----------------------------------------------------
 
     def _installs(self) -> list[ServiceInstall]:
-        return self._installables
+        return cast("list[ServiceInstall]", self._installables)
 
 
 __all__ = [
