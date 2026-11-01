@@ -13,7 +13,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ...contracts import (
     ServiceCapabilities,
@@ -219,11 +219,16 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         The loader substituted every ``$placeholder`` at load time, except
         the image markers (``$images.<name>``), which are resolved here
         with the effective ref — recorded selection wins over default_tag.
+
+        Mode 0600: the rendered file can carry credentials (the ingress
+        proxy's DNS key, a database password), so it is not world
+        readable.
         """
         body = self._rendered_template()
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
         path.write_text(body)
+        path.chmod(0o600)
         return path
 
     def start(self) -> StartResult:
@@ -286,7 +291,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
     # --- install axis -----------------------------------------------------
 
     def _installs(self) -> list[ServiceInstall]:
-        return self._installables
+        return cast("list[ServiceInstall]", self._installables)
 
 
 __all__ = [

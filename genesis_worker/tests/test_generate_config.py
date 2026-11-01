@@ -9,10 +9,12 @@ Covers :func:`evaluate_recipe`, :func:`cmd_from_evaluated`,
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
+from genesis_worker.contracts.host import GpuDevice
 from genesis_worker.services.llama_swap.generate_config import (
     DEFAULT_HARDCODED_FLAGS,
     BuildOptions,
@@ -594,9 +596,11 @@ def test_cmd_c_flag_only_when_both_fit_ctx_and_ctx_size_set(
 # ---------------------------------------------------------------------------
 
 
-def _device(vendor: str = "nvidia", index: int = 0, label: str = "Test Card"):
-    from genesis_worker.contracts.host import GpuDevice
-
+def _device(
+    vendor: Literal["nvidia", "amd", "intel"] = "nvidia",
+    index: int = 0,
+    label: str = "Test Card",
+):
     return GpuDevice(vendor=vendor, index=index, label=label)
 
 
@@ -630,7 +634,7 @@ def test_cmd_emits_cuda_visible_devices_for_cuda_binary(
     )
     evaluated = _evaluate(_recipe(), opts, overrides={"device": _device("nvidia", 0, "RTX 2060")})
     assert evaluated.device is not None
-    assert evaluated.device.vendor == "nvidia"
+    assert cast("GpuDevice", evaluated.device).vendor == "nvidia"
     assert evaluated.env == ("CUDA_VISIBLE_DEVICES=0",)
     assert evaluated.cmd.startswith(f"{cuda_binary} \\")
 
@@ -861,7 +865,8 @@ def test_yaml_roundtrip_dict_coerces_to_compute_device(
     yaml_shape = {"vendor": "intel", "index": 0, "label": "Vulkan device 0"}
     evaluated = _evaluate(_recipe(), opts, overrides={"device": yaml_shape})
     assert evaluated.device == _device("intel", 0, "Vulkan device 0")
-    assert evaluated.device.vendor == "intel"
+    assert evaluated.device is not None
+    assert cast("GpuDevice", evaluated.device).vendor == "intel"
     # Env emission still works after the coercion.
     assert evaluated.env == ("GGML_VK_VISIBLE_DEVICES=0",)
 

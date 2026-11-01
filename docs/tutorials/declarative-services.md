@@ -357,6 +357,25 @@ If `key` is set but the body doesn't carry it, the hook raises
 picked up by accident because the new body happened to omit a key. With
 `key` unset the behaviour is unchanged (the whole body is written).
 
+**The `options` key — option values the orchestrator pushes**
+(ADR-042). A config body may carry an `options` key: the values the
+service's own options should take. The start path applies them to the
+service's per-service override sidecar (the same store the Configure
+panel writes to) and rebuilds the service, so the values the container
+is rendered from are the pushed ones. A body without an `options` key
+changes nothing.
+
+```json
+{
+  "routes": { "http": { "routers": {} } },
+  "options": { "dns_provider": "godaddy", "acme_email": "admin@example.com" }
+}
+```
+
+`options` is never written to a file by a hook — only file-shaped keys
+are. The service must be a YAML-declared service: the option schema and
+the rebuild path only exist there.
+
 **Adding a new hook kind** is one function in `utils/services/hooks.py`:
 
 ```python

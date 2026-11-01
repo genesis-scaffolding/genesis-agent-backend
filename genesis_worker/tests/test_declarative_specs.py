@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -91,10 +92,14 @@ _BUILT_IN_SPECS = (
     "romm.yaml",
     "sillytavern.yaml",
     "tidarr.yaml",
+    "traefik.yaml",
 )
 
+# Compose-kind specs (they publish several ports and are tested separately)
+_COMPOSE_SPECS = ("romm.yaml", "traefik.yaml")
+
 # Docker-kind specs only (excludes compose services like romm.yaml)
-_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s != "romm.yaml")
+_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS)
 
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
@@ -110,7 +115,7 @@ def _load_spec(name: str, tmp_path: Path) -> DockerService:
     return svc
 
 
-@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s != "romm.yaml"])
+@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS])
 def test_built_in_spec_parses_and_constructs(spec_name: str, tmp_path: Path) -> None:
     """Every built-in YAML must parse + construct via the framework loader."""
     svc = _load_spec(spec_name, tmp_path)
@@ -944,7 +949,7 @@ def test_romm_images_are_real_installables(tmp_path: Path) -> None:
 
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
-    installables = svc.installs()
+    installables = cast("list[DockerImageInstall]", svc.installs())
     assert len(installables) == 2
     refs = {i.image_ref for i in installables}
     assert refs == {"rommapp/romm:latest", "postgres:16-alpine"}
@@ -964,12 +969,15 @@ def test_romm_render_uses_recorded_selection(
     the selection file exists, and render substitutes the tracked tag
     marker with the selected tag.
     """
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
-    installable = svc.installs()[0]
+    installable = cast("DockerImageInstall", svc.installs()[0])
     installable._record_selection("2.9.1")
     # rebuild so the installable reads the fresh selection
     svc2 = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc2, ComposeService)
     rendered = svc2._render_compose_file().read_text()
     assert "image: rommapp/romm:2.9.1" in rendered
     # the other image keeps its load-time default tag
