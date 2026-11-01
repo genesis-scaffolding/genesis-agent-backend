@@ -6,6 +6,7 @@ Lifecycle behavior is exercised in :mod:`test_lifecycle` against a fake shim.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -243,7 +244,7 @@ def test_facade_regenerates_service_config(tmp_path: Path) -> None:
             },
         )
     )
-    svc = worker.service("llama_swap")
+    svc = cast("LlamaSwapService", worker.service("llama_swap"))
     _install_variant(svc, "llama-server-cuda")
     assert worker.regenerate_service_config("llama_swap") is True
     assert (tmp_path / "data" / "llama-swap" / "config.yaml").is_file()
