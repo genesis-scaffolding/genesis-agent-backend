@@ -188,6 +188,69 @@ def test_service_unknown_returns_404(client: TestClient) -> None:
     assert client.get("/v1/services/nope/status").status_code == 404
 
 
+# --- /v1/services summary: can_install --------------------------------------
+
+
+def test_service_summary_reports_can_install(client: TestClient) -> None:
+    """A service with the capability AND an installable reports can_install=True."""
+    r = client.get("/v1/services")
+    assert r.status_code == 200
+    by_name = {s["name"]: s for s in r.json()}
+    assert by_name["llama_swap"]["can_install"] is True
+
+
+def test_service_summary_can_install_false_without_installable(
+    client: TestClient, monkeypatch
+) -> None:
+    """``can_install`` is the effective value: capability AND an installable.
+
+    A service that declares ``can_install=True`` but exposes no
+    installable cannot be installed through the API, so the summary
+    must report ``can_install=False``.
+    """
+    from genesis_worker import GenesisWorker
+
+    original_list = GenesisWorker.list_services
+    original_service = GenesisWorker.service
+
+    def _no_installs(self, name):
+        svc = original_service(self, name)
+
+        def _empty() -> list:
+            return []
+
+        svc.installs = _empty
+        return svc
+
+    monkeypatch.setattr(GenesisWorker, "list_services", original_list)
+    monkeypatch.setattr(GenesisWorker, "service", _no_installs)
+
+    r = client.get("/v1/services")
+    assert r.status_code == 200
+    by_name = {s["name"]: s for s in r.json()}
+    assert by_name["llama_swap"]["can_install"] is False
+
+
+def test_service_summary_keeps_existing_fields(client: TestClient) -> None:
+    """The new field is additive — every pre-existing field is unchanged."""
+    r = client.get("/v1/services")
+    assert r.status_code == 200
+    for entry in r.json():
+        assert set(entry) == {
+            "name",
+            "display_name",
+            "description",
+            "category",
+            "is_enabled",
+            "is_available",
+            "state",
+            "runtime_endpoint",
+            "web_ui_endpoint",
+            "can_install",
+        }
+        assert isinstance(entry["can_install"], bool)
+
+
 # --- /v1/services POST endpoints (ADR-038) ---------------------------------
 
 
