@@ -26,7 +26,7 @@ import pytest
 
 from genesis_worker.contracts import ServiceState, ServiceStatus
 from genesis_worker.contracts.host import HostInfo
-from genesis_worker.services import llama_swap as _llama_swap_module
+from genesis_worker.services.llama_swap import lifecycle as _llama_swap_lifecycle
 from genesis_worker.utils.collectors import host_info as _host_info_module
 from genesis_worker.utils.collectors import metrics as _metrics_module
 from genesis_worker.utils.models import MachineMetrics
@@ -204,10 +204,14 @@ def _llama_swap_lifecycle_seam(request, monkeypatch: pytest.MonkeyPatch) -> None
     if "integration" in request.keywords:
         return
 
-    lifecycle = _llama_swap_module.lifecycle
+    lifecycle = _llama_swap_lifecycle
 
-    monkeypatch.setattr(lifecycle, "start_swap", lambda *args, **kwargs: _llama_swap_seam_error("start_swap"))
-    monkeypatch.setattr(lifecycle, "stop_swap", lambda *args, **kwargs: _llama_swap_seam_error("stop_swap"))
+    monkeypatch.setattr(
+        lifecycle, "start_swap", lambda *args, **kwargs: _llama_swap_seam_error("start_swap")
+    )
+    monkeypatch.setattr(
+        lifecycle, "stop_swap", lambda *args, **kwargs: _llama_swap_seam_error("stop_swap")
+    )
     monkeypatch.setattr(lifecycle, "is_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         lifecycle,

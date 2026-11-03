@@ -26,7 +26,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["genesis_worker"]
-include = ["genesis_worker/services/llama_swap/data/recipes.yaml"]
+include = [
+    "genesis_worker/services/llama_swap/data/recipes.yaml",
+    "genesis_worker/services/llama_swap/data/installables.yaml",
+]
 
 [dependency-groups]
 dev = [

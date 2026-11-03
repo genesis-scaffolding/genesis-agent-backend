@@ -107,8 +107,16 @@ def _on_variant_change() -> None:
 
 with st.container(border=True):
     st.subheader("Variant")
-    option_labels = ["(legacy)", "auto", "cuda", "cpu", "vulkan"]
-    current = svc.llama_server_variant or "(legacy)"
+    option_labels = ["(legacy)", "auto", *svc.variant_keys()]
+    configured = svc.llama_server_variant or "(legacy)"
+    if configured in option_labels:
+        current = configured
+    else:
+        current = "auto"
+        svc.set_llama_server_variant("auto")
+        st.warning(
+            f"Saved variant {configured!r} is no longer available; using auto until you choose another."
+        )
     choice = st.selectbox(
         "llama-server variant",
         option_labels,
@@ -193,7 +201,8 @@ def _on_save_server_flags() -> None:
     raw = st.session_state.get("status-server-flags") or ""
     flags = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     svc.set_hardcoded_flags(flags)
-    values: dict = {}
+    values = worker.read_service_overrides(SERVICE_NAME)
+    values.pop("hardcoded_flags", None)
     if flags:
         values["hardcoded_flags"] = flags
     worker.write_service_overrides(SERVICE_NAME, values)
@@ -238,7 +247,9 @@ with st.container(border=True):
             "Revert to defaults", key="status-server-flags-revert", use_container_width=True
         ):
             svc.set_hardcoded_flags(None)
-            worker.write_service_overrides(SERVICE_NAME, {})
+            values = worker.read_service_overrides(SERVICE_NAME)
+            values.pop("hardcoded_flags", None)
+            worker.write_service_overrides(SERVICE_NAME, values)
             ok = worker.regenerate_service_config(SERVICE_NAME)
             if ok:
                 st.success("Reverted + regenerated. Restart llama-swap to apply.")

@@ -26,11 +26,11 @@ from ...contracts import (
     StartResult,
     StopResult,
 )
+from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
 from ..process import DockerContainer
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_stack import DockerComposeStack
-from .docker_service import DockerImageInstall
 
 _IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
 
@@ -97,7 +97,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         self._compose_dir = ctx.state_dir / "compose"
         self._project_name = f"{config.name}-stack"
         self._stack = DockerComposeStack(self._compose_dir, self._project_name)
-        self._installables = [
+        self._installables: list[ServiceInstall] = [
             DockerImageInstall(
                 image_repo=img.repo,
                 image_tag=img.default_tag,

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -946,12 +947,13 @@ def test_romm_images_are_real_installables(tmp_path: Path) -> None:
     assert isinstance(svc, ComposeService)
     installables = svc.installs()
     assert len(installables) == 2
-    refs = {i.image_ref for i in installables}
-    assert refs == {"rommapp/romm:latest", "postgres:16-alpine"}
     assert all(isinstance(i, DockerImageInstall) for i in installables)
+    typed_installables = cast(list[DockerImageInstall], installables)
+    refs = {i.image_ref for i in typed_installables}
+    assert refs == {"rommapp/romm:latest", "postgres:16-alpine"}
     # installed_version is a real tag (or None before first install),
     # never a template hash.
-    for i in installables:
+    for i in typed_installables:
         assert i.installed_version() in (None, i.image_ref.split(":", 1)[1])
 
 
@@ -964,12 +966,15 @@ def test_romm_render_uses_recorded_selection(
     the selection file exists, and render substitutes the tracked tag
     marker with the selected tag.
     """
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
-    installable = svc.installs()[0]
+    installable = cast(DockerImageInstall, svc.installs()[0])
     installable._record_selection("2.9.1")
     # rebuild so the installable reads the fresh selection
     svc2 = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc2, ComposeService)
     rendered = svc2._render_compose_file().read_text()
     assert "image: rommapp/romm:2.9.1" in rendered
     # the other image keeps its load-time default tag

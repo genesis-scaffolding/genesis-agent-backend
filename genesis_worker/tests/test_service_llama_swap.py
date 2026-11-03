@@ -6,6 +6,7 @@ Lifecycle behavior is exercised in :mod:`test_lifecycle` against a fake shim.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -243,7 +244,7 @@ def test_facade_regenerates_service_config(tmp_path: Path) -> None:
             },
         )
     )
-    svc = worker.service("llama_swap")
+    svc = cast(LlamaSwapService, worker.service("llama_swap"))
     _install_variant(svc, "llama-server-cuda")
     assert worker.regenerate_service_config("llama_swap") is True
     assert (tmp_path / "data" / "llama-swap" / "config.yaml").is_file()
@@ -356,11 +357,11 @@ def test_is_available_false_when_no_install(tmp_path: Path) -> None:
 
 def test_primary_installable_returns_llama_swap_install(tmp_path: Path) -> None:
     """The dashboard's install button drives the llama-swap binary, not a llama-server variant."""
-    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     primary = svc.primary_installable()
-    assert isinstance(primary, LlamaSwapBinary)
+    assert isinstance(primary, GithubReleaseInstall)
     assert primary.name == "llama-swap"
 
 
@@ -373,11 +374,11 @@ def test_primary_installable_is_set_even_when_not_installed(tmp_path: Path) -> N
 
 def test_is_available_true_when_llama_swap_installed(tmp_path: Path) -> None:
     """A laid-down v0.4.5 install with a real binary at the expected path."""
-    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     installable = svc.installs()[0]
-    assert isinstance(installable, LlamaSwapBinary)
+    assert isinstance(installable, GithubReleaseInstall)
     version = "v0.4.5"
     install_root = installable._layout.installs_root / version  # noqa: SLF001 — testing internal layout
     install_root.mkdir(parents=True)
@@ -398,12 +399,12 @@ def test_start_rejects_when_no_install(tmp_path: Path) -> None:
 
 def test_llama_server_cuda_binary_path_resolves_nested_layout(tmp_path: Path) -> None:
     """ai-dock's tarball extracts to ``cuda-12.8/llama-server`` — glob finds it."""
-    from genesis_worker.services.llama_swap.installs import LlamaServerCUDA
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     installable = svc.installs()[1]
-    assert isinstance(installable, LlamaServerCUDA)
-    assert installable.binary_name == "llama-server"
+    assert isinstance(installable, GithubReleaseInstall)
+    assert installable.record.binary_name == "llama-server"
     assert installable.name == "llama-server-cuda"
 
     version = "b10375"
@@ -911,41 +912,49 @@ def test_installs_returns_four_entries_duplicate(tmp_path: Path) -> None:
 
 def test_upstream_llama_cpu_asset_matches_real_naming() -> None:
     """Upstream CPU assets use ``bin-ubuntu-x64.tar.gz``."""
-    from genesis_worker.services.llama_swap.installs import _upstream_llama_cpu_asset
+    from genesis_worker.services.llama_swap.installables import load_seed_records
+    from genesis_worker.utils.installables import GithubReleaseRecord, match_asset
 
-    assert _upstream_llama_cpu_asset({"name": "llama-b10375-bin-ubuntu-x64.tar.gz"}) is True
+    pattern = next(
+        record.asset_pattern
+        for record in load_seed_records()
+        if isinstance(record, GithubReleaseRecord) and record.name == "llama-server-cpu"
+    )
+    assert match_asset({"name": "llama-b10375-bin-ubuntu-x64.tar.gz"}, pattern) is True
     for name in (
         "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz",
         "llama-b10375-bin-ubuntu-arm64.tar.gz",
         "llama-b10375-bin-ubuntu-sycl-fp16-x64.tar.gz",
     ):
-        assert _upstream_llama_cpu_asset({"name": name}) is False, name
+        assert match_asset({"name": name}, pattern) is False, name
 
 
 def test_upstream_llama_vulkan_asset_matches_real_naming() -> None:
     """Upstream Vulkan assets use ``bin-ubuntu-vulkan-x64.tar.gz``."""
-    from genesis_worker.services.llama_swap.installs import (
-        _upstream_llama_vulkan_asset,
-    )
+    from genesis_worker.services.llama_swap.installables import load_seed_records
+    from genesis_worker.utils.installables import GithubReleaseRecord, match_asset
 
-    assert (
-        _upstream_llama_vulkan_asset({"name": "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz"}) is True
+    pattern = next(
+        record.asset_pattern
+        for record in load_seed_records()
+        if isinstance(record, GithubReleaseRecord) and record.name == "llama-server-vulkan"
     )
+    assert match_asset({"name": "llama-b10375-bin-ubuntu-vulkan-x64.tar.gz"}, pattern) is True
     for name in (
         "llama-b10375-bin-ubuntu-x64.tar.gz",
         "llama-b10375-bin-ubuntu-arm64.tar.gz",
         "llama-b10375-bin-ubuntu-sycl-x64.tar.gz",
     ):
-        assert _upstream_llama_vulkan_asset({"name": name}) is False, name
+        assert match_asset({"name": name}, pattern) is False, name
 
 
 def test_llama_server_cpu_binary_path_resolves_legacy_layout(tmp_path: Path) -> None:
     """Upstream tarballs usually put ``llama-server`` at archive root."""
-    from genesis_worker.services.llama_swap.installs import LlamaServerCPU
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     installable = next(i for i in svc.installs() if i.name == "llama-server-cpu")
-    assert isinstance(installable, LlamaServerCPU)
+    assert isinstance(installable, GithubReleaseInstall)
 
     version = "b10375"
     install_root = installable._layout.installs_root / version  # noqa: SLF001
@@ -960,12 +969,12 @@ def test_llama_server_cpu_binary_path_resolves_legacy_layout(tmp_path: Path) -> 
 
 def test_llama_swap_binary_path_resolves_legacy_layout(tmp_path: Path) -> None:
     """mostlygeek/llama-swap's tarball puts the binary at the archive root."""
-    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     installable = svc.installs()[0]
-    assert isinstance(installable, LlamaSwapBinary)
-    assert installable.binary_name == "llama-swap"
+    assert isinstance(installable, GithubReleaseInstall)
+    assert installable.record.binary_name == "llama-swap"
 
     version = "v249"
     install_root = installable._layout.installs_root / version  # noqa: SLF001
@@ -980,11 +989,11 @@ def test_llama_swap_binary_path_resolves_legacy_layout(tmp_path: Path) -> None:
 
 def test_uninstall_installable_refuses_while_running(tmp_path: Path, monkeypatch) -> None:
     """Uninstall while the service reports running raises RuntimeError."""
-    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     installable = svc.installs()[0]
-    assert isinstance(installable, LlamaSwapBinary)
+    assert isinstance(installable, GithubReleaseInstall)
     version = "v0.4.5"
     install_root = installable._layout.installs_root / version  # noqa: SLF001
     install_root.mkdir(parents=True)
@@ -1000,11 +1009,11 @@ def test_uninstall_installable_refuses_while_running(tmp_path: Path, monkeypatch
 
 def test_uninstall_installable_succeeds_when_stopped(tmp_path: Path, monkeypatch) -> None:
     """Uninstall works when the service is not running."""
-    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     installable = svc.installs()[0]
-    assert isinstance(installable, LlamaSwapBinary)
+    assert isinstance(installable, GithubReleaseInstall)
     version = "v0.4.5"
     install_root = installable._layout.installs_root / version  # noqa: SLF001
     install_root.mkdir(parents=True)

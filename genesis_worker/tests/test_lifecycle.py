@@ -356,6 +356,7 @@ def test_is_running_false_when_session_absent() -> None:
     """Integration: ``lifecycle.is_running`` returns False when the tmux session doesn't exist."""
     assert lifecycle.is_running("never-created-session", "127.0.0.1:1") is False
 
+
 @pytest.mark.integration
 def test_is_running_false_when_session_exists_but_server_dead(
     tmp_path: Path,
@@ -379,6 +380,7 @@ def test_is_running_false_when_session_exists_but_server_dead(
         check=False,
     )
     import time
+
     time.sleep(0.2)
 
     try:
@@ -442,9 +444,6 @@ def test_start_swap_does_not_pkill_unrelated_llama_server(
     # The fix removed the unconditional pkill from start_swap.
     # No call in the recorded list may contain the system-wide pattern.
     for cmd in pkill_calls:
-        assert not (
-            cmd[0] == "pkill"
-            and "-9" in cmd
-            and "-f" in cmd
-            and "llama-server" in cmd
-        ), f"system-wide pkill found: {cmd}  (t-b8ozcx regression)"
+        assert not (cmd[0] == "pkill" and "-9" in cmd and "-f" in cmd and "llama-server" in cmd), (
+            f"system-wide pkill found: {cmd}  (t-b8ozcx regression)"
+        )

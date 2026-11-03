@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from ...contracts import (
     Catalog,
     ComputeDevice,
@@ -20,6 +22,14 @@ from ...contracts import (
     StopResult,
     UiPage,
 )
+from ...utils.acquire import fetch_latest_release
+from ...utils.installables import (
+    InstallableRecord,
+    InstallDirs,
+    ReleaseCandidate,
+    build_installable,
+    merge_records,
+)
 from . import lifecycle
 from .export_pi_config import build_provider_from_configs, write_models_json
 from .generate_config import (
@@ -30,7 +40,11 @@ from .generate_config import (
     read_generated_at,
     write_config,
 )
-from .installs import LlamaServerCPU, LlamaServerCUDA, LlamaServerVulkan, LlamaSwapBinary
+from .installables import (
+    candidate_assets,
+    load_seed_records,
+    parse_repo_url,
+)
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
 from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes, RecipesOverlayStore, RecipesStore
@@ -44,7 +58,18 @@ class LlamaSwapService(InferenceService):
 
     def __init__(self, ctx: ServiceContext) -> None:
         super().__init__(ctx)
-        opts = LlamaSwapOptions(**ctx.options)
+        self._seeds = load_seed_records()
+        self._installable_records_error: str | None = None
+        try:
+            opts = LlamaSwapOptions(**ctx.options)
+        except ValidationError as exc:
+            if not any(error.get("loc", ("",))[0] == "installables" for error in exc.errors()):
+                raise
+            clean_options = {
+                key: value for key, value in ctx.options.items() if key != "installables"
+            }
+            opts = LlamaSwapOptions(**clean_options)
+            self._installable_records_error = str(exc)
         self._options = opts
 
         self._config_path = opts.config_path or ctx.data_dir / "config.yaml"
@@ -57,33 +82,22 @@ class LlamaSwapService(InferenceService):
         self._recipes_overlay = RecipesOverlayStore(self._override_recipes_path)
         self._overrides = OverridesStore(self._overrides_path)
 
-        self._llama_swap_install = LlamaSwapBinary(
-            data_dir=ctx.data_dir,
-            cache_dir=ctx.cache_dir,
-            state_dir=ctx.state_dir,
-            secrets=ctx.secrets,
-        )
-        self._llama_server_cuda_install = LlamaServerCUDA(
-            data_dir=ctx.data_dir,
-            cache_dir=ctx.cache_dir,
-            state_dir=ctx.state_dir,
-            secrets=ctx.secrets,
-        )
-        self._llama_server_cpu_install = LlamaServerCPU(
-            data_dir=ctx.data_dir,
-            cache_dir=ctx.cache_dir,
-            state_dir=ctx.state_dir,
-            secrets=ctx.secrets,
-        )
-        self._llama_server_vulkan_install = LlamaServerVulkan(
-            data_dir=ctx.data_dir,
-            cache_dir=ctx.cache_dir,
-            state_dir=ctx.state_dir,
-            secrets=ctx.secrets,
-        )
+        self._user_records: list[InstallableRecord] = []
+        self._records = merge_records(self._seeds, self._user_records)
+        self._installables: dict[str, ServiceInstall] = {}
+        try:
+            self.set_installable_records(list(opts.installables))
+        except ValueError as exc:
+            self._installable_records_error = str(exc)
+            self._user_records = []
+            self._options.installables = []
+            self._records = merge_records(self._seeds, self._user_records)
+            self._rebuild_installables()
+        self._github_token = ctx.secrets.get("github_token")
 
     def is_available(self) -> bool:
-        return self._llama_swap_install.binary_path() is not None
+        primary = self.primary_installable()
+        return primary is not None and primary.binary_path() is not None
 
     def capabilities(self) -> ServiceCapabilities:
         return ServiceCapabilities(
@@ -105,19 +119,100 @@ class LlamaSwapService(InferenceService):
         return "OpenAI-compatible LLM server"
 
     def installs(self) -> list[ServiceInstall]:
-        return [
-            self._llama_swap_install,
-            self._llama_server_cuda_install,
-            self._llama_server_cpu_install,
-            self._llama_server_vulkan_install,
-        ]
+        return list(self._installables.values())
 
     def primary_installable(self) -> ServiceInstall | None:
-        """The llama-swap binary. The llama-server variants are not 'primary' — they
-        stay on the Binaries page because the variant pick (CUDA vs CPU vs Vulkan)
-        doesn't fit on the dashboard.
-        """
-        return self._llama_swap_install
+        """The installable marked as primary, normally the llama-swap proxy."""
+        for record in self._records:
+            if record.enabled and record.primary:
+                return self._installables.get(record.name)
+        return None
+
+    def _rebuild_installables(self) -> None:
+        dirs = InstallDirs(
+            data_dir=self._ctx.data_dir,
+            cache_dir=self._ctx.cache_dir,
+            state_dir=self._ctx.state_dir,
+        )
+        self._installables = {
+            record.name: build_installable(record, dirs, secrets=self._ctx.secrets)
+            for record in self._records
+            if record.enabled
+        }
+
+    def installable_records(self) -> list[InstallableRecord]:
+        """All merged records, including disabled overrides."""
+        return list(self._records)
+
+    def user_installable_records(self) -> list[InstallableRecord]:
+        """The user-owned records persisted in the service sidecar."""
+        return list(self._user_records)
+
+    def seed_installable_records(self) -> list[InstallableRecord]:
+        """The bundled records beneath the user's overrides."""
+        return list(self._seeds)
+
+    @property
+    def installable_records_error(self) -> str | None:
+        return self._installable_records_error
+
+    def set_installable_records(self, user_records: list[InstallableRecord]) -> None:
+        """Replace the in-memory user records and rebuild the installables."""
+        names = [record.name for record in user_records]
+        if len(names) != len(set(names)):
+            raise ValueError("installable record names must be unique")
+        merged = merge_records(self._seeds, user_records)
+        variants = [
+            record.variant
+            for record in merged
+            if record.kind == "github_release" and record.variant
+        ]
+        if "auto" in variants:
+            raise ValueError("installable record variant key 'auto' is reserved")
+        if len(variants) != len(set(variants)):
+            raise ValueError("installable record variant keys must be unique")
+        self._user_records = list(user_records)
+        self._options.installables = list(user_records)
+        self._records = merged
+        self._rebuild_installables()
+
+    def disable_installable(self, name: str) -> None:
+        """Uninstall and hide a record, leaving a disabled user override."""
+        record = next((item for item in self._records if item.name == name), None)
+        if record is None:
+            raise KeyError(f"unknown installable {name!r}")
+        installable = self._installables.get(name)
+        try:
+            active_binary = self.effective_llama_server_binary()
+        except RuntimeError:
+            active_binary = None
+        if installable is not None and active_binary is not None:
+            binary = installable.binary_path()
+            if binary is not None and str(binary) == active_binary:
+                raise RuntimeError(
+                    f"cannot disable {name!r} while its binary is the active llama-server — "
+                    "select another variant first"
+                )
+        if installable is not None:
+            self.uninstall_installable(name)
+        disabled = record.model_copy(update={"enabled": False})
+        overrides = {item.name: item for item in self._user_records}
+        overrides[name] = disabled
+        self.set_installable_records(list(overrides.values()))
+
+    def list_release_candidates(self, repo_url: str) -> ReleaseCandidate:
+        """Return the latest release's Linux x64 archive assets from GitHub metadata."""
+        owner, repo = parse_repo_url(repo_url)
+        release = fetch_latest_release(owner, repo, auth_token=self._github_token)
+        tag = str(release.get("tag_name", ""))
+        raw_assets = release.get("assets", [])
+        assets = raw_assets if isinstance(raw_assets, list) else []
+        candidates = candidate_assets(assets, tag)
+        if not candidates:
+            raise ValueError(
+                f"latest release of {owner}/{repo} has no usable Linux x64 archive asset"
+            )
+        return ReleaseCandidate(repo=f"{owner}/{repo}", tag=tag, assets=tuple(candidates))
 
     def uninstall_installable(self, name: str, *, version: str | None = None) -> None:
         """Remove an installable's installed version. Refuses if the service is running.
@@ -150,11 +245,21 @@ class LlamaSwapService(InferenceService):
     def llama_server_variant(self) -> str | None:
         return self._options.llama_server_variant
 
+    def variant_keys(self) -> list[str]:
+        """Variant keys exposed by the currently enabled records."""
+        return [
+            record.variant
+            for record in self._records
+            if (record.enabled and record.kind == "github_release" and record.variant is not None)
+        ]
+
     def set_llama_server_variant(self, variant: str | None) -> None:
         """UI write path. ``None`` reverts to legacy fallback."""
-        if variant not in ("auto", "cuda", "cpu", "vulkan", None):
-            raise ValueError(f"unknown variant {variant!r}; expected auto/cuda/cpu/vulkan or None")
-        self._options.llama_server_variant = variant  # type: ignore[assignment]
+        if variant not in (None, "auto", *self.variant_keys()):
+            raise ValueError(
+                f"unknown variant {variant!r}; expected auto, a record variant, or None"
+            )
+        self._options.llama_server_variant = variant
 
     # --- default GPU -------------------------------------------------------
     # Per-machine override of the variant auto-resolve. When set, the
@@ -236,27 +341,43 @@ class LlamaSwapService(InferenceService):
             return None
         if variant == "auto":
             return self._auto_resolve()
-        return self._variant_binary(f"llama-server-{variant}")
+        record = self._record_for_variant(variant)
+        if record is None:
+            return None
+        installable = self._installables.get(record.name)
+        if installable is None:
+            return None
+        binary = installable.binary_path()
+        return str(binary) if binary is not None else None
+
+    def _record_for_variant(self, variant: str) -> InstallableRecord | None:
+        return next(
+            (
+                record
+                for record in self._records
+                if (
+                    record.enabled and record.kind == "github_release" and record.variant == variant
+                )
+            ),
+            None,
+        )
 
     def _auto_resolve(self) -> str | None:
-        """Force the variant that matches :attr:`effective_default_device`.
-
-        ``effective_default_device`` always returns a concrete device
-        (the persisted ``default_device`` if set, else the smart
-        auto-pick: NVIDIA 0 → AMD 0 → Intel 0 → CPU). The matching
-        variant binary is required; the service fails loud at
-        config-regen time rather than silently falling back. No more
-        implicit variant cascade — the framework commits.
-        """
-        requested = self.effective_default_device
-        variant = requested.variant
-        binary = self._variant_binary(f"llama-server-{variant}")
-        if binary is None:
-            raise RuntimeError(
-                f"default device requires llama-server-{variant} but it is not "
-                f"installed — install it via the Binaries page"
-            )
-        return binary
+        """Force the installable whose backend matches the selected device."""
+        backend = self.effective_default_device.variant
+        for record in self._records:
+            if not record.enabled or record.backend != backend:
+                continue
+            installable = self._installables.get(record.name)
+            if installable is None:
+                continue
+            binary = installable.binary_path()
+            if binary is not None:
+                return str(binary)
+        raise RuntimeError(
+            f"default device requires llama-server-{backend} but it is not "
+            "installed — install it via the Binaries page"
+        )
 
     def _variant_binary(self, name: str) -> str | None:
         """Look up an installed variant by its installable name."""
@@ -265,6 +386,20 @@ class LlamaSwapService(InferenceService):
                 bp = installable.binary_path()
                 if bp is not None:
                     return str(bp)
+        return None
+
+    def _backend_for_binary_path(self, binary_path: str | None) -> str | None:
+        if binary_path is None:
+            return None
+        for record in self._records:
+            if not record.enabled:
+                continue
+            installable = self._installables.get(record.name)
+            if installable is None:
+                continue
+            binary = installable.binary_path()
+            if binary is not None and str(binary) == binary_path:
+                return record.backend
         return None
 
     def _build_options(self) -> BuildOptions:
@@ -285,13 +420,13 @@ class LlamaSwapService(InferenceService):
         if variant is None:
             resolved_variant = None
         elif variant == "auto":
-            # ``auto`` resolves to one of cuda/vulkan/cpu via
-            # ``_default_llama_server_binary``. Map the resolved binary
-            # path back to the variant by checking the installable name.
             binary_path = self._default_llama_server_binary()
-            resolved_variant = _variant_for_binary_path(self.installs(), binary_path)
+            resolved_variant = self._backend_for_binary_path(binary_path)
         else:
-            resolved_variant = variant
+            record = self._record_for_variant(variant)
+            if record is None:
+                raise RuntimeError(f"no llama-server binary for variant {variant!r}")
+            resolved_variant = record.backend
         return BuildOptions(
             repo_root=self._ctx.repo_root,
             kv_quant_over=self._options.kv_quant_over_bytes,
@@ -400,7 +535,8 @@ class LlamaSwapService(InferenceService):
         return f"http://{self.public_host()}:{self._port()}/"
 
     def start(self) -> StartResult:
-        binary = self._llama_swap_install.binary_path()
+        primary = self.primary_installable()
+        binary = primary.binary_path() if primary is not None else None
         if binary is None:
             return StartResult(ok=False, message="llama-swap binary not installed")
         return lifecycle.start_swap(
@@ -576,27 +712,6 @@ def smart_default_compute_device(
             if isinstance(d, GpuDevice) and d.vendor == vendor:
                 return d
     return CpuDevice()
-
-
-def _variant_for_binary_path(
-    installables: list[ServiceInstall], binary_path: str | None
-) -> str | None:
-    """Reverse-lookup: which variant produced ``binary_path``?
-
-    Walks the installable list and returns the variant suffix of the
-    installable whose ``binary_path()`` matches. Returns ``None`` for
-    the legacy fallback (no installable owns the path).
-    """
-    if binary_path is None:
-        return None
-    for installable in installables:
-        bp = installable.binary_path()
-        if bp is not None and str(bp) == binary_path:
-            name = installable.name
-            if name.startswith("llama-server-"):
-                return name[len("llama-server-") :]
-            return None
-    return None
 
 
 __all__ = ["LlamaSwapService"]

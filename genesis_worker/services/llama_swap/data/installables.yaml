@@ -1,0 +1,33 @@
+installables:
+  - kind: github_release
+    name: llama-swap
+    label: llama-swap proxy
+    primary: true
+    repo: mostlygeek/llama-swap
+    asset_pattern: "*_linux_amd64.tar.gz"
+    binary_name: llama-swap
+    checksums_asset_suffix: "_checksums.txt"
+  - kind: github_release
+    name: llama-server-cuda
+    label: llama-server (CUDA, genesis-scaffolding)
+    variant: cuda
+    backend: cuda
+    repo: genesis-scaffolding/llama.cpp-cuda
+    asset_pattern: "llama.cpp-*-cuda-*-amd64.tar.gz"
+    binary_name: llama-server
+  - kind: github_release
+    name: llama-server-cpu
+    label: llama-server (CPU, upstream)
+    variant: cpu
+    backend: cpu
+    repo: ggml-org/llama.cpp
+    asset_pattern: "llama-*-bin-ubuntu-x64.tar.gz"
+    binary_name: llama-server
+  - kind: github_release
+    name: llama-server-vulkan
+    label: llama-server (Vulkan, upstream)
+    variant: vulkan
+    backend: vulkan
+    repo: ggml-org/llama.cpp
+    asset_pattern: "llama-*-bin-ubuntu-vulkan-x64.tar.gz"
+    binary_name: llama-server

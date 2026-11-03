@@ -1,10 +1,20 @@
-"""Binaries — install / uninstall / version-pick for service installables (ADR-012)."""
+"""Binaries — installables, records, and version-pick for llama-swap."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import streamlit as st
 
 from genesis_worker.contracts import AcquireStateKind, AcquireView
+
+from ....utils.installables import (
+    DockerImageRecord,
+    GithubReleaseRecord,
+    InstallableRecord,
+    derive_asset_pattern,
+)
+from ..installables import fork_slug, guess_backend, parse_repo_url
 
 SERVICE_NAME = "llama_swap"
 
@@ -21,6 +31,10 @@ st.caption(
 _SESSION_KEY_PREFIX = "binaries/sessions"
 _VERSIONS_KEY_PREFIX = "binaries/available_versions"
 _DROP_PENDING_PREFIX = "binaries/drop_pending"
+_DRAFT_KEY = "binaries/installable-draft"
+_FORM_REVISION_KEY = "binaries/installable-form-revision"
+_CANDIDATE_KEY = "binaries/release-candidate"
+_FLASH_KEY = "binaries/installable-flash"
 
 
 def _session_key(name: str) -> str:
@@ -33,6 +47,43 @@ def _versions_key(name: str) -> str:
 
 def _drop_pending_key(name: str) -> str:
     return f"{_DROP_PENDING_PREFIX}/{name}"
+
+
+def _form_revision() -> int:
+    return int(st.session_state.get(_FORM_REVISION_KEY, 0))
+
+
+def _set_default(key: str, value: Any) -> None:
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+def _record_payload(record: InstallableRecord) -> dict[str, Any]:
+    return record.model_dump(mode="json")
+
+
+def _persist_user_records(records: list[InstallableRecord]) -> None:
+    values = worker.read_service_overrides(SERVICE_NAME)
+    values["installables"] = [_record_payload(record) for record in records]
+    worker.write_service_overrides(SERVICE_NAME, values)
+    svc.set_installable_records(records)
+
+
+def _replace_user_record(
+    records: list[InstallableRecord],
+    replacement: InstallableRecord,
+) -> list[InstallableRecord]:
+    updated: list[InstallableRecord] = []
+    replaced = False
+    for record in records:
+        if record.name == replacement.name:
+            updated.append(replacement)
+            replaced = True
+        else:
+            updated.append(record)
+    if not replaced:
+        updated.append(replacement)
+    return updated
 
 
 def _render_step(step: AcquireView) -> None:
@@ -51,6 +102,310 @@ def _render_step(step: AcquireView) -> None:
     else:
         st.info(step.title or step.kind)
 
+
+def _render_record_editor() -> None:
+    revision = _form_revision()
+    draft: dict[str, Any] = st.session_state.get(_DRAFT_KEY, {})
+    editing = bool(draft)
+    editing_name = str(draft.get("name", "")) if editing else ""
+
+    with st.container(border=True):
+        st.subheader("Installables")
+        st.caption(
+            "The four built-ins are bundled seed records. Add, edit, enable, disable, "
+            "or remove any record here; user records override a seed with the same name."
+        )
+        if svc.installable_records_error:
+            st.error(
+                "The saved installable records are invalid; only the bundled seeds are active. "
+                f"{svc.installable_records_error}"
+            )
+
+        kind_options = ["github_release", "docker_image"]
+        draft_kind = str(draft.get("kind", "github_release"))
+        kind_index = kind_options.index(draft_kind) if draft_kind in kind_options else 0
+        kind = st.selectbox(
+            "Kind",
+            kind_options,
+            index=kind_index,
+            key=f"installable-kind-{revision}",
+        )
+
+        selected_asset = None
+        candidate = None
+        github_url = ""
+        if kind == "github_release":
+            default_url = str(draft.get("repo_url", ""))
+            if not default_url and draft.get("repo"):
+                default_url = f"https://github.com/{draft['repo']}"
+            url_key = f"installable-github-url-{revision}"
+            _set_default(url_key, default_url)
+            github_url = st.text_input("GitHub repository URL", key=url_key)
+
+            if st.button("Fetch release assets", key=f"installable-fetch-{revision}"):
+                try:
+                    candidate = svc.list_release_candidates(github_url)
+                except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                    st.session_state[_CANDIDATE_KEY] = None
+                    st.error(f"Could not fetch release metadata: {exc}")
+                else:
+                    st.session_state[_CANDIDATE_KEY] = (github_url.strip(), candidate)
+                    if not editing:
+                        owner, repo = candidate.repo.split("/", 1)
+                        slug = fork_slug(owner, repo)
+                        st.session_state[f"installable-name-{revision}"] = f"llama-server-{slug}"
+                        st.session_state[f"installable-variant-{revision}"] = slug
+
+            stored = st.session_state.get(_CANDIDATE_KEY)
+            if stored is not None:
+                fetched_url, fetched_candidate = stored
+                if fetched_url == github_url.strip() and fetched_candidate.assets:
+                    candidate = fetched_candidate
+                    st.caption(f"Latest release: `{candidate.tag}`")
+                    labels = []
+                    for asset in candidate.assets:
+                        size_mb = round((asset.size_bytes or 0) / 1_000_000, 1)
+                        labels.append(f"{asset.name} ({size_mb} MB)")
+                    selected_label = st.selectbox(
+                        "Release asset",
+                        labels,
+                        key=f"installable-asset-{revision}",
+                    )
+                    selected_asset = next(
+                        asset
+                        for asset, label in zip(candidate.assets, labels, strict=True)
+                        if label == selected_label
+                    )
+
+        with st.form(f"installable-form-{revision}"):
+            name_key = f"installable-name-{revision}"
+            _set_default(name_key, editing_name)
+            name = st.text_input(
+                "Name",
+                key=name_key,
+                disabled=editing,
+                help="The install directory name; it cannot be renamed after creation.",
+            )
+
+            variant_key = f"installable-variant-{revision}"
+            _set_default(variant_key, str(draft.get("variant", "") or ""))
+            variant = st.text_input("Variant key", key=variant_key)
+
+            label_key = f"installable-label-{revision}"
+            _set_default(label_key, str(draft.get("label", "") or ""))
+            label = st.text_input("Label (optional)", key=label_key)
+
+            asset_pattern = ""
+            backend = None
+            image = ""
+            tag_pattern = ""
+            if kind == "github_release":
+                default_pattern = str(draft.get("asset_pattern", "") or "")
+                if selected_asset is not None:
+                    candidate_tag = candidate.tag if candidate is not None else ""
+                    default_pattern = derive_asset_pattern(selected_asset.name, candidate_tag)
+                pattern_key = f"installable-pattern-{revision}-{selected_asset.name if selected_asset else 'manual'}"
+                _set_default(pattern_key, default_pattern)
+                asset_pattern = st.text_input(
+                    "Asset pattern (glob)",
+                    key=pattern_key,
+                    help="Glob matched against release asset names, ignoring case.",
+                )
+                backend_options = ["cuda", "vulkan", "rocm", "cpu"]
+                default_backend = str(draft.get("backend", "") or "")
+                if selected_asset is not None:
+                    default_backend = guess_backend(selected_asset.name)
+                if default_backend not in backend_options:
+                    default_backend = "cpu"
+                backend_key = f"installable-backend-{revision}"
+                _set_default(backend_key, default_backend)
+                backend = st.selectbox("Backend", backend_options, key=backend_key)
+            else:
+                image_key = f"installable-image-{revision}"
+                _set_default(image_key, str(draft.get("image", "") or ""))
+                image = st.text_input("Image", key=image_key)
+                tag_key = f"installable-tag-pattern-{revision}"
+                _set_default(tag_key, str(draft.get("tag_pattern", "") or ""))
+                tag_pattern = st.text_input("Tag pattern (glob, optional)", key=tag_key)
+
+            submitted = st.form_submit_button("Save changes" if editing else "Add record")
+
+        if editing and st.button("Cancel edit", key=f"installable-cancel-{revision}"):
+            st.session_state.pop(_DRAFT_KEY, None)
+            st.session_state[_FORM_REVISION_KEY] = revision + 1
+            st.rerun()
+
+        if not submitted:
+            return
+
+        clean_name = name.strip()
+        clean_variant = variant.strip() or None
+        if not clean_name:
+            st.error("Name is required.")
+            return
+        if clean_variant == "auto":
+            st.error("Variant key 'auto' is reserved.")
+            return
+        existing_names = {
+            record.name for record in svc.installable_records() if record.name != clean_name
+        }
+        if clean_name in existing_names:
+            st.error(f"An installable named {clean_name!r} already exists.")
+            return
+        existing_variants = {
+            record.variant
+            for record in svc.installable_records()
+            if record.name != clean_name and record.variant
+        }
+        if clean_variant and clean_variant in existing_variants:
+            st.error(f"Variant key {clean_variant!r} is already in use.")
+            return
+
+        common = {
+            "name": clean_name,
+            "label": label.strip() or None,
+            "enabled": bool(draft.get("enabled", True)),
+            "primary": bool(draft.get("primary", False)),
+            "variant": clean_variant if kind == "github_release" else None,
+        }
+        try:
+            if kind == "github_release":
+                owner, repo = parse_repo_url(github_url)
+                svc.list_release_candidates(github_url)
+                if not asset_pattern.strip():
+                    raise ValueError("Asset pattern is required")
+                record: InstallableRecord = GithubReleaseRecord(
+                    **common,
+                    backend=backend,
+                    repo=f"{owner}/{repo}",
+                    asset_pattern=asset_pattern.strip(),
+                    binary_name=str(draft.get("binary_name", "llama-server")),
+                    checksums_asset_suffix=draft.get("checksums_asset_suffix"),
+                    source_url=draft.get("source_url"),
+                )
+            else:
+                if not image.strip():
+                    raise ValueError("Image is required")
+                record = DockerImageRecord(
+                    **common,
+                    image=image.strip(),
+                    tag_pattern=tag_pattern.strip() or None,
+                    default_tag=str(draft.get("default_tag", "latest")),
+                )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            st.error(str(exc))
+            return
+
+        user_records = _replace_user_record(svc.user_installable_records(), record)
+        values = worker.read_service_overrides(SERVICE_NAME)
+        values["installables"] = [_record_payload(item) for item in user_records]
+        try:
+            worker.write_service_overrides(SERVICE_NAME, values)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            st.error(f"Could not save installable records: {exc}")
+            return
+        svc.set_installable_records(user_records)
+        st.session_state.pop(_DRAFT_KEY, None)
+        st.session_state[_FORM_REVISION_KEY] = revision + 1
+        st.session_state[_FLASH_KEY] = f"Saved installable {clean_name!r}."
+        st.rerun()
+
+
+def _render_record_list() -> None:
+    with st.container(border=True):
+        st.subheader("Configured records")
+        seed_names = {record.name for record in svc.seed_installable_records()}
+        user_names = {record.name for record in svc.user_installable_records()}
+        installs = {installable.name: installable for installable in svc.installs()}
+
+        for record in svc.installable_records():
+            with st.container(border=True):
+                cols = st.columns([3, 2, 2, 1])
+                with cols[0]:
+                    label = record.label or record.name
+                    st.markdown(f"**{label}**")
+                    provenance = "seed" if record.name in seed_names else "user"
+                    if record.name in user_names:
+                        provenance += " + seed override"
+                    st.caption(f"`{record.name}` · {record.kind} · {provenance}")
+                with cols[1]:
+                    if record.kind == "github_release":
+                        st.write(f"Source: `{record.repo}`")
+                        st.write(f"Pattern: `{record.asset_pattern}`")
+                    else:
+                        st.write(f"Image: `{record.image}`")
+                        st.write(f"Tags: `{record.tag_pattern or '*'}`")
+                with cols[2]:
+                    installable = installs.get(record.name)
+                    state = (
+                        "disabled"
+                        if not record.enabled
+                        else (
+                            "installed"
+                            if installable is not None and installable.binary_path()
+                            else "not installed"
+                        )
+                    )
+                    st.write(f"Variant: `{record.variant or '—'}`")
+                    st.write(f"Backend: `{record.backend or '—'}`")
+                    st.write(f"State: **{state}**")
+
+                action_cols = st.columns(3)
+                with action_cols[0]:
+                    if st.button("Edit", key=f"installable-edit-{record.name}"):
+                        st.session_state[_DRAFT_KEY] = _record_payload(record)
+                        st.session_state[_FORM_REVISION_KEY] = _form_revision() + 1
+                        st.session_state[_CANDIDATE_KEY] = None
+                        st.rerun()
+                with action_cols[1]:
+                    if record.enabled:
+                        if st.button("Disable", key=f"installable-disable-{record.name}"):
+                            try:
+                                svc.disable_installable(record.name)
+                                _persist_user_records(svc.user_installable_records())
+                            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                                st.error(str(exc))
+                            else:
+                                st.session_state[_FLASH_KEY] = f"Disabled {record.name!r}."
+                                st.rerun()
+                    elif st.button("Enable", key=f"installable-enable-{record.name}"):
+                        enabled_record = record.model_copy(update={"enabled": True})
+                        updated = _replace_user_record(
+                            svc.user_installable_records(), enabled_record
+                        )
+                        try:
+                            _persist_user_records(updated)
+                        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                            st.error(str(exc))
+                        else:
+                            st.session_state[_FLASH_KEY] = f"Enabled {record.name!r}."
+                            st.rerun()
+                with action_cols[2]:
+                    if record.name in user_names and st.button(
+                        "Remove override", key=f"installable-remove-{record.name}"
+                    ):
+                        try:
+                            if record.enabled:
+                                svc.disable_installable(record.name)
+                            remaining = [
+                                item
+                                for item in svc.user_installable_records()
+                                if item.name != record.name
+                            ]
+                            _persist_user_records(remaining)
+                        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                            st.error(str(exc))
+                        else:
+                            st.session_state[_FLASH_KEY] = f"Removed override for {record.name!r}."
+                            st.rerun()
+
+
+_render_record_editor()
+_render_record_list()
+
+flash = st.session_state.pop(_FLASH_KEY, None)
+if flash:
+    st.success(flash)
 
 for installable in svc.installs():
     name = installable.name
@@ -143,7 +498,6 @@ for installable in svc.installs():
                 AcquireStateKind.CANCELLED,
             ):
                 _render_step(current_step)
-                # Schedule drop on next parent rerun.
                 if st.session_state.get(drop_key):
                     st.session_state.pop(sess_key, None)
                     st.session_state.pop(drop_key, None)
