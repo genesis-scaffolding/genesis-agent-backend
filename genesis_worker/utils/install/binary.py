@@ -18,7 +18,7 @@ def resolve_binary(
             return legacy
     if not name:
         return None
-    for candidate in install_root.rglob(name):
+    for candidate in install_root.rglob(Path(name).name):
         if candidate.is_file():
             return candidate
     return None

@@ -368,6 +368,12 @@ generic installables, service integration, UI, and tests.
 
 **Negative**
 
+- `DockerImageInstall.state()` now treats an image as installed when either its
+  declared tag or its recorded selection tag is present. Declarative Docker
+  services currently share a selection file, so accepting either tag prevents
+  one service's selected tag from making another service's declared image look
+  absent. Per-service selection paths remain a separate change because they
+  alter the declarative-service on-disk layout.
 - The record schema is wider than the four built-ins need. `primary`,
   `variant`, and `backend` are service-facing metadata on every record, and
   a reader has to know which fields apply to which kind.

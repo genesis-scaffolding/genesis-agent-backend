@@ -3,6 +3,8 @@
 Worktree: `/home/gentran/Documents/worktrees/genesis-agent-backend/t-9xp8ik-track-llamacpp-forks`
 Branch: `se/t-9xp8ik-track-llamacpp-forks` (uncommitted, as required by the stage)
 
+> **Review amendment:** Sections 4.6 and 9.1 are amended after review: the GitHub API lookup is advisory; see ADR-042 section 4.
+
 ---
 
 ## 1. What changed since round 1, and where I agree or differ
@@ -270,7 +272,7 @@ if found is None:
    - `github_release`: a GitHub URL field and a **Fetch release assets** button. The button calls `svc.list_release_candidates(url)`, which is one API call, no download. On success the panel shows the latest tag and a `st.selectbox` of the candidate assets labelled with name and size in MB (from the API metadata). The selected asset seeds an editable **Asset pattern (glob)** field, pre-filled with `derive_asset_pattern(asset.name, tag)` (the asset name with every occurrence of the release tag replaced by `*`). A **Backend** selectbox is pre-filled with `guess_backend(asset.name)`. If the API call fails (rate limit, private repo), the panel says so and leaves the pattern field to be typed by hand: adding a record must not require the lookup.
    - `docker_image`: an **Image** field (`ghcr.io/org/name`) and an optional **Tag pattern (glob)** field.
    - Common: **Name** (pre-filled from the slug, e.g. `llama-server-prismml-eng-llama-cpp`), **Variant key** (pre-filled with the slug), **Backend** (for release records), **Label** (optional).
-3. **Add / Save.** The button validates the record (name unique, variant key unique, the URL parses, the repo resolves and has a release with a usable asset) and then persists it: the sidecar is read, the `installables` key is rewritten with the new user-record list, the sidecar is written, and only then does the service's in-memory list change. A failed write leaves the in-memory state unchanged.
+3. **Add / Save.** The button validates the record (name unique, variant key unique, the URL parses) and attempts the advisory release lookup, then persists it: the sidecar is read, the `installables` key is rewritten with the new user-record list, the sidecar is written, and the service's in-memory list is updated. If the in-memory update is rejected, the sidecar is rolled back. A failed write leaves the in-memory state unchanged.
 4. **The record list.** One row per record: label, kind, source, pattern or image, variant key, backend, installed state. Buttons: **Edit** (loads the record into the form as a draft) and **Disable**.
 5. **Edit.** The name is shown read-only once a record exists: renaming it would orphan its install directory and its `selections.yaml` pin. Everything else (label, pattern, backend, variant key, image, tag pattern) is editable. Saving an edited seed writes a user record with the same name, which overrides the seed.
 6. **Disable.** Calls `svc.disable_installable(name)`, which uninstalls the installed version and hides the record. The refusal when the record is the active engine binary is shown inline.
@@ -463,7 +465,7 @@ Manual check, after the gate is green (the DoD is a UI behaviour, so it needs a 
 
 ## 9. The open points, settled with a recommendation (flag at the approval gate)
 
-1. **What "everything checks out" means at add time.** Recommended: three metadata assertions (URL parses, the repo resolves, the repo has a release with a usable asset) and no download. The archive-content check moves to install time, where the session now fails loudly when the expected binary is missing. Alternative: keep an add-time download probe (round 1's design), which the rejection rules out.
+1. **What "everything checks out" means at add time.** Amended after review: the URL must parse, while the GitHub API lookup is advisory and may fail without blocking the save; there is no add-time download. The archive-content check moves to install time, where the session now fails loudly when the expected binary is missing. See ADR-042 section 4.
 2. **How the asset is chosen.** Recommended: the user picks from the candidate list, and the pick persists as a tag-derived, user-editable glob, with the backend recorded alongside it. Alternatives: a fixed suffix rule (cannot express the per-fork backend) or tarball inspection (the backend is not in the archive contents, and it needs a download).
 3. **Orchestrator scope.** Recommended: per node only. The extension point is a future `POST /v1/services/{name}/installables` route, an API contract change that belongs to its own ADR.
 4. **New in this round: does the `docker_image` kind ship now.** Recommended: yes, as a thin adapter over the machinery that already exists, so the `kind` field is not a promise. It can be dropped without touching the schema, the seeds, the merge, or the UI.

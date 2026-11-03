@@ -151,20 +151,23 @@ def test_derive_asset_pattern_falls_back_when_tag_absent() -> None:
     assert derive_asset_pattern("engine-linux-x64.tar.gz", "v1") == "*engine-linux-x64.tar.gz"
 
 
-def test_github_release_install_prefers_root_binary_over_nested_binary(tmp_path: Path) -> None:
+def test_github_release_install_prefers_expected_relative_path_over_basename_search(
+    tmp_path: Path,
+) -> None:
     dirs = InstallDirs(tmp_path / "data", tmp_path / "cache", tmp_path / "state")
-    installable = build_installable(_github_record(), dirs)
+    record = _github_record(binary_name="bin/llama-server")
+    installable = build_installable(record, dirs)
     assert isinstance(installable, GithubReleaseInstall)
     version = "v1"
     install_root = installable._layout.installs_root / version  # noqa: SLF001
     root_binary = install_root / "llama-server"
     root_binary.parent.mkdir(parents=True)
     root_binary.write_text("#!/bin/sh\n")
-    nested = install_root / "nested" / "llama-server"
-    nested.parent.mkdir(parents=True)
-    nested.write_text("#!/bin/sh\n")
+    expected = install_root / "bin" / "llama-server"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("#!/bin/sh\n")
     installable._layout.set_current_symlink(version)  # noqa: SLF001
-    assert installable.binary_path() == root_binary
+    assert installable.binary_path() == expected
 
 
 def test_github_release_install_resolves_nested_binary(tmp_path: Path) -> None:
