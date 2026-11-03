@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -84,6 +85,18 @@ def parse_repo_url(raw: str) -> tuple[str, str]:
     return owner, repo
 
 
+def ensure_unique_installable_name(
+    records: Sequence[InstallableRecord],
+    name: str,
+    *,
+    editing_name: str | None = None,
+) -> None:
+    """Reject a new record name that collides with an existing record."""
+    existing_names = {record.name for record in records if record.name != editing_name}
+    if name in existing_names:
+        raise ValueError(f"An installable named {name!r} already exists.")
+
+
 def fork_slug(owner: str, repo: str) -> str:
     """Turn repository coordinates into a lowercase dashed slug."""
     return re.sub(r"[^a-z0-9]+", "-", f"{owner}/{repo}".lower()).strip("-")
@@ -128,6 +141,7 @@ def release_candidate(repo: str, tag: str, assets: list[ReleaseAsset]) -> Releas
 __all__ = [
     "BUNDLED_INSTALLABLES_PATH",
     "candidate_assets",
+    "ensure_unique_installable_name",
     "fork_slug",
     "guess_backend",
     "load_seed_records",

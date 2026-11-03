@@ -480,7 +480,7 @@ class GithubReleaseAcquireSession(BackgroundSession):
             shutil.rmtree(install_root, ignore_errors=True)
             raise RuntimeError(f"extract failed: {exc}") from exc
 
-        if resolve_binary(install_root, backend.binary_rel) is None:
+        if resolve_binary(install_root, backend.binary_rel, legacy_rel=backend.binary_rel) is None:
             shutil.rmtree(install_root, ignore_errors=True)
             raise RuntimeError(f"archive contains no {backend.binary_rel!r} binary")
 

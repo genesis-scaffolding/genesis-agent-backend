@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from genesis_worker.contracts import AcquireStateKind, AcquireView
+from genesis_worker.contracts import AcquireStateKind, AcquireView, InstallState
 
 from ....utils.installables import (
     DockerImageRecord,
@@ -14,7 +14,12 @@ from ....utils.installables import (
     InstallableRecord,
     derive_asset_pattern,
 )
-from ..installables import fork_slug, guess_backend, parse_repo_url
+from ..installables import (
+    ensure_unique_installable_name,
+    fork_slug,
+    guess_backend,
+    parse_repo_url,
+)
 
 SERVICE_NAME = "llama_swap"
 
@@ -35,6 +40,7 @@ _DRAFT_KEY = "binaries/installable-draft"
 _FORM_REVISION_KEY = "binaries/installable-form-revision"
 _CANDIDATE_KEY = "binaries/release-candidate"
 _FLASH_KEY = "binaries/installable-flash"
+_LOOKUP_WARNING_KEY = "binaries/release-lookup-warning"
 
 
 def _session_key(name: str) -> str:
@@ -63,10 +69,21 @@ def _record_payload(record: InstallableRecord) -> dict[str, Any]:
 
 
 def _persist_user_records(records: list[InstallableRecord]) -> None:
-    values = worker.read_service_overrides(SERVICE_NAME)
+    previous_values = dict(worker.read_service_overrides(SERVICE_NAME))
+    values = dict(previous_values)
     values["installables"] = [_record_payload(record) for record in records]
-    worker.write_service_overrides(SERVICE_NAME, values)
-    svc.set_installable_records(records)
+    try:
+        worker.write_service_overrides(SERVICE_NAME, values)
+        svc.set_installable_records(records)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        try:
+            worker.write_service_overrides(SERVICE_NAME, previous_values)
+        except (OSError, RuntimeError, TypeError, ValueError) as rollback_exc:
+            raise RuntimeError(
+                f"could not save installable records: {exc}; "
+                f"the sidecar rollback also failed: {rollback_exc}"
+            ) from rollback_exc
+        raise
 
 
 def _replace_user_record(
@@ -246,11 +263,14 @@ def _render_record_editor() -> None:
         if clean_variant == "auto":
             st.error("Variant key 'auto' is reserved.")
             return
-        existing_names = {
-            record.name for record in svc.installable_records() if record.name != clean_name
-        }
-        if clean_name in existing_names:
-            st.error(f"An installable named {clean_name!r} already exists.")
+        try:
+            ensure_unique_installable_name(
+                svc.installable_records(),
+                clean_name,
+                editing_name=editing_name or None,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
             return
         existing_variants = {
             record.variant
@@ -268,10 +288,14 @@ def _render_record_editor() -> None:
             "primary": bool(draft.get("primary", False)),
             "variant": clean_variant if kind == "github_release" else None,
         }
+        lookup_warning: str | None = None
         try:
             if kind == "github_release":
                 owner, repo = parse_repo_url(github_url)
-                svc.list_release_candidates(github_url)
+                try:
+                    svc.list_release_candidates(github_url)
+                except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                    lookup_warning = str(exc)
                 if not asset_pattern.strip():
                     raise ValueError("Asset pattern is required")
                 record: InstallableRecord = GithubReleaseRecord(
@@ -297,17 +321,19 @@ def _render_record_editor() -> None:
             return
 
         user_records = _replace_user_record(svc.user_installable_records(), record)
-        values = worker.read_service_overrides(SERVICE_NAME)
-        values["installables"] = [_record_payload(item) for item in user_records]
         try:
-            worker.write_service_overrides(SERVICE_NAME, values)
+            _persist_user_records(user_records)
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             st.error(f"Could not save installable records: {exc}")
             return
-        svc.set_installable_records(user_records)
         st.session_state.pop(_DRAFT_KEY, None)
         st.session_state[_FORM_REVISION_KEY] = revision + 1
         st.session_state[_FLASH_KEY] = f"Saved installable {clean_name!r}."
+        if lookup_warning:
+            st.session_state[_LOOKUP_WARNING_KEY] = (
+                "GitHub release metadata could not be verified; the record was saved anyway. "
+                f"The installation path will validate the selected asset. ({lookup_warning})"
+            )
         st.rerun()
 
 
@@ -342,7 +368,10 @@ def _render_record_list() -> None:
                         if not record.enabled
                         else (
                             "installed"
-                            if installable is not None and installable.binary_path()
+                            if (
+                                installable is not None
+                                and installable.state() == InstallState.INSTALLED
+                            )
                             else "not installed"
                         )
                     )
@@ -406,6 +435,9 @@ _render_record_list()
 flash = st.session_state.pop(_FLASH_KEY, None)
 if flash:
     st.success(flash)
+lookup_warning = st.session_state.pop(_LOOKUP_WARNING_KEY, None)
+if lookup_warning:
+    st.warning(lookup_warning)
 
 for installable in svc.installs():
     name = installable.name
@@ -414,11 +446,11 @@ for installable in svc.installs():
 
     with st.expander(name, expanded=False):
         current = installable.installed_version()
-        binary = installable.binary_path()
         service_running = svc.is_running()
         in_flight = sess_key in st.session_state
 
-        state_label = "installed" if binary else "not installed"
+        installed = installable.state() == InstallState.INSTALLED
+        state_label = "installed" if installed else "not installed"
         st.write(f"State: **{state_label}** — resolved: **{current or '—'}**")
         if source_url := installable.source_url():
             st.caption(f"Source: [{source_url}]({source_url})")
@@ -453,7 +485,7 @@ for installable in svc.installs():
                 install_disabled = in_flight
                 install_help = "An install is already in progress." if in_flight else None
                 if st.button(
-                    "Install" if not binary else "Reinstall",
+                    "Install" if not installed else "Reinstall",
                     key=f"install-{name}",
                     disabled=install_disabled,
                     help=install_help,

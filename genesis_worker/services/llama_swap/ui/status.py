@@ -6,6 +6,7 @@ from typing import Any
 
 import streamlit as st
 
+from genesis_worker.contracts import InstallState
 from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
 from genesis_worker.services.llama_swap.generate_config import DEFAULT_HARDCODED_FLAGS
 from genesis_worker.utils.ui._nav import to_relative
@@ -265,7 +266,7 @@ with st.container(border=True):
 
     for installable in svc.installs():
         version = installable.installed_version() or "—"
-        state = "installed" if installable.binary_path() else "not installed"
+        state = "installed" if installable.state() == InstallState.INSTALLED else "not installed"
         cols = st.columns([3, 2, 1])
         with cols[0]:
             st.markdown(f"**{installable.name}**")

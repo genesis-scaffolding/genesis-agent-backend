@@ -10,6 +10,7 @@ import pytest
 
 from genesis_worker.services.llama_swap.installables import (
     candidate_assets,
+    ensure_unique_installable_name,
     fork_slug,
     guess_backend,
     load_seed_records,
@@ -49,6 +50,21 @@ def _install_fake_binary(installable: object, version: str = "v1") -> Path:
     binary.chmod(0o755)
     layout.set_current_symlink(version)
     return binary
+
+
+def test_ensure_unique_installable_name_rejects_existing_name() -> None:
+    records = load_seed_records()
+    with pytest.raises(ValueError, match="already exists"):
+        ensure_unique_installable_name(records, "llama-server-cpu")
+
+
+def test_ensure_unique_installable_name_allows_editing_existing_record() -> None:
+    records = load_seed_records()
+    ensure_unique_installable_name(
+        records,
+        "llama-server-cpu",
+        editing_name="llama-server-cpu",
+    )
 
 
 def test_seed_records_define_the_four_builtin_installables() -> None:
@@ -135,6 +151,20 @@ def test_primary_installable_is_the_llama_swap_proxy(tmp_path: Path) -> None:
 def test_variant_keys_include_user_record_variant(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path, options={"installables": [_user_record()]}))
     assert svc.variant_keys() == ["cuda", "cpu", "vulkan", "prism"]
+
+
+def test_set_installable_records_rejection_leaves_records_unchanged(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"installables": [_user_record()]}))
+    before = svc.user_installable_records()
+    duplicate_variant = GithubReleaseRecord(
+        name="another-fork",
+        variant="prism",
+        repo="owner/other",
+        asset_pattern="*.tar.gz",
+    )
+    with pytest.raises(ValueError, match="variant keys must be unique"):
+        svc.set_installable_records([*before, duplicate_variant])
+    assert svc.user_installable_records() == before
 
 
 def test_set_llama_server_variant_accepts_record_variant(tmp_path: Path) -> None:

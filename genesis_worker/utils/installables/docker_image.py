@@ -55,9 +55,10 @@ class DockerImageInstall(ServiceInstall):
         return self._source_url
 
     def state(self) -> InstallState:
+        tag = self.installed_version() or self._image_tag
         return (
             InstallState.INSTALLED
-            if DockerContainer.image_present(self.image_ref)
+            if DockerContainer.image_present(f"{self._image_repo}:{tag}")
             else InstallState.NOT_INSTALLED
         )
 

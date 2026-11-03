@@ -4,16 +4,6 @@
 
 Declarative installables: a user-editable install record with a `kind` discriminator, seeded with the built-in llama-swap and llama-server binaries.
 
-## Status
-
-Proposed. The points marked "open point" below are settled here with a
-recommended default; approving this ADR is what confirms them. The plan that
-implements it lives in the pipeline's plan journal, not in this file.
-
-Numbering note: ADR-042 and ADR-043 are claimed by other in-flight worktrees
-(`t-sgqw36-port-collision`, `t-drv03p-radiance-27b`). This file keeps its
-042 claim and is renumbered on merge.
-
 ## Context
 
 The llama-swap service tracks four installables today: the `llama-swap` proxy
@@ -123,10 +113,10 @@ flavour-neutral. No new acquisition mechanism is needed for either kind.
 
 ### Open points, and what this ADR settles them as
 
-1. **What "everything checks out" means at add time.** Settled as three
-   metadata assertions and no download: the URL parses to an owner and a
-   repo, the GitHub API resolves the repo, and the repo has at least one
-   release carrying an asset the acquisition path can take. The archive
+1. **What "everything checks out" means at add time.** Settled as no
+   download and an advisory release lookup: the URL must parse to an owner
+   and a repo, while the GitHub API lookup is attempted to populate the
+   candidate list but may fail without blocking the save. The archive
    contents are checked at install time, where the asset has been fetched
    anyway.
 2. **How the asset is chosen.** Settled as: the user picks the asset from
@@ -140,6 +130,14 @@ flavour-neutral. No new acquisition mechanism is needed for either kind.
    as per-node only for now. The list lives in the worker's config dir, the
    orchestrator has no write path for it (ADR-038's four endpoints do not
    cover it), and adding one is a separate API contract change.
+
+### Numbering
+
+This ADR keeps the `042` claim on its implementation branch. ADR-042 and
+ADR-043 are also claimed by the in-flight `t-sgqw36-port-collision` and
+`t-drv03p-radiance-27b` worktrees. Resolve the final sequential number at
+merge time; numbering is a merge-order decision, not an implementation-branch
+change.
 
 ## Decision
 
@@ -245,20 +243,20 @@ The Binaries page already renders one entry per installable from
 
 ### 4. Add-time validation
 
-Adding a record runs three metadata assertions and no download:
+Adding a record performs no download. The pasted URL must parse to an owner
+and a repo. Accepted forms are `https://github.com/<owner>/<repo>`, the same
+with a trailing `/releases`, `git@github.com:<owner>/<repo>.git`, and the bare
+`<owner>/<repo>`.
 
-1. The pasted URL parses to an owner and a repo. Accepted forms:
-   `https://github.com/<owner>/<repo>`, the same with a trailing `/releases`,
-   `git@github.com:<owner>/<repo>.git`, and the bare `<owner>/<repo>`.
-2. The GitHub API resolves the repo. A 404 is "no such repo, or not visible
-   to this token".
-3. The repo has at least one release, and that release carries an asset the
-   acquisition path can take: a `.tar.gz`, `.tgz`, `.tar.xz`, or `.zip` with
-   a `browser_download_url`.
+The GitHub API lookup is advisory. The UI attempts it to list the latest
+release's candidate assets with their sizes and to derive a suggested asset
+pattern. A rate limit, private repository, missing latest release, or release
+without a matching candidate produces a warning rather than blocking the
+save; the user can still save a hand-written pattern. The archive contents
+are checked at install time.
 
-The UI lists the release's candidate assets with their sizes from the API
-metadata, and the user picks one. The derived pattern is shown in an editable
-field before the record is saved.
+When the lookup succeeds, the user picks a candidate asset. The derived
+pattern is shown in an editable field before the record is saved.
 
 The GitHub token comes from `ctx.secrets.get("github_token")`, the sanctioned
 accessor (`contracts/secret.py`), never from `os.environ`.
@@ -330,6 +328,17 @@ names the installable.
 - **Reusing an add-time download at install time.** There is no add-time
   download any more. The acquire path always re-downloads on install; caching
   would speed up reinstalls and belongs to its own change.
+
+## Status
+
+Accepted. The open points above were settled by the approved round-2 plan and
+are now implemented.
+
+## Plan
+
+[plan-042-declarative-installables.md](plans/plan-042-declarative-installables.md) — the
+approved round-2 implementation plan for the record schema, seed records,
+generic installables, service integration, UI, and tests.
 
 ## Consequences
 

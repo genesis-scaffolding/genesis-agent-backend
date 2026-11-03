@@ -128,17 +128,23 @@ class LlamaSwapService(InferenceService):
                 return self._installables.get(record.name)
         return None
 
-    def _rebuild_installables(self) -> None:
+    def _build_installables(
+        self,
+        records: list[InstallableRecord],
+    ) -> dict[str, ServiceInstall]:
         dirs = InstallDirs(
             data_dir=self._ctx.data_dir,
             cache_dir=self._ctx.cache_dir,
             state_dir=self._ctx.state_dir,
         )
-        self._installables = {
+        return {
             record.name: build_installable(record, dirs, secrets=self._ctx.secrets)
-            for record in self._records
+            for record in records
             if record.enabled
         }
+
+    def _rebuild_installables(self) -> None:
+        self._installables = self._build_installables(self._records)
 
     def installable_records(self) -> list[InstallableRecord]:
         """All merged records, including disabled overrides."""
@@ -171,10 +177,11 @@ class LlamaSwapService(InferenceService):
             raise ValueError("installable record variant key 'auto' is reserved")
         if len(variants) != len(set(variants)):
             raise ValueError("installable record variant keys must be unique")
+        installables = self._build_installables(merged)
         self._user_records = list(user_records)
         self._options.installables = list(user_records)
         self._records = merged
-        self._rebuild_installables()
+        self._installables = installables
 
     def disable_installable(self, name: str) -> None:
         """Uninstall and hide a record, leaving a disabled user override."""

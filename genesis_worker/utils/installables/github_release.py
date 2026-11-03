@@ -122,6 +122,7 @@ class GithubReleaseInstall(ServiceInstall):
         return resolve_binary(
             self._layout.installs_root / version,
             self.record.binary_name,
+            legacy_rel=self.record.binary_name,
         )
 
     def install(self, *, version: str | None = None) -> AcquireSession:
