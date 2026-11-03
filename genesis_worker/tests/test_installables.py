@@ -170,6 +170,22 @@ def test_github_release_install_prefers_expected_relative_path_over_basename_sea
     assert installable.binary_path() == expected
 
 
+def test_github_release_install_falls_back_to_basename_when_expected_path_missing(
+    tmp_path: Path,
+) -> None:
+    dirs = InstallDirs(tmp_path / "data", tmp_path / "cache", tmp_path / "state")
+    record = _github_record(binary_name="bin/llama-server")
+    installable = build_installable(record, dirs)
+    assert isinstance(installable, GithubReleaseInstall)
+    version = "v1"
+    install_root = installable._layout.installs_root / version  # noqa: SLF001
+    fallback = install_root / "llama-server"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_text("#!/bin/sh\n")
+    installable._layout.set_current_symlink(version)  # noqa: SLF001
+    assert installable.binary_path() == fallback
+
+
 def test_github_release_install_resolves_nested_binary(tmp_path: Path) -> None:
     dirs = InstallDirs(tmp_path / "data", tmp_path / "cache", tmp_path / "state")
     installable = build_installable(_github_record(), dirs)
