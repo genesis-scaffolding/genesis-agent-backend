@@ -277,6 +277,15 @@ if found is None:
 5. **Edit.** The name is shown read-only once a record exists: renaming it would orphan its install directory and its `selections.yaml` pin. Everything else (label, pattern, backend, variant key, image, tag pattern) is editable. Saving an edited seed writes a user record with the same name, which overrides the seed.
 6. **Disable.** Calls `svc.disable_installable(name)`, which uninstalls the installed version and hides the record. The refusal when the record is the active engine binary is shown inline.
 
+**Rev 2 (hands-on review).** The form moved out of the panel into a modal
+dialog (`st.dialog`). The **Installables** header now carries a short
+paragraph, an **Add installable** button opens the dialog with an empty
+add form, and the per-record **Edit** button opens the same dialog
+pre-filled, with the submit button reading **Edit** instead of **Add**. The
+records list and the remove action stay as they are. Every form field
+carries a `help=` caption, and the `docker_image` form shows a worked
+example, so the form can be filled from the on-screen copy alone.
+
 `genesis_worker/services/llama_swap/ui/status.py`:
 
 - The variant dropdown becomes `["(legacy)", "auto"] + svc.variant_keys()`. A persisted variant that is no longer known falls back to `auto` with a caption, instead of raising on `option_labels.index(current)`.
