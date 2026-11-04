@@ -51,6 +51,11 @@ def _summary(worker: GenesisWorker, info) -> ServiceSummarySchema:
     runtime_endpoint = svc.runtime_endpoint() if is_running else None
     web_ui_getter = getattr(svc, "web_ui_endpoint", None)
     web_ui_endpoint = web_ui_getter() if (is_running and web_ui_getter is not None) else None
+    # Effective installability: the service declares the capability AND
+    # actually exposes an installable. A service with ``can_install=True``
+    # but an empty ``installs()`` list cannot be installed through the
+    # API, so the summary must not claim otherwise.
+    can_install = bool(info.capabilities.can_install) and bool(svc.installs())
     return ServiceSummarySchema.from_facade(
         info,
         is_enabled=worker.services.is_enabled(info.name),
@@ -58,6 +63,7 @@ def _summary(worker: GenesisWorker, info) -> ServiceSummarySchema:
         state=_state_str(worker, info.name),
         runtime_endpoint=runtime_endpoint,
         web_ui_endpoint=web_ui_endpoint,
+        can_install=can_install,
     )
 
 

@@ -178,6 +178,7 @@ class ServiceSummarySchema(BaseModel):
     state: str
     runtime_endpoint: str | None
     web_ui_endpoint: str | None
+    can_install: bool
 
     @classmethod
     def from_facade(
@@ -189,6 +190,7 @@ class ServiceSummarySchema(BaseModel):
         state: str,
         runtime_endpoint: str | None,
         web_ui_endpoint: str | None,
+        can_install: bool,
     ) -> ServiceSummarySchema:
         return cls(
             name=info.name,
@@ -200,6 +202,7 @@ class ServiceSummarySchema(BaseModel):
             state=state,
             runtime_endpoint=runtime_endpoint,
             web_ui_endpoint=web_ui_endpoint,
+            can_install=can_install,
         )
 
 

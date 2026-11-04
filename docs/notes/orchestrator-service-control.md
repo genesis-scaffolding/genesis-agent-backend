@@ -181,6 +181,24 @@ not interpret it. The worker, on receiving this body for service `bifrost`,
 materialises it to whatever location bifrost expects (its own concern) and
 starts the bifrost container.
 
+## Read-side: effective installability in `GET /v1/services`
+
+`GET /v1/services` returns a summary row per service. One field was added
+for the orchestrator's onboarding wizard:
+
+- **`can_install`** (bool) — the *effective* installability of the
+  service: `capabilities.can_install and bool(service.installs())`.
+
+The capability flag alone is not enough. A service can declare
+`can_install=True` while exposing no installable at all, in which case
+`POST /v1/services/{name}/install` refuses with `409` (see the endpoint
+contract above). Reporting the effective value lets the orchestrator
+render a picker that only offers services it can actually install,
+instead of discovering the refusal as a deploy failure.
+
+The field is additive: every pre-existing field of the summary row is
+unchanged.
+
 ## What the orchestrator does NOT need
 
 - No `GET /v1/agent_config` endpoint. The orchestrator derives each
