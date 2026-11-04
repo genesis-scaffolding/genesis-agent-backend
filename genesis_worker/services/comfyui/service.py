@@ -248,6 +248,10 @@ class ComfyUiService(InferenceService):
             return None
         return f"http://{self.public_host()}:{self._options.listen_port}/"
 
+    def declared_host_port(self) -> int | None:
+        """The fixed port ComfyUI binds — the allocator stays off it (ADR-043)."""
+        return self._options.listen_port
+
     def tail_log(self, n_bytes: int = 8192) -> str:
         # docker logs is line-oriented; approximate the byte count.
         tail_lines = max(50, n_bytes // 80)

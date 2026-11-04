@@ -18,6 +18,7 @@ from genesis_worker.contracts import (
     ServiceState,
 )
 from genesis_worker.tests._factories import service_ctx
+from genesis_worker.utils.ports.allocator import NodePortAllocator
 from genesis_worker.utils.process import DockerContainer
 from genesis_worker.utils.registry_tags import (
     read_tag_cache,
@@ -29,6 +30,7 @@ from genesis_worker.utils.services import (
     DockerImageInstall,
     DockerService,
     DockerServiceConfig,
+    ExtraPort,
 )
 
 # --- helpers ---------------------------------------------------------------
@@ -79,6 +81,22 @@ def _config(**overrides) -> DockerServiceConfig:
 def _service(tmp_path: Path, **config_overrides) -> DockerService:
     cfg = _config(**config_overrides)
     return DockerService(service_ctx(tmp_path, name="svc"), config=cfg)
+
+
+def _allocator(tmp_path: Path) -> NodePortAllocator:
+    """A hermetic allocator — no docker daemon, no real bind."""
+    return NodePortAllocator(
+        tmp_path / "state",
+        fixed_ports=lambda: set(),
+        container_bindings=list,
+        bind_probe=lambda port: True,
+    )
+
+
+def _auto_port_service(tmp_path: Path, **config_overrides) -> DockerService:
+    cfg = _config(**config_overrides)
+    ctx = service_ctx(tmp_path, name="svc", port_allocator=_allocator(tmp_path))
+    return DockerService(ctx, config=cfg)
 
 
 # --- construction / identity -----------------------------------------------
@@ -770,3 +788,69 @@ def test_ensure_volume_dirs_existing_dir_is_left_alone(
     svc._ensure_volume_dirs()
 
     assert target.stat().st_mode == original_mode
+
+
+# --- auto ports (ADR-043) ---------------------------------------------------
+
+
+def test_start_materialises_the_marker_into_an_int(tmp_path: Path, monkeypatch) -> None:
+    """The port mapper never sees a marker — only the allocated integer."""
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: True))
+    captured: dict = {}
+
+    def _capture_run(self, **kwargs):
+        captured.update(kwargs)
+        return type("R", (), {"ok": True, "message": "started"})()
+
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.run", _capture_run
+    )
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    svc.start()
+    assert captured["ports"] == {"8081/tcp": ("0.0.0.0", 18000)}
+
+
+def test_two_markers_produce_two_different_ports(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: True))
+    captured: dict = {}
+
+    def _capture_run(self, **kwargs):
+        captured.update(kwargs)
+        return type("R", (), {"ok": True, "message": "started"})()
+
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.run", _capture_run
+    )
+    svc = _auto_port_service(
+        tmp_path,
+        listen_port="$auto_port.listen",
+        internal_port=8081,
+        extra_ports=(ExtraPort(container_port=9000, host="$auto_port.api"),),
+    )
+    svc.start()
+    ports = captured["ports"]
+    assert ports["8081/tcp"] == ("0.0.0.0", 18000)
+    assert ports["9000/tcp"] == ("0.0.0.0", 18001)
+
+
+def test_effective_host_port_reports_the_record_before_the_first_start(
+    tmp_path: Path,
+) -> None:
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    assert svc.effective_host_port() is None
+    svc.port_binder().allocate("listen")
+    assert svc.effective_host_port() == 18000
+
+
+def test_a_fixed_port_service_declares_and_uses_it(tmp_path: Path) -> None:
+    svc = _service(tmp_path, listen_port=8080)
+    assert svc.declared_host_port() == 8080
+    assert svc.effective_host_port() == 8080
+
+
+def test_start_without_an_allocator_fails_loudly(tmp_path: Path, monkeypatch) -> None:
+    """No allocator wired means no silent fallback to a fixed port."""
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: True))
+    svc = _service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    with pytest.raises(RuntimeError, match="no port allocator"):
+        svc.start()

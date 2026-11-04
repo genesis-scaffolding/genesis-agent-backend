@@ -29,8 +29,22 @@ from ...contracts import (
 )
 from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
+from ..ports.markers import assert_no_markers
 from ..process import DockerContainer
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
+
+
+@dataclass(frozen=True)
+class ExtraPort:
+    """One extra published port of a docker container.
+
+    ``container_port`` is the port inside the container; ``host`` is the
+    port on the node — a fixed integer or a ``$auto_port.<name>`` marker
+    the framework allocates at start time (ADR-043).
+    """
+
+    container_port: int
+    host: int | str
 
 
 @dataclass(frozen=True)
@@ -65,8 +79,9 @@ class DockerServiceConfig(DeclarativeServiceConfig):
     # Container
     container_name: str = ""
     listen_host: str = "0.0.0.0"
-    listen_port: int = 0
+    listen_port: int | str = 0
     internal_port: int | None = None  # defaults to listen_port
+    extra_ports: tuple[ExtraPort, ...] = ()
     public_host: str | None = None
     web_ui_path: str = "/"  # appended to listen address for the Web UI button
     restart_policy: str = "unless-stopped"
@@ -152,8 +167,15 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return self.config.container_name
 
     @property
-    def listen_address(self) -> str:
-        return f"{self.config.listen_host}:{self.config.listen_port}"
+    def listen_address(self) -> str | None:
+        """The bind address, or ``None`` when the port is not known yet."""
+        port = self.effective_host_port()
+        if port is None:
+            return None
+        return f"{self.config.listen_host}:{port}"
+
+    def own_container_names(self) -> tuple[str, ...]:
+        return (self.config.container_name,)
 
     @property
     def data_dir(self) -> Path:
@@ -216,12 +238,15 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     def web_ui_endpoint(self) -> str | None:
         if not self.is_running():
             return None
+        port = self.effective_host_port()
+        if port is None:
+            return None
         path = self.config.web_ui_path or "/"
         if not path.startswith("/"):
             path = "/" + path
         if not path.endswith("/"):
             path = path + "/"
-        return f"http://{self.public_host()}:{self.config.listen_port}{path}"
+        return f"http://{self.public_host()}:{port}{path}"
 
     def tail_log(self, n_bytes: int = 8192) -> str:
         # Per the ADR, ``tail_lines`` is a sensible conversion of bytes-to-lines.
@@ -278,8 +303,7 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
             )
 
         container = DockerContainer(self.config.container_name)
-        internal_port = self.config.internal_port or self.config.listen_port
-        ports = {f"{internal_port}/tcp": (self.config.listen_host, self.config.listen_port)}
+        ports = self._port_map()
 
         volumes = {
             container_path: str(host) for container_path, host in self.config.extra_volumes.items()
@@ -310,6 +334,34 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
             shm_size=self.config.shm_size,
             security_opts=self.config.security_opts,
         )
+
+    def _port_map(self) -> dict[str, tuple[str, int]]:
+        """The ``-p`` map, with every auto-port marker materialised.
+
+        The markers are resolved at start time — the point where the port
+        is actually needed — through the same substitution engine the
+        loader uses, with the allocator as the resolution source.
+        """
+        from .loader import resolve_placeholders
+
+        resolved = resolve_placeholders(
+            {
+                "primary": self.config.listen_port,
+                "extra": [
+                    {"container": extra.container_port, "host": extra.host}
+                    for extra in self.config.extra_ports
+                ],
+            },
+            self._ctx,
+            {},
+            ports=self.port_binder().resolver(),
+        )
+        assert_no_markers(resolved, f"{self.name} port map")
+        primary = int(resolved["primary"])
+        ports = {f"{self.config.internal_port or primary}/tcp": (self.config.listen_host, primary)}
+        for extra in resolved["extra"]:
+            ports[f"{extra['container']}/tcp"] = (self.config.listen_host, int(extra["host"]))
+        return ports
 
     def _resolve_or_generate_token(self) -> str:
         """Resolve the auth token to inject — file → generate.
@@ -368,15 +420,19 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return result
 
     def status(self) -> ServiceStatus:
+        port = self.effective_host_port()
         endpoint = (
-            f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}"
-            f":{self.config.listen_port}/"
+            None
+            if port is None
+            else f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}:{port}/"
         )
         if not DockerContainer(self.config.container_name).is_running():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
+        if port is None:
+            return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
         probe = HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         )
         if probe.probe():
@@ -384,9 +440,12 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
 
     def wait_ready(self, timeout_s: float) -> bool:
+        port = self.effective_host_port()
+        if port is None:
+            return False
         return HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         ).wait_ready(timeout_s)
 
@@ -401,4 +460,5 @@ __all__ = [
     "DockerImageInstall",
     "DockerService",
     "DockerServiceConfig",
+    "ExtraPort",
 ]

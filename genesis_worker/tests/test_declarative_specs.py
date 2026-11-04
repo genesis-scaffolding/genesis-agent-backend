@@ -1006,3 +1006,30 @@ def test_romm_ui_panels_include_compose_status(tmp_path: Path) -> None:
     assert "container_info" in svc.ui_panels
     assert "log_tail" in svc.ui_panels
     assert "configure" in svc.ui_panels
+
+
+# --- the auto-port adopters (ADR-043) --------------------------------------
+
+
+def test_metube_asks_the_framework_for_its_host_port(tmp_path: Path) -> None:
+    """MeTube's port is allocated, not hand-picked (ADR-043)."""
+    svc = _load_spec("metube.yaml", tmp_path)
+    assert svc.config.listen_port == "$auto_port.listen"
+    assert svc.declared_port_markers() == ("listen",)
+    assert svc.declared_host_port() is None
+    assert svc.effective_host_port() is None  # not started yet
+
+
+def test_genesis_productivity_asks_for_two_ports(tmp_path: Path) -> None:
+    """The productivity stack publishes two ports — two allocations."""
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-productivity.yaml",
+        ctx=service_ctx(tmp_path, name="genesis-productivity"),
+    )
+    assert isinstance(svc, ComposeService)
+    assert svc.config.listen_port == "$auto_port.listen"
+    assert sorted(svc.declared_port_markers()) == ["api", "listen"]
+    assert svc.declared_host_port() is None
+    # The template publishes both markers, so the runtime port is bound.
+    assert "$auto_port.listen" in svc.config.compose_template
+    assert "$auto_port.api" in svc.config.compose_template

@@ -752,3 +752,129 @@ def test_docker_with_materialize_orchestrator_config_unknown_format_raises(
 
     with pytest.raises(ValueError, match="unsupported format"):
         svc.start()
+
+
+# --- auto-port markers (ADR-043) -------------------------------------------
+
+
+def test_port_option_accepts_a_marker_default(tmp_path: Path) -> None:
+    """The marker survives rounds A/B/C and lands in the config as a marker."""
+    payload = _copy(DOCKER_BASE)
+    payload["container"]["listen_port"] = "$options.listen_port"  # type: ignore[index]
+    payload["container"]["internal_port"] = 8081  # type: ignore[index]
+    payload["options"] = {"listen_port": {"type": "port", "default": "$auto_port.web"}}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+    assert svc.config.listen_port == "$auto_port.web"
+    assert svc.declared_port_markers() == ("web",)
+    assert svc.declared_host_port() is None
+
+
+def test_port_option_keeps_a_string_override_an_int(tmp_path: Path) -> None:
+    """``"8096"`` from a user override still validates as the int 8096."""
+    payload = _copy(DOCKER_BASE)
+    payload["container"]["listen_port"] = "$options.listen_port"  # type: ignore[index]
+    payload["options"] = {"listen_port": {"type": "port", "default": 9090}}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name=path.stem, options={"listen_port": "8096"})
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.listen_port == 8096
+    assert isinstance(svc.config.listen_port, int)
+
+
+def test_port_option_rejects_a_garbage_default(tmp_path: Path) -> None:
+    payload = _copy(DOCKER_BASE)
+    payload["container"]["listen_port"] = "$options.listen_port"  # type: ignore[index]
+    payload["options"] = {"listen_port": {"type": "port", "default": "garbage"}}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(Exception):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_a_fixed_port_still_yields_the_same_listen_port(tmp_path: Path) -> None:
+    payload = _copy(DOCKER_BASE)
+    payload["container"]["listen_port"] = "$options.listen_port"  # type: ignore[index]
+    payload["options"] = {"listen_port": {"type": "port", "default": 9090}}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+    assert svc.config.listen_port == 9090
+    assert svc.declared_host_port() == 9090
+
+
+def test_two_markers_with_the_same_name_in_one_spec_raise(tmp_path: Path) -> None:
+    payload = _copy(DOCKER_BASE)
+    payload["container"]["listen_port"] = "$options.listen_port"  # type: ignore[index]
+    payload["container"]["internal_port"] = 8081  # type: ignore[index]
+    payload["options"] = {
+        "listen_port": {"type": "port", "default": "$auto_port.same"},
+        "other_port": {"type": "port", "default": "$auto_port.same"},
+    }
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="declared twice"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_a_marker_listen_port_requires_an_internal_port(tmp_path: Path) -> None:
+    payload = _copy(DOCKER_BASE)
+    payload["container"]["listen_port"] = "$options.listen_port"  # type: ignore[index]
+    payload["container"].pop("internal_port", None)  # type: ignore[union-attr]
+    payload["options"] = {"listen_port": {"type": "port", "default": "$auto_port.web"}}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="internal_port is required"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_resolve_placeholders_resolves_an_auto_port_when_given_a_resolver(
+    tmp_path: Path,
+) -> None:
+    ctx = service_ctx(tmp_path, name="svc")
+    out = resolve_placeholders(
+        {"a": "$auto_port.listen", "mixed": "port $auto_port.listen here"},
+        ctx,
+        {},
+        None,
+        ports=lambda name: 18000,
+    )
+    assert out["a"] == 18000
+    assert isinstance(out["a"], int)
+    assert out["mixed"] == "port 18000 here"
+    # Without a resolver the marker survives — the load-time behaviour.
+    out2 = resolve_placeholders({"a": "$auto_port.listen"}, ctx, {}, None)
+    assert out2["a"] == "$auto_port.listen"
+
+
+def test_compose_runtime_port_must_be_published_by_the_template(tmp_path: Path) -> None:
+    """The health probe follows ``listen_port`` — the template must publish it."""
+    payload = {
+        "version": 1,
+        "kind": "compose",
+        "name": "demo",
+        "display_name": "Demo",
+        "description": "demo service",
+        "category": "utility",
+        "capabilities": {
+            "can_generate_config": False,
+            "can_export_for_agent": False,
+            "can_serve_llm": False,
+            "can_serve_image": False,
+            "can_train_models": False,
+            "has_web_ui": True,
+            "can_install": True,
+        },
+        "resource_estimate": {
+            "vram_bytes_typical": 0,
+            "vram_bytes_min": 0,
+            "cpu_cores_recommended": 1,
+        },
+        "compose_template": (
+            'services:\n  app:\n    ports:\n      - "$options.listen_host:$options.api_port:8765"\n'
+        ),
+        "options": {
+            "listen_host": {"type": "string", "default": "0.0.0.0"},
+            "listen_port": {"type": "port", "default": "$auto_port.listen"},
+            "api_port": {"type": "port", "default": "$auto_port.api"},
+        },
+    }
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="does not publish it"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))

@@ -126,6 +126,10 @@ class CptrService(UvService):
     def description(self) -> str:
         return "Open WebUI automation"
 
+    def declared_host_port(self) -> int | None:
+        """The fixed port cptr binds — the allocator stays off it (ADR-043)."""
+        return self.options.listen_port  # type: ignore[attr-defined]
+
     @property
     def category(self) -> ServiceCategory:
         return ServiceCategory.CHAT

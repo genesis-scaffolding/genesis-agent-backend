@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from ...contracts import StartResult, StopResult
@@ -58,6 +59,90 @@ def _http_get_json(
 
 class _Canceled(Exception):
     """Raised by :meth:`DockerContainer.pull` when the cancel callback fires."""
+
+
+@dataclass(frozen=True)
+class ContainerPortBinding:
+    """One container's declared host-port bindings.
+
+    ``host_ports`` are the host-side ports the container *declares* — the
+    ``HostConfig.PortBindings`` of the container, whether it is running or
+    stopped. A stopped container does not hold its port (docker tears the
+    network sandbox down), but the declaration survives and a later start
+    would collide with whoever took the port, so the declaration is what
+    the allocator reserves.
+
+    ``compose_project`` is the ``com.docker.compose.project`` label compose
+    puts on every container of a stack — that is how a compose service
+    recognises its own containers.
+    """
+
+    name: str
+    host_ports: tuple[int, ...]
+    compose_project: str | None = None
+
+
+def container_port_bindings() -> list[ContainerPortBinding]:
+    """Every container on the node, with its declared host-port bindings.
+
+    Empty list when docker is absent or the daemon is unreachable — the
+    caller treats that as "no container claims a port", which is exactly as
+    good as the bind test on its own.
+    """
+    try:
+        listed = _run(["docker", "ps", "-aq"], timeout=_DEFAULT_INSPECT_TIMEOUT_S)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    if listed.returncode != 0:
+        return []
+    ids = [line.strip() for line in (listed.stdout or "").splitlines() if line.strip()]
+    bindings: list[ContainerPortBinding] = []
+    for container_id in ids:
+        try:
+            inspected = _run(
+                ["docker", "inspect", container_id], timeout=_DEFAULT_INSPECT_TIMEOUT_S
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if inspected.returncode != 0:
+            continue
+        try:
+            payload = json.loads(inspected.stdout or "")
+        except json.JSONDecodeError:
+            continue
+        entries = payload if isinstance(payload, list) else [payload]
+        for entry in entries:
+            if isinstance(entry, dict):
+                bindings.append(_binding_from_inspect(entry))
+    return bindings
+
+
+def _binding_from_inspect(entry: dict) -> ContainerPortBinding:
+    """Read one ``docker inspect`` entry into a :class:`ContainerPortBinding`."""
+    name = str(entry.get("Name") or "").lstrip("/")
+    host_config = entry.get("HostConfig") or {}
+    port_bindings = host_config.get("PortBindings") or {}
+    ports: set[int] = set()
+    if isinstance(port_bindings, dict):
+        for entries in port_bindings.values():
+            for binding in entries or []:
+                if not isinstance(binding, dict):
+                    continue
+                raw = binding.get("HostPort")
+                if raw in (None, ""):
+                    continue
+                try:
+                    ports.add(int(raw))
+                except (TypeError, ValueError):
+                    continue
+    config = entry.get("Config") or {}
+    labels = config.get("Labels") or {} if isinstance(config, dict) else {}
+    project = labels.get("com.docker.compose.project") if isinstance(labels, dict) else None
+    return ContainerPortBinding(
+        name=name,
+        host_ports=tuple(sorted(ports)),
+        compose_project=str(project) if project else None,
+    )
 
 
 class DockerContainer:
@@ -518,4 +603,4 @@ class DockerContainer:
         return False
 
 
-__all__ = ["DockerContainer"]
+__all__ = ["ContainerPortBinding", "DockerContainer", "container_port_bindings"]

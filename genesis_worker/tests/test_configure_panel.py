@@ -425,3 +425,113 @@ def test_panel_uses_real_facade_in_integration(
     assert photoprism_keys, "no photoprism overrides persisted"
     sidecar = worker.read_service_overrides("photoprism")
     assert isinstance(sidecar, dict)
+
+
+# --- the scoped read-modify-write (ADR-043 §11) ----------------------------
+
+
+def test_apply_preserves_other_services_overrides_and_non_service_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Apply must not wipe the rest of the user-overrides file (ADR-043 §11).
+
+    The panel owns only its own service's scalar options; every other key
+    in the file — another service's option, a path knob — survives.
+    """
+    worker = _make_worker(tmp_path)
+    worker.write_user_overrides(
+        {
+            "GENESIS_SERVICES__OTHER_SERVICE__LISTEN_PORT": "9999",
+            "GENESIS_PATHS__VAULT_PATH": "/srv/vault",
+            "GENESIS_SERVICES__PHOTOPRISM__LISTEN_PORT": "2342",
+        }
+    )
+    written: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        worker,
+        "write_user_overrides",
+        lambda values: written.update(values),
+    )
+    monkeypatch.setattr(worker, "write_service_overrides", lambda name, values: None)
+    monkeypatch.setattr(worker, "rebuild_service", lambda name: None)
+
+    from genesis_worker.utils.process.docker import DockerContainer
+
+    monkeypatch.setattr(DockerContainer, "is_running", lambda self: False)
+
+    body = textwrap.dedent(
+        """
+        import streamlit as st
+        from genesis_worker.utils.services.configure_panel import _open_configure_dialog
+
+        worker = st.session_state["worker"]
+        svc = worker.service("photoprism")
+        _open_configure_dialog(svc)
+        """
+    )
+    at = _render(worker, "photoprism", body=body)
+    at.run()
+    at.button(key="configure-photoprism-apply-").click()
+    at.run()
+
+    # The other service's key and the non-service key survive.
+    assert written["GENESIS_SERVICES__OTHER_SERVICE__LISTEN_PORT"] == "9999"
+    assert written["GENESIS_PATHS__VAULT_PATH"] == "/srv/vault"
+    # This service's own options are written from the form.
+    assert "GENESIS_SERVICES__PHOTOPRISM__LISTEN_PORT" in written
+
+
+def test_apply_drops_the_pinned_override_of_an_auto_assigned_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ticking "assign automatically" writes nothing — the marker survives.
+
+    The pinned override for that option is removed, so the rebuilt service
+    goes back to the YAML default (the ``$auto_port`` marker).
+    """
+    worker = _make_worker(tmp_path)
+    worker.write_user_overrides({"GENESIS_SERVICES__PHOTOPRISM__LISTEN_PORT": "2342"})
+    written: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        worker,
+        "write_user_overrides",
+        lambda values: written.update(values),
+    )
+    monkeypatch.setattr(worker, "write_service_overrides", lambda name, values: None)
+    monkeypatch.setattr(worker, "rebuild_service", lambda name: None)
+
+    from genesis_worker.utils.process.docker import DockerContainer
+
+    monkeypatch.setattr(DockerContainer, "is_running", lambda self: False)
+
+    svc = worker.service("photoprism")
+    from genesis_worker.utils.services import DockerService
+    from genesis_worker.utils.services.spec import OptionSpec
+
+    docker_svc = cast("DockerService", svc)
+    docker_svc.config.__dict__["option_specs"] = {
+        "listen_port": OptionSpec(type="port", default="$auto_port.listen")
+    }
+    docker_svc.options.__dict__["listen_port"] = "$auto_port.listen"  # type: ignore[index]
+
+    body = textwrap.dedent(
+        """
+        import streamlit as st
+        from genesis_worker.utils.services.configure_panel import _open_configure_dialog
+
+        worker = st.session_state["worker"]
+        svc = worker.service("photoprism")
+        _open_configure_dialog(svc)
+        """
+    )
+    at = _render(worker, "photoprism", body=body)
+    at.run()
+    # The marker renders as an "assign automatically" checkbox, not a number input.
+    assert at.checkbox(key="configure-photoprism-listen_port-auto") is not None
+    at.button(key="configure-photoprism-apply-").click()
+    at.run()
+
+    # The checkbox is ticked by default, so nothing is written for the option.
+    assert "GENESIS_SERVICES__PHOTOPRISM__LISTEN_PORT" not in written

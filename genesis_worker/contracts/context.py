@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .host import HostInfo
+from .ports import PortAllocator
 from .secret import NoSecretsAccessor, SecretsAccessor
 
 
@@ -64,7 +65,18 @@ class SourceContext(PluginContext):
 
 @dataclass(frozen=True)
 class ServiceContext(PluginContext):
+    """The context a service plugin is constructed with.
+
+    ``port_allocator`` is the node-level host-port allocator (ADR-043).
+    A service that asks the framework for a host port
+    (``$auto_port.<name>``) resolves it through this handle at start
+    time. ``None`` when the worker wired no allocator — a service that
+    asks for a port then fails loudly at start rather than falling back
+    to a fixed port.
+    """
+
     media_vault_path: Path = field(default_factory=Path)
+    port_allocator: PortAllocator | None = None
 
 
 __all__ = ["PluginContext", "ServiceContext", "SourceContext"]

@@ -529,6 +529,10 @@ class LlamaSwapService(InferenceService):
         except (ValueError, IndexError):
             return 8080
 
+    def declared_host_port(self) -> int | None:
+        """The fixed port llama-swap binds — the allocator stays off it (ADR-043)."""
+        return self._port()
+
     def runtime_endpoint(self) -> str | None:
         """OpenAI-compatible API base URL (``/v1``). Used by pi-agent."""
         if not self.is_running():

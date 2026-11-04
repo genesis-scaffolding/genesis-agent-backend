@@ -20,7 +20,8 @@ with mixed placeholders works without callers caring.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,10 +34,11 @@ from ...contracts import (
     ServiceContext,
     ServiceResourceEstimate,
 )
+from ..ports.markers import AUTO_PORT_KEY_PREFIX, is_marker, marker_name
 from . import spec as _spec_module
 from .base import DeclarativeServiceBase
 from .compose_service import ComposeImage, ComposeService, ComposeServiceConfig
-from .docker_service import AuthConfig, DockerService, DockerServiceConfig
+from .docker_service import AuthConfig, DockerService, DockerServiceConfig, ExtraPort
 from .spec import (
     ComposeServiceSpec,
     DockerServiceSpec,
@@ -47,6 +49,109 @@ from .spec import (
 from .uv_service import UvService, UvServiceConfig
 
 _PLACEHOLDER_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)*)")
+_AUTO_PORT_IN_TEXT_RE = re.compile(r"\$auto_port\.([a-zA-Z0-9_-]+)")
+
+
+@dataclass(frozen=True)
+class PortUseSite:
+    """One place a spec asks the framework for a host port.
+
+    ``marker`` is the use-site name — the identity of the port within the
+    service. ``where`` names the place, so the rejection message can point
+    at both offenders.
+    """
+
+    marker: str
+    where: str
+
+
+def _template_marker_names(template: str) -> set[str]:
+    """Every auto-port marker name written literally in a compose template."""
+    return set(_AUTO_PORT_IN_TEXT_RE.findall(template))
+
+
+def _collect_port_use_sites(raw: dict, options_resolved: Mapping[str, Any]) -> list[PortUseSite]:
+    """Every use site of an auto-port marker in a raw spec.
+
+    Collected from the *raw* YAML, before substitution: after substitution a
+    field written as ``$options.X`` is indistinguishable from one written
+    as a literal marker, and only the latter is a use site of its own.
+
+    - each ``port``-typed option whose effective value is a marker;
+    - each port-bearing spec field whose *literal* value is a marker;
+    - for the compose kind, each literal marker in the template whose name
+      no option already declares.
+    """
+    sites: list[PortUseSite] = []
+    raw_options = raw.get("options") or {}
+    if isinstance(raw_options, dict):
+        for name, spec in raw_options.items():
+            if not isinstance(spec, dict) or spec.get("type") != "port":
+                continue
+            value = options_resolved.get(name)
+            if is_marker(value):
+                sites.append(PortUseSite(marker_name(value) or "", f"option {name!r}"))
+
+    container = raw.get("container")
+    if isinstance(container, dict):
+        value = container.get("listen_port")
+        if is_marker(value):
+            sites.append(PortUseSite(marker_name(value) or "", "container.listen_port"))
+        extras = container.get("extra_ports")
+        if isinstance(extras, list):
+            for index, extra in enumerate(extras):
+                if isinstance(extra, dict) and is_marker(extra.get("host")):
+                    sites.append(
+                        PortUseSite(
+                            marker_name(extra["host"]) or "",
+                            f"container.extra_ports[{index}].host",
+                        )
+                    )
+
+    template = raw.get("compose_template")
+    if isinstance(template, str):
+        declared = {site.marker for site in sites}
+        for name in sorted(_template_marker_names(template)):
+            if name in declared:
+                continue
+            sites.append(PortUseSite(name, "compose_template"))
+    return sites
+
+
+def _assert_unique_use_sites(sites: list[PortUseSite], path: Path) -> None:
+    """One marker name means one port — two use sites may not share a name."""
+    seen: dict[str, str] = {}
+    for site in sites:
+        if site.marker in seen:
+            raise ValueError(
+                f"{path}: the host-port marker $auto_port.{site.marker} is declared twice — "
+                f"{seen[site.marker]} and {site.where}; one marker name means one port"
+            )
+        seen[site.marker] = site.where
+
+
+def _assert_compose_runtime_port_published(
+    resolved: dict,
+    options_resolved: Mapping[str, Any],
+    path: Path,
+) -> None:
+    """The compose runtime port must be published by the rendered template.
+
+    The runtime port (health probe, web UI endpoint) follows the
+    ``listen_port`` option. When that option carries a marker, the template
+    has to publish the same marker — otherwise the probe would watch a port
+    nobody published, and the service would never become ready.
+    """
+    port = options_resolved.get("listen_port")
+    if not isinstance(port, str) or not is_marker(port):
+        return
+    template = resolved.get("compose_template") or ""
+    if not isinstance(template, str) or port not in template:
+        raise ValueError(
+            f"{path}: the runtime port option 'listen_port' is the marker {port!r} but the "
+            "compose template does not publish it — the health probe would watch a port "
+            "the stack never binds"
+        )
 
 
 def _resolve_string(
@@ -55,6 +160,7 @@ def _resolve_string(
     options: Mapping[str, Any],
     auth_token: Any,
     images: Mapping[str, str] | None = None,
+    ports: Callable[[str], int] | None = None,
 ) -> Any:
     """Resolve ``$placeholders`` in ``value``.
 
@@ -73,17 +179,19 @@ def _resolve_string(
     """
     match = _PLACEHOLDER_RE.fullmatch(value)
     if match:
-        resolved = _resolve_placeholder(match.group(1), ctx, options, auth_token, images)
+        resolved = _resolve_placeholder(match.group(1), ctx, options, auth_token, images, ports)
         if resolved is None:
             return None
         if isinstance(resolved, str):
             return resolved
         if match.group(1).startswith("options."):
             return resolved  # typed value preserved; env post-pass handles bool coercion
+        if match.group(1).startswith(AUTO_PORT_KEY_PREFIX):
+            return resolved  # an allocated port stays an int
         return str(resolved)  # Path / int from $data_dir etc.
 
     def _replace(match: re.Match[str]) -> str:
-        return str(_resolve_placeholder(match.group(1), ctx, options, auth_token, images))
+        return str(_resolve_placeholder(match.group(1), ctx, options, auth_token, images, ports))
 
     return _PLACEHOLDER_RE.sub(_replace, value)
 
@@ -94,6 +202,7 @@ def _resolve_placeholder(
     options: Mapping[str, Any],
     auth_token: Any,
     images: Mapping[str, str] | None = None,
+    ports: Callable[[str], int] | None = None,
 ) -> Any:
     """Resolve a single placeholder key to its typed value.
 
@@ -128,6 +237,14 @@ def _resolve_placeholder(
         if images is not None:
             return images.get(key.split(".", 1)[1], f"${key}")
         return f"${key}"
+    # Auto-port markers ($auto_port.<name>) resolve when the caller supplies
+    # the port resolver (the start-time materialisation pass). At load time
+    # ports is None and the marker survives untouched — the same way
+    # $images.<name> survives.
+    if key.startswith(AUTO_PORT_KEY_PREFIX):
+        if ports is None:
+            return f"${key}"
+        return ports(key[len(AUTO_PORT_KEY_PREFIX) :])
     # Unknown placeholder -- leave the marker intact so callers can spot it.
     return f"${key}"
 
@@ -138,6 +255,7 @@ def resolve_placeholders(
     options: Mapping[str, Any],
     auth_token: Any = None,
     images: Mapping[str, str] | None = None,
+    ports: Callable[[str], int] | None = None,
 ) -> Any:
     """Recursively replace ``$state_dir`` / ``$options.X`` markers in ``value``.
 
@@ -148,21 +266,24 @@ def resolve_placeholders(
     everything else is returned untouched. ``images`` supplies the
     effective ``$images.<name>`` refs (name -> ``repo:tag``); when
     omitted, image markers survive untouched (load-time pass).
+    ``ports`` supplies the ``$auto_port.<name>`` resolver (name -> port);
+    when omitted, auto-port markers survive untouched (load-time pass).
     """
     if isinstance(value, str):
-        return _resolve_string(value, ctx, options, auth_token, images)
+        return _resolve_string(value, ctx, options, auth_token, images, ports)
     if isinstance(value, Path):
         # Path objects can survive ``model_dump`` with their string
         # form containing ``$variable`` markers (e.g. option defaults
         # like ``"$data_dir/.."``). Stringify so the substitution
         # path picks them up; the next pass replaces the marker.
-        return _resolve_string(str(value), ctx, options, auth_token, images)
+        return _resolve_string(str(value), ctx, options, auth_token, images, ports)
     if isinstance(value, dict):
         return {
-            k: resolve_placeholders(v, ctx, options, auth_token, images) for k, v in value.items()
+            k: resolve_placeholders(v, ctx, options, auth_token, images, ports)
+            for k, v in value.items()
         }
     if isinstance(value, list):
-        return [resolve_placeholders(v, ctx, options, auth_token, images) for v in value]
+        return [resolve_placeholders(v, ctx, options, auth_token, images, ports) for v in value]
     return value
 
 
@@ -209,6 +330,7 @@ def _build_docker_config(
     resolved: dict,
     options_model: type[BaseModel],
     option_specs: Mapping[str, _spec_module.OptionSpec],
+    port_markers: tuple[str, ...] = (),
 ) -> DockerServiceConfig:
     """Translate an already-resolved docker spec dict into ``DockerServiceConfig``.
 
@@ -262,6 +384,11 @@ def _build_docker_config(
         listen_host=container["listen_host"],
         listen_port=container["listen_port"],
         internal_port=container.get("internal_port"),
+        extra_ports=tuple(
+            ExtraPort(container_port=extra["container"], host=extra["host"])
+            for extra in container.get("extra_ports") or []
+        ),
+        port_markers=port_markers,
         public_host=container.get("public_host"),
         web_ui_path=container["web_ui_path"],
         restart_policy=container["restart_policy"],
@@ -286,6 +413,7 @@ def _build_compose_config(
     options_model: type[BaseModel],
     option_specs: Mapping[str, _spec_module.OptionSpec],
     options_resolved: Mapping[str, Any],
+    port_markers: tuple[str, ...] = (),
 ) -> ComposeServiceConfig:
     """Translate an already-resolved compose spec dict into ``ComposeServiceConfig``.
 
@@ -324,7 +452,12 @@ def _build_compose_config(
         compose_template=resolved["compose_template"],
         compose_version=resolved.get("compose_version", "3.8"),
         listen_host=str(option_host) if option_host is not None else resolved["listen_host"],
-        listen_port=int(option_port) if option_port is not None else resolved["listen_port"],
+        # The runtime port follows the resolved ``listen_port`` option — the
+        # same value the compose template binds to — so the probe and the
+        # container can never desync. A marker is carried through as a
+        # marker; the allocation materialises it at start time.
+        listen_port=option_port if option_port is not None else resolved["listen_port"],
+        port_markers=port_markers,
         health_probe_path=resolved.get("health_probe_path", "/"),
         extra_env=merged_env,
         extra_volumes=merged_volumes,
@@ -345,6 +478,7 @@ def _build_uv_config(
     resolved: dict,
     options_model: type[BaseModel],
     option_specs: Mapping[str, _spec_module.OptionSpec],
+    port_markers: tuple[str, ...] = (),
 ) -> UvServiceConfig:
     """Translate an already-resolved uv spec dict into ``UvServiceConfig``.
 
@@ -374,6 +508,7 @@ def _build_uv_config(
         command_env=dict(resolved.get("command_env") or {}),
         listen_host=resolved["listen_host"],
         listen_port=resolved["listen_port"],
+        port_markers=port_markers,
         public_host=resolved.get("public_host"),
         health_probe_path=resolved["health_probe_path"],
         health_timeout_s=resolved["health_timeout_s"],
@@ -468,6 +603,16 @@ def load_service_spec(
     # The fully-resolved spec, used to feed the config builder.
     resolved = resolve_placeholders(spec.model_dump(), ctx, options_resolved)
 
+    # Auto-port use sites: one marker name means one port (ADR-043). The
+    # sites are collected from the *raw* YAML, because after substitution a
+    # field written as ``$options.X`` is indistinguishable from a literal
+    # marker — and only the latter declares a port of its own.
+    use_sites = _collect_port_use_sites(raw, options_resolved)
+    _assert_unique_use_sites(use_sites, path)
+    port_markers = tuple(site.marker for site in use_sites)
+    if isinstance(spec, ComposeServiceSpec):
+        _assert_compose_runtime_port_published(resolved, options_resolved, path)
+
     # Map options (``extra_env`` / ``extra_mounts``) merge additively
     # into the resolved spec, with user additions winning on key
     # collisions. The YAML ``env:`` / ``volumes:`` blocks declare the
@@ -492,14 +637,16 @@ def load_service_spec(
         resolved["volumes"] = {**(resolved.get("volumes") or {}), **extra_mounts}
 
     if isinstance(spec, DockerServiceSpec):
-        config = _build_docker_config(resolved, options_model, spec.options)
+        config = _build_docker_config(resolved, options_model, spec.options, port_markers)
         return DockerService(ctx, config=config)
 
     if isinstance(spec, ComposeServiceSpec):
-        config = _build_compose_config(resolved, options_model, spec.options, options_resolved)
+        config = _build_compose_config(
+            resolved, options_model, spec.options, options_resolved, port_markers
+        )
         return ComposeService(ctx, config=config)
 
-    config = _build_uv_config(resolved, options_model, spec.options)
+    config = _build_uv_config(resolved, options_model, spec.options, port_markers)
     return UvService(ctx, config=config)
 
 

@@ -35,6 +35,8 @@ from ...contracts import (
     StopResult,
     UiPage,
 )
+from ..ports.binder import PortBinder
+from ..ports.markers import marker_name
 from .spec import OptionSpec
 
 ConfigT = TypeVar("ConfigT")
@@ -52,6 +54,10 @@ class DeclarativeServiceConfig:
     ``configure`` UI panel can discover ``ui_label`` / ``ui_help`` /
     ``ui_group`` without re-reading the YAML. Empty for Python
     services that ship their own ``options.py`` (ADR-036).
+
+    ``port_markers`` names the auto-port use sites the spec declared
+    (ADR-043) — the framework uses it to release stale allocations when
+    a rebuilt spec stops asking for a port.
     """
 
     name: str
@@ -64,6 +70,7 @@ class DeclarativeServiceConfig:
     log_filename: str | None = None
     ui_pages: Sequence[str] = ()
     option_specs: Mapping[str, OptionSpec] = field(default_factory=dict)
+    port_markers: tuple[str, ...] = ()
 
 
 class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
@@ -213,6 +220,58 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
             return socket.gethostname()
         except OSError:
             return "localhost"
+
+    # --- contract: host ports (ADR-043) -----------------------------------
+
+    def declared_host_port(self) -> int | None:
+        """The fixed host port this service declares, or ``None``.
+
+        A service that asked for an allocated port declares none — the
+        allocator must not reserve the port it is about to hand out.
+        """
+        port = getattr(self.config, "listen_port", None)
+        if isinstance(port, bool) or not isinstance(port, int):
+            return None
+        return port
+
+    def effective_host_port(self) -> int | None:
+        """The host port this service actually uses.
+
+        The fixed port when the spec declares one, the allocated port when
+        the spec asked for one, and ``None`` when the service asked for a
+        port it has never been given (it has not started yet).
+        """
+        port = getattr(self.config, "listen_port", None)
+        if isinstance(port, bool):
+            return None
+        if isinstance(port, int):
+            return port
+        name = marker_name(port)
+        if name is None:
+            return None
+        return self.port_binder().allocated(name)
+
+    def declared_port_markers(self) -> tuple[str, ...]:
+        """The auto-port use-site names this spec declared."""
+        cfg: DeclarativeServiceConfig = self.config  # type: ignore[assignment]
+        return cfg.port_markers
+
+    def port_binder(self) -> PortBinder:
+        """This service's handle on the node's port allocator."""
+        return PortBinder(
+            self._ctx.port_allocator,
+            self.name,
+            own_containers=self.own_container_names,
+        )
+
+    def own_container_names(self) -> tuple[str, ...]:
+        """The containers this service owns.
+
+        The allocator treats a port published by one of them as free for
+        this service — that is what makes an allocation sticky across a
+        restart of a running container.
+        """
+        return ()
 
     # --- contract: abstract lifecycle (subclasses fill these) ------------
 
