@@ -7,18 +7,17 @@ from typing import Any
 import streamlit as st
 
 from genesis_worker.contracts import AcquireStateKind, AcquireView, InstallState
-
-from ....utils.installables import (
-    DockerImageRecord,
-    GithubReleaseRecord,
-    InstallableRecord,
-    derive_asset_pattern,
-)
-from ..installables import (
+from genesis_worker.services.llama_swap.installables import (
     ensure_unique_installable_name,
     fork_slug,
     guess_backend,
     parse_repo_url,
+)
+from genesis_worker.utils.installables import (
+    DockerImageRecord,
+    GithubReleaseRecord,
+    InstallableRecord,
+    derive_asset_pattern,
 )
 
 SERVICE_NAME = "llama_swap"
