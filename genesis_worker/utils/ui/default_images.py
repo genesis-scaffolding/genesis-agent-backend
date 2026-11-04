@@ -18,14 +18,14 @@ from dataclasses import dataclass
 
 import streamlit as st
 
-from ...contracts import (
+from genesis_worker.contracts import (
     AcquireStateKind,
     AcquireView,
     InferenceService,
     InstallState,
     ServiceInstall,
 )
-from ..process import DockerContainer
+from genesis_worker.utils.process import DockerContainer
 
 _SESSION_KEY_PREFIX = "default-images/sessions"
 _DROP_PENDING_PREFIX = "default-images/drop-pending"

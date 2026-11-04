@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...contracts.host import ComputeDevice
+from ...utils.installables import InstallableRecord
 
 
 class LlamaSwapOptions(BaseModel):
@@ -30,12 +30,12 @@ class LlamaSwapOptions(BaseModel):
     # Which framework-managed llama-server binary the config generator
     # should use as the default. ``"auto"`` picks via hardware detection:
     # NVIDIA GPU + cuda installed → cuda; else vulkan; else cpu. The
-    # explicit ``"cuda" / "cpu" / "vulkan"`` overrides auto when the
-    # matching installable is on disk. ``None`` falls back to the legacy
-    # ``default_binary_rel`` path. Default is ``"auto"`` so the framework-
-    # managed binary wins without a one-time setup step. Override via
+    # explicit variant key overrides auto when the matching installable is
+    # on disk. ``None`` falls back to the legacy ``default_binary_rel`` path.
+    # Default is ``"auto"`` so the framework-managed binary wins without a
+    # one-time setup step. Override via
     # ``GENESIS_SERVICES__LLAMA_SWAP__LLAMA_SERVER_VARIANT``.
-    llama_server_variant: Literal["auto", "cuda", "cpu", "vulkan"] | None = "auto"
+    llama_server_variant: str | None = "auto"
     # Pin a specific compute device. ``None`` falls back to the smart
     # auto-pick (NVIDIA 0 → AMD 0 → Intel 0 → CPU). When set, the
     # matching variant binary is required — the service fails loud at
@@ -52,6 +52,9 @@ class LlamaSwapOptions(BaseModel):
     # per-service JSON sidecar (list-typed, like comfyui's extra_args);
     # edited on the status page's "Server flags" section.
     hardcoded_flags: list[str] | None = None
+    # User-defined installable records. Seed records are merged underneath
+    # these by the service; a user record replaces the seed with the same name.
+    installables: list[InstallableRecord] = Field(default_factory=list)
 
     config_path: Path | None = None
     recipes_path: Path | None = None

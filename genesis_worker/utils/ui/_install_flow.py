@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ...contracts import AcquireSession, AcquireStateKind, AcquireView, ServiceInstall
+from genesis_worker.contracts import AcquireSession, AcquireStateKind, AcquireView, ServiceInstall
 
 
 def render_inline_install(

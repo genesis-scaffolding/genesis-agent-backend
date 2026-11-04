@@ -559,6 +559,47 @@ def test_image_install_state_not_installed_when_image_missing(tmp_path: Path, mo
     assert _make_installable(tmp_path).state() == InstallState.NOT_INSTALLED
 
 
+def test_image_install_state_uses_installed_selection(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        DockerContainer,
+        "image_present",
+        staticmethod(lambda image: image == "example/svc:v1"),
+    )
+    inst = _make_installable(tmp_path)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    inst._selection_path.write_text("v1\n")
+    assert inst.state() == InstallState.INSTALLED
+
+
+def test_image_install_shared_selection_does_not_hide_declared_image(
+    tmp_path: Path, monkeypatch
+) -> None:
+    shared_state = tmp_path / "shared-state"
+    first = _make_installable(
+        tmp_path,
+        image_repo="example/a",
+        image_tag="default",
+        state_dir=shared_state,
+        name="a",
+    )
+    second = _make_installable(
+        tmp_path,
+        image_repo="example/b",
+        image_tag="latest",
+        state_dir=shared_state,
+        name="b",
+    )
+    shared_state.mkdir(parents=True, exist_ok=True)
+    first._selection_path.write_text("v1\n")
+    monkeypatch.setattr(
+        DockerContainer,
+        "image_present",
+        staticmethod(lambda image: image in {"example/a:v1", "example/b:latest"}),
+    )
+    assert first.state() == InstallState.INSTALLED
+    assert second.state() == InstallState.INSTALLED
+
+
 def test_image_install_installed_version_reads_selection(tmp_path: Path) -> None:
     inst = _make_installable(tmp_path)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)

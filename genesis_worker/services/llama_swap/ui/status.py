@@ -6,6 +6,7 @@ from typing import Any
 
 import streamlit as st
 
+from genesis_worker.contracts import InstallState
 from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
 from genesis_worker.services.llama_swap.generate_config import DEFAULT_HARDCODED_FLAGS
 from genesis_worker.utils.ui._nav import to_relative
@@ -107,8 +108,16 @@ def _on_variant_change() -> None:
 
 with st.container(border=True):
     st.subheader("Variant")
-    option_labels = ["(legacy)", "auto", "cuda", "cpu", "vulkan"]
-    current = svc.llama_server_variant or "(legacy)"
+    option_labels = ["(legacy)", "auto", *svc.variant_keys()]
+    configured = svc.llama_server_variant or "(legacy)"
+    if configured in option_labels:
+        current = configured
+    else:
+        current = "auto"
+        svc.set_llama_server_variant("auto")
+        st.warning(
+            f"Saved variant {configured!r} is no longer available; using auto until you choose another."
+        )
     choice = st.selectbox(
         "llama-server variant",
         option_labels,
@@ -193,7 +202,8 @@ def _on_save_server_flags() -> None:
     raw = st.session_state.get("status-server-flags") or ""
     flags = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     svc.set_hardcoded_flags(flags)
-    values: dict = {}
+    values = worker.read_service_overrides(SERVICE_NAME)
+    values.pop("hardcoded_flags", None)
     if flags:
         values["hardcoded_flags"] = flags
     worker.write_service_overrides(SERVICE_NAME, values)
@@ -238,7 +248,9 @@ with st.container(border=True):
             "Revert to defaults", key="status-server-flags-revert", use_container_width=True
         ):
             svc.set_hardcoded_flags(None)
-            worker.write_service_overrides(SERVICE_NAME, {})
+            values = worker.read_service_overrides(SERVICE_NAME)
+            values.pop("hardcoded_flags", None)
+            worker.write_service_overrides(SERVICE_NAME, values)
             ok = worker.regenerate_service_config(SERVICE_NAME)
             if ok:
                 st.success("Reverted + regenerated. Restart llama-swap to apply.")
@@ -254,7 +266,7 @@ with st.container(border=True):
 
     for installable in svc.installs():
         version = installable.installed_version() or "—"
-        state = "installed" if installable.binary_path() else "not installed"
+        state = "installed" if installable.state() == InstallState.INSTALLED else "not installed"
         cols = st.columns([3, 2, 1])
         with cols[0]:
             st.markdown(f"**{installable.name}**")

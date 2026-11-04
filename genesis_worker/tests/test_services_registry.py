@@ -173,7 +173,7 @@ def test_llama_swap_capabilities_declares_llm_serving(tmp_path: Path) -> None:
 def test_is_available_tracks_the_binary_only(tmp_path: Path) -> None:
     """Availability means the binary is installed. A missing config is not
     unavailability — the UI offers to generate one (ADR-009)."""
-    from genesis_worker.services.llama_swap.installs import LlamaSwapBinary
+    from genesis_worker.utils.installables import GithubReleaseInstall
 
     svc = LlamaSwapService(service_ctx(tmp_path))
     assert not svc.config_path.exists()
@@ -181,7 +181,7 @@ def test_is_available_tracks_the_binary_only(tmp_path: Path) -> None:
 
     # Lay down a v0.4.5 install with a real binary at the expected path.
     installable = svc.installs()[0]
-    assert isinstance(installable, LlamaSwapBinary)
+    assert isinstance(installable, GithubReleaseInstall)
     version = "v0.4.5"
     install_root = installable._layout.installs_root / version
     install_root.mkdir(parents=True)
