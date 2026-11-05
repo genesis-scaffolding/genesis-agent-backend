@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import yaml
 
 from genesis_worker import GenesisWorker
 from genesis_worker.contracts.host import Hardware, HostInfo
@@ -20,6 +21,15 @@ from genesis_worker.services.llama_swap.generate_config import (
 from genesis_worker.services.llama_swap.recipes import BUNDLED_RECIPES_PATH
 from genesis_worker.settings import PathsSettings, Settings
 from genesis_worker.tests._factories import service_ctx
+
+
+@pytest.fixture(autouse=True)
+def _stub_radiance_group_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.llama_swap.service.resolve_group_gids",
+        lambda names: (),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Paths the service owns
@@ -207,6 +217,7 @@ def test_regenerate_config_writes_generated_at_and_no_longer_stale(tmp_path: Pat
     assert embedded == catalog.generated_at
     assert svc.last_generated_at() == embedded
     assert is_config_stale(svc.config_path, catalog_generated_at=embedded) is False
+    assert yaml.safe_load(svc.config_path.read_text())["healthCheckTimeout"] == 600
 
 
 def test_regenerate_config_is_a_no_op_when_nothing_changed(tmp_path: Path) -> None:
@@ -338,8 +349,8 @@ def test_capabilities_reports_can_install(tmp_path: Path) -> None:
     assert svc.capabilities().can_install is True
 
 
-def test_installs_returns_four_installables(tmp_path: Path) -> None:
-    """Service exposes llama-swap plus three llama-server variants."""
+def test_installs_returns_five_installables(tmp_path: Path) -> None:
+    """Service exposes llama-swap, three llama-server variants, and radiance."""
     svc = LlamaSwapService(service_ctx(tmp_path))
     names = [i.name for i in svc.installs()]
     assert names == [
@@ -347,6 +358,7 @@ def test_installs_returns_four_installables(tmp_path: Path) -> None:
         "llama-server-cuda",
         "llama-server-cpu",
         "llama-server-vulkan",
+        "radiance",
     ]
 
 
@@ -898,7 +910,7 @@ def test_evaluate_model_config_falls_back_to_legacy_when_no_variant(
     assert configs["qwen3-6-gguf-thinking"].binary == str(legacy)
 
 
-def test_installs_returns_four_entries_duplicate(tmp_path: Path) -> None:
+def test_installs_returns_five_entries_duplicate(tmp_path: Path) -> None:
     """Sanity check: variant ordering on each construction."""
     svc = LlamaSwapService(service_ctx(tmp_path))
     names = [i.name for i in svc.installs()]
@@ -907,6 +919,7 @@ def test_installs_returns_four_entries_duplicate(tmp_path: Path) -> None:
         "llama-server-cuda",
         "llama-server-cpu",
         "llama-server-vulkan",
+        "radiance",
     }
 
 
@@ -1031,3 +1044,128 @@ def test_uninstall_installable_unknown_name_raises(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(svc, "is_running", lambda: False)
     with pytest.raises(KeyError, match="unknown installable"):
         svc.uninstall_installable("not-a-real-binary")
+
+
+# ---------------------------------------------------------------------------
+# Radiance image + settings
+# ---------------------------------------------------------------------------
+
+
+def _radiance_record(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "kind": "docker_image",
+        "name": "radiance",
+        "label": "Radiance engine (container)",
+        "image": "stilldeadcode/radiance",
+        "default_tag": "latest",
+    }
+    values.update(overrides)
+    return values
+
+
+def test_radiance_image_ref_uses_the_installed_tag(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"installables": [_radiance_record()]}))
+    installable = next(item for item in svc.installs() if item.name == "radiance")
+    selection = tmp_path / "state" / "radiance" / "current"
+    selection.parent.mkdir(parents=True)
+    selection.write_text("v1.2.3")
+    assert svc.radiance_image_ref() == "stilldeadcode/radiance:v1.2.3"
+    assert installable.installed_version() == "v1.2.3"
+
+
+def test_radiance_image_ref_falls_back_to_the_default_tag(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"installables": [_radiance_record()]}))
+    assert svc.radiance_image_ref() == "stilldeadcode/radiance:latest"
+
+
+def test_radiance_image_ref_is_none_without_the_radiance_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    monkeypatch.setattr(svc, "installable_records", list)
+    assert svc.radiance_image_ref() is None
+
+
+def test_radiance_image_ref_is_none_when_the_record_is_disabled(tmp_path: Path) -> None:
+    svc = LlamaSwapService(
+        service_ctx(
+            tmp_path,
+            options={"installables": [_radiance_record(enabled=False)]},
+        )
+    )
+    assert svc.radiance_image_ref() is None
+
+
+def test_build_options_carries_the_radiance_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.llama_swap.service.resolve_group_gids",
+        lambda names: (("render", "992"), ("video", "44")),
+    )
+    svc = LlamaSwapService(
+        service_ctx(
+            tmp_path,
+            options={
+                "llama_server_variant": None,
+                "installables": [_radiance_record()],
+                "radiance": {"gpu_index": 1, "tp": 2},
+            },
+        )
+    )
+    options = svc._build_options()  # noqa: SLF001
+    assert options.radiance is not None
+    assert options.radiance.image_ref == "stilldeadcode/radiance:latest"
+    assert options.radiance.gpu_index == 1
+    assert options.radiance.tp == 2
+    assert options.radiance.group_gids == (("render", "992"), ("video", "44"))
+
+
+def test_build_options_has_no_radiance_settings_without_the_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": None}))
+    monkeypatch.setattr(svc, "installable_records", list)
+    assert svc._build_options().radiance is None  # noqa: SLF001
+
+
+def test_bundled_radiance_recipe_matches_the_qwen38_mxfp4_model(tmp_path: Path) -> None:
+    from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
+
+    svc = LlamaSwapService(service_ctx(tmp_path, options={"llama_server_variant": None}))
+    catalog = Catalog(
+        root=str(tmp_path),
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            ModelEntry(
+                source="huggingface",
+                name="StillDeadcode/qwen3.8-27b-mxfp4",
+                total_bytes=19_000_000_000,
+                directory=str(tmp_path / "qwen3.8-27b-mxfp4"),
+                pieces=[
+                    ModelPiece(
+                        path=tmp_path / "blob",
+                        filename="qwen3.8-27b-mxfp4.rad",
+                        bytes=19_000_000_000,
+                        role="main",
+                    )
+                ],
+                notes=[],
+                extra={},
+            )
+        ],
+    )
+    configs = svc.evaluate_model_config(catalog)
+    assert set(configs) == {"qwen3-8-27b-mxfp4"}
+    config = configs["qwen3-8-27b-mxfp4"]
+    assert config.matched_recipe == "radiance-qwen3-8-27b-mxfp4"
+    assert config.radiance is not None
+    assert config.radiance.tp == 1
+    assert config.radiance.max_model_len == 32768
+    assert config.radiance.max_num_seqs == 8
+    assert config.radiance.kv_cache_dtype == "fp8"
+    assert config.radiance.gpu_headroom_mib == 96

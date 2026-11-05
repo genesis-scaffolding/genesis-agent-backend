@@ -24,6 +24,7 @@ from ...contracts import (
 )
 from ...utils.acquire import fetch_latest_release
 from ...utils.installables import (
+    DockerImageRecord,
     InstallableRecord,
     InstallDirs,
     ReleaseCandidate,
@@ -47,6 +48,7 @@ from .installables import (
 )
 from .options import LlamaSwapOptions
 from .overrides import OverridesStore
+from .radiance import RADIANCE_INSTALLABLE_NAME, RadianceSettings, resolve_group_gids
 from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes, RecipesOverlayStore, RecipesStore
 
 
@@ -153,6 +155,29 @@ class LlamaSwapService(InferenceService):
     def user_installable_records(self) -> list[InstallableRecord]:
         """The user-owned records persisted in the service sidecar."""
         return list(self._user_records)
+
+    def radiance_image_ref(self) -> str | None:
+        """The image ref the radiance command runs.
+
+        The radiance ``docker_image`` record's repo, with the installed tag when
+        one is recorded, else the record's default tag.
+        """
+        for record in self.installable_records():
+            if (
+                record.kind != "docker_image"
+                or record.name != RADIANCE_INSTALLABLE_NAME
+                or not isinstance(record, DockerImageRecord)
+            ):
+                continue
+            if not record.enabled:
+                return None
+            installable = next(
+                (item for item in self.installs() if item.name == record.name),
+                None,
+            )
+            tag = installable.installed_version() if installable is not None else None
+            return f"{record.image}:{tag or record.default_tag}"
+        return None
 
     def seed_installable_records(self) -> list[InstallableRecord]:
         """The bundled records beneath the user's overrides."""
@@ -434,6 +459,28 @@ class LlamaSwapService(InferenceService):
             if record is None:
                 raise RuntimeError(f"no llama-server binary for variant {variant!r}")
             resolved_variant = record.backend
+        image_ref = self.radiance_image_ref()
+        radiance: RadianceSettings | None = None
+        if image_ref is not None:
+            radiance_options = self._options.radiance
+            radiance = RadianceSettings(
+                image_ref=image_ref,
+                container_port=radiance_options.container_port,
+                gpu_index=radiance_options.gpu_index,
+                group_names=tuple(radiance_options.group_names),
+                group_gids=resolve_group_gids(radiance_options.group_names),
+                tp=radiance_options.tp,
+                max_model_len=radiance_options.max_model_len,
+                max_num_seqs=radiance_options.max_num_seqs,
+                kv_cache_dtype=radiance_options.kv_cache_dtype,
+                gpu_headroom_mib=radiance_options.gpu_headroom_mib,
+                ttl_s=radiance_options.ttl_s,
+                unload_timeout_s=radiance_options.unload_timeout_s,
+                stop_grace_s=radiance_options.stop_grace_s,
+                check_endpoint=radiance_options.check_endpoint,
+                extra_docker_args=tuple(radiance_options.extra_docker_args),
+                extra_flags=tuple(radiance_options.extra_flags),
+            )
         return BuildOptions(
             repo_root=self._ctx.repo_root,
             kv_quant_over=self._options.kv_quant_over_bytes,
@@ -447,6 +494,8 @@ class LlamaSwapService(InferenceService):
                 if self._options.hardcoded_flags is not None
                 else None
             ),
+            radiance=radiance,
+            health_check_timeout_s=self._options.health_check_timeout_s,
         )
 
     def is_ready_to_serve(self) -> bool:
@@ -622,17 +671,19 @@ class LlamaSwapService(InferenceService):
         self.reload_recipes()
 
     def regenerate_config(self, catalog: Catalog) -> bool:
+        options = self._build_options()
         entries = build_config(
             catalog,
             self._recipes.load(),
             overrides=self._overrides.load(),
-            options=self._build_options(),
+            options=options,
         )
         return write_config(
             self._config_path,
             entries,
             root=catalog.root,
             generated_at=catalog.generated_at,
+            health_check_timeout_s=options.health_check_timeout_s,
         )
 
     def last_generated_at(self) -> str | None:

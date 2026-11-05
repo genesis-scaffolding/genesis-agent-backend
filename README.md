@@ -16,12 +16,17 @@ A toolkit for managing GGUF models behind [llama-swap](https://github.com/mostly
 
 ## llama-swap installables
 
-The llama-swap service builds its installables from declarative records. The four
-built-ins (the llama-swap proxy plus CPU, Vulkan, and CUDA llama-server builds)
-ship as seed records in
+The llama-swap service builds its installables from declarative records. The five
+built-ins (the llama-swap proxy plus CPU, Vulkan, and CUDA llama-server builds,
+and the Radiance container image) ship as seed records in
 `genesis_worker/services/llama_swap/data/installables.yaml`. The Binaries page
 lets you add, edit, enable, disable, or remove any record, including the
 built-ins.
+
+Radiance `.rad` models are served through llama-swap as a second engine kind.
+The config generator starts the installed Radiance container on demand, mounts
+the model file, and applies the radiance-specific recipe or per-model override
+knobs (tensor parallelism, context bound, KV-cache dtype, and GPU headroom).
 
 A GitHub release record uses a repository, an asset-name glob, and the binary
 name to expect in the extracted archive. A Docker image record uses a registry

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -17,6 +17,17 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from ...contracts.host import ComputeDevice
 
 BUNDLED_RECIPES_PATH = Path(__file__).parent / "data" / "recipes.yaml"
+
+
+class RadianceRecipe(BaseModel):
+    """Tuning profile for a radiance model family."""
+
+    tp: int | None = Field(default=None, ge=1)
+    max_model_len: int | None = Field(default=None, ge=1)
+    max_num_seqs: int | None = Field(default=None, ge=1)
+    kv_cache_dtype: Literal["bf16", "fp8", "fp8_v4", "k6_v4"] | None = None
+    gpu_headroom_mib: int | None = Field(default=None, ge=0)
+    extra_flags: list[str] = Field(default_factory=list)
 
 
 class RecipesStore:
@@ -115,6 +126,7 @@ class Recipe(BaseModel):
     # service-level ``default_device`` (or the smart auto-pick).
     # ADR-039.
     device: ComputeDevice | None = None
+    radiance: RadianceRecipe | None = None
 
 
 class Recipes(BaseModel):
@@ -259,6 +271,7 @@ def delete_recipe_from_overlay(path: Path, name: str) -> None:
 
 __all__ = [
     "BUNDLED_RECIPES_PATH",
+    "RadianceRecipe",
     "Recipe",
     "Recipes",
     "RecipesOverlayStore",
