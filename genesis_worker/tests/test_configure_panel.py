@@ -535,3 +535,47 @@ def test_apply_drops_the_pinned_override_of_an_auto_assigned_port(
 
     # The checkbox is ticked by default, so nothing is written for the option.
     assert "GENESIS_SERVICES__PHOTOPRISM__LISTEN_PORT" not in written
+
+
+def test_apply_leaves_the_rest_of_the_override_file_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scoped write edits the file in place — every other key survives.
+
+    The panel owns only its own service's scalar options. Another service's
+    option, a path knob and an unknown key must still be there, with the
+    same value, after an Apply (ADR-043 §11).
+    """
+    worker = _make_worker(tmp_path)
+    worker.write_user_overrides(
+        {
+            "GENESIS_SERVICES__OTHER_SERVICE__LISTEN_PORT": "9999",
+            "GENESIS_PATHS__VAULT_PATH": "/srv/vault",
+            "SOME_OTHER_KEY": "value",
+        }
+    )
+    monkeypatch.setattr(worker, "rebuild_service", lambda name: None)
+
+    from genesis_worker.utils.process.docker import DockerContainer
+
+    monkeypatch.setattr(DockerContainer, "is_running", lambda self: False)
+
+    body = textwrap.dedent(
+        """
+        import streamlit as st
+        from genesis_worker.utils.services.configure_panel import _open_configure_dialog
+
+        worker = st.session_state["worker"]
+        svc = worker.service("photoprism")
+        _open_configure_dialog(svc)
+        """
+    )
+    at = _render(worker, "photoprism", body=body)
+    at.run()
+    at.button(key="configure-photoprism-apply-").click()
+    at.run()
+
+    saved = worker.read_user_overrides()
+    assert saved["GENESIS_SERVICES__OTHER_SERVICE__LISTEN_PORT"] == "9999"
+    assert saved["GENESIS_PATHS__VAULT_PATH"] == "/srv/vault"
+    assert saved["SOME_OTHER_KEY"] == "value"

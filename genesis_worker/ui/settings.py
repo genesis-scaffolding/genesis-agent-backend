@@ -99,7 +99,10 @@ def _format_existing_extras(
     extras = {k: v for k, v in existing_overrides.items() if k not in known_keys}
     if not extras:
         return ""
-    return "\n".join(f"{k}={v}" for k, v in sorted(extras))
+    # ``sorted(extras)`` sorts the dict's *keys*, so unpacking each item as
+    # a (key, value) pair only worked for exactly-two-character keys. Sort
+    # the items instead.
+    return "\n".join(f"{k}={v}" for k, v in sorted(extras.items()))
 
 
 def _parse_extra_overrides(text: str) -> dict[str, str]:

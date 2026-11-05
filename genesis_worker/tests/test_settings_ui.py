@@ -124,3 +124,61 @@ def test_each_path_knob_renders_in_effective_table(
         f"snapshot missing path knob {field_name}"
     )
     assert any(s.override_key == env_key for s in snapshots), f"snapshot missing env key {env_key}"
+
+
+# --- extra overrides (the sorted-dict unpacking regression) -----------------
+
+
+def _extras() -> dict[str, str]:
+    """Extra override keys, all longer than two characters.
+
+    The regressed ``_format_existing_extras`` unpacked ``sorted(dict)`` —
+    which yields the *keys* — as ``k, v`` pairs. That only worked for
+    exactly-two-character keys, so any realistic key crashed the page.
+    """
+    return {
+        "GENESIS_SERVICES__METUBE__LISTEN_PORT": "18000",
+        "GENESIS_SERVICES__GENESIS_PRODUCTIVITY__API_PORT": "18001",
+        "SOME_OTHER_KEY": "value",
+    }
+
+
+def test_settings_page_renders_extra_overrides_with_long_keys(tmp_path: Path) -> None:
+    """Extra override keys longer than two characters must not crash the page."""
+    worker = _make_worker(tmp_path)
+    worker.write_user_overrides(_extras())
+
+    at = AppTest.from_file(str(_SETTINGS_PAGE), default_timeout=30)
+    at.session_state["worker"] = worker
+    at.run()
+    assert not at.exception, f"page crashed: {at.exception}"
+
+    rendered = at.text_area(key="settings-extra-overrides")
+    assert rendered is not None
+    body = rendered.value or ""
+    for key, value in _extras().items():
+        assert f"{key}={value}" in body
+
+
+def test_settings_page_save_preserves_extra_overrides_verbatim(tmp_path: Path) -> None:
+    """The extras round-trip: rendered into the textarea, saved back unchanged."""
+    worker = _make_worker(tmp_path)
+    extras = _extras()
+    worker.write_user_overrides(dict(extras))
+
+    at = AppTest.from_file(str(_SETTINGS_PAGE), default_timeout=30)
+    at.session_state["worker"] = worker
+    at.run()
+    assert not at.exception, f"page crashed: {at.exception}"
+
+    button = at.button(key="settings-save-overrides")
+    assert button is not None
+    button.click()
+    at.run()
+    assert not at.exception, f"page crashed on save: {at.exception}"
+
+    saved = worker.read_user_overrides()
+    for key, value in extras.items():
+        assert saved.get(key) == value, f"{key} was not preserved verbatim"
+    # Nothing else was dropped or added: the file holds exactly the extras.
+    assert saved == extras
