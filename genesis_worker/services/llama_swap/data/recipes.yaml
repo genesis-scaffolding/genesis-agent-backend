@@ -12,6 +12,11 @@
 #   applies). Recipes that share a match keyword are SIBLINGS — all emit
 #   entries (e.g. qwen3.6-thinking + qwen3.6-instruct both match "qwen3.6").
 #
+# engine:                    (optional)
+#   Engine this recipe serves: "llama_server" or "radiance". Omit it to let
+#   the recipe apply to either engine. Engine-specific candidates are filtered
+#   before the longest-match rule.
+#
 # extra_flags:               (optional; cascades from default)
 #   List of arbitrary strings appended verbatim to the llama-server cmd line.
 #   Each item is emitted as a separate line with a trailing `\`.
@@ -169,6 +174,7 @@ recipes:
   # ---------------------------------------------------------------------
   qwen3.6-thinking:
     match: "qwen3.6"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -186,6 +192,7 @@ recipes:
 
   qwen3.6-instruct:
     match: "qwen3.6"
+    engine: llama_server
     sampling:
       temp: 0.7
       top_p: 0.8
@@ -209,6 +216,7 @@ recipes:
   # ---------------------------------------------------------------------
   qwen3.6-27b-thinking:
     match: "qwen3.6-27b"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -228,6 +236,7 @@ recipes:
 
   qwen3.6-27b-instruct:
     match: "qwen3.6-27b"
+    engine: llama_server
     sampling:
       temp: 0.7
       top_p: 0.8
@@ -250,6 +259,7 @@ recipes:
   # ---------------------------------------------------------------------
   qwen3.6-27b-uncensored-heretic-thinking:
     match: "qwen3.6-27b-uncensored-heretic"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -270,6 +280,7 @@ recipes:
 
   qwen3.6-27b-uncensored-heretic-instruct:
     match: "qwen3.6-27b-uncensored-heretic"
+    engine: llama_server
     sampling:
       temp: 0.7
       top_p: 0.8
@@ -300,6 +311,7 @@ recipes:
   # ---------------------------------------------------------------------
   qwen-3.8-27b-assistant:
     match: "qwen-3.8-27b"
+    engine: llama_server
     sampling:
       temp: 0.7
       top_p: 0.8
@@ -315,6 +327,7 @@ recipes:
 
   qwen-3.8-27b-agent-fast:
     match: "qwen-3.8-27b"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -336,6 +349,7 @@ recipes:
 
   qwen-3.8-27b-agent-long:
     match: "qwen-3.8-27b"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -354,6 +368,7 @@ recipes:
 
   qwen-3.8-27b-agent-xhigh:
     match: "qwen-3.8-27b"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -377,6 +392,7 @@ recipes:
   # ---------------------------------------------------------------------
   gemma4:
     match: "gemma4"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -393,6 +409,7 @@ recipes:
   # ---------------------------------------------------------------------
   ornith:
     match: "ornith"
+    engine: llama_server
     sampling:
       temp: 0.6
       top_p: 0.95
@@ -405,6 +422,7 @@ recipes:
   bonsai:
     binary: "vendor/prism-llama.cpp/build/bin/llama-server"   # PrismML fork; ternary Q2_0 needs custom kernels
     match: "bonsai"
+    engine: llama_server
     sampling:
       temp: 0.7
       top_p: 0.95
@@ -417,6 +435,7 @@ recipes:
   # ---------------------------------------------------------------------
   rocinante-xl:
     match: "rocinante-xl"
+    engine: llama_server
     sampling:
       temp: 0.75
       top_p: 0.92
@@ -434,6 +453,7 @@ recipes:
   # ---------------------------------------------------------------------
   lfm2:
     match: "lfm2"
+    engine: llama_server
     sampling:
       temp: 0.1
       top_k: 50
@@ -448,6 +468,7 @@ recipes:
   # ---------------------------------------------------------------------
   muse-glimmer:
     match: "muse-glimmer"
+    engine: llama_server
     sampling:
       temp: 1.0
       top_p: 0.95
@@ -464,6 +485,7 @@ recipes:
   # ---------------------------------------------------------------------
   radiance-qwen3-8-27b-mxfp4:
     match: "qwen3.8-27b-mxfp4"
+    engine: radiance
     radiance:
       tp: 1
       max_model_len: 32768

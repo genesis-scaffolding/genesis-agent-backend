@@ -15,6 +15,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ...contracts.host import ComputeDevice
+from .engines import Engine
 
 BUNDLED_RECIPES_PATH = Path(__file__).parent / "data" / "recipes.yaml"
 
@@ -109,6 +110,7 @@ class Recipe(BaseModel):
     name: str
     source: str = "bundled"  # "bundled" | "override" — set at load/merge time
     match: str | None = None
+    engine: Engine | None = None
     binary: str | None = None
     sampling: dict[str, Any] = Field(default_factory=dict)
     chat_template_file: str | None = None
@@ -158,13 +160,21 @@ class Recipes(BaseModel):
                 matchable.append(r)
         return cls(default=default, matchable=matchable)
 
-    def resolve(self, model_name: str) -> ResolvedRecipes:
-        """Return which recipes match this model and which keyword won."""
+    def resolve(self, model_name: str, *, engine: Engine | None = None) -> ResolvedRecipes:
+        """Return which recipes match this model and which keyword won.
+
+        When ``engine`` is supplied, recipes tagged for another engine are
+        excluded before the longest-match rule. Untagged recipes apply to
+        every engine. Omitting ``engine`` preserves the historical behaviour
+        of considering every recipe.
+        """
         base = model_name.split("/", 1)[-1] if "/" in model_name else model_name
         norm_model = _normalize(base)
 
         matched: list[tuple[Recipe, str]] = []
         for recipe in self.matchable:
+            if engine is not None and recipe.engine is not None and recipe.engine != engine:
+                continue
             kw_field = (recipe.match or "").strip()
             if not kw_field:
                 continue
@@ -173,7 +183,11 @@ class Recipes(BaseModel):
                 matched.append((recipe, kw))
 
         if not matched:
-            if self.default is None:
+            if self.default is None or (
+                engine is not None
+                and self.default.engine is not None
+                and self.default.engine != engine
+            ):
                 return ResolvedRecipes(matched=[], winner_keyword="", winner_recipe=None)
             return ResolvedRecipes(
                 matched=[self.default],

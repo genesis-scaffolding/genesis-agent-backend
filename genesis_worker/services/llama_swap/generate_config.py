@@ -395,14 +395,14 @@ def walk_models(
         for entry in entries_for_source:
             if not _is_llm_candidate(entry, source_key):
                 continue
-            resolved = recipes.resolve(entry.name)
-            if not resolved.matched:
-                continue
-            multi = len(resolved.matched) > 1
 
             for file_set in detect_file_sets(entry):
                 if file_set.engine == Engine.RADIANCE and options.radiance is None:
                     continue
+                resolved = recipes.resolve(entry.name, engine=file_set.engine)
+                if not resolved.matched:
+                    continue
+                multi = len(resolved.matched) > 1
                 for recipe in resolved.matched:
                     piece_name = file_set.filename
                     # Strip weight extensions so they don't become YAML-key suffixes.

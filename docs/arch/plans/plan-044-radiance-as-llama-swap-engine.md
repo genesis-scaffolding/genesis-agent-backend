@@ -610,11 +610,15 @@ The match keyword is the container's own name, normalised by the resolver
 `qwen3.8-27b-mxfp4` → `qwen3827bmxfp4`. It does not shadow the bundled
 `qwen3.6*` keywords.
 
-**Known issue, pending Gen's design decision:** the bundled `qwen-3.8-27b`
-keyword normalises to `qwen3827b`, which is a substring of the radiance
-keyword's `qwen3827bmxfp4`. The resolver's longest-match rule therefore keeps
-the radiance keyword and shadows the same-named GGUF recipe. This plan does
-not change the recipe keyword or the resolver while that decision is pending.
+**Resolved by Gen in the PR-gate fix round:** recipe resolution is now
+engine-aware. Recipes carry the engine they serve; an untagged recipe applies
+to every engine, while a tagged recipe applies only to that engine. The
+production resolver filters candidate recipes by the file set's engine before
+applying the longest-match rule. The bundled llama-server recipes are tagged
+`llama_server`, the radiance recipe is tagged `radiance`, and the default
+recipe stays untagged. The PR-gate fix round for `t-drv03p` implements this
+decision, so a same-named GGUF keeps the bundled `qwen-3.8-27b` family while
+the `.rad` model gets the radiance recipe.
 
 The values equal the service option defaults today, so the recipe is the
 *editable family profile* rather than a behavioural change: when the box's
@@ -759,7 +763,7 @@ needs a human — Gen is testing this by hand):
 | Binding a single file into a `FROM scratch` image: docker must create `/models/` and the target file | Verify with a throwaway container before the first real run; the alternative (mount the whole `models--<owner>--<repo>` dir) puts the snapshot sha in the command |
 | The two dtype vocabularies get crossed (`q4_0` reaching radiance, `fp8` reaching llama-server) | Separate fields, separate renderers, separate override widgets; two tests pin each direction (`test_rad_entry_ignores_the_llama_server_kv_cache_vocabulary` and its llama-server mirror) |
 | `fp8_v4` / `k6_v4` are refused by an architecture that does not accept them | The guide restricts them to Qwen3.8-27B and Qwen3.8-Flash-Next; the override widget's help text says so, and the value stays hand-editable through the recipes overlay |
-| The radiance recipe's keyword could shadow a bundled recipe, or be shadowed | **Known issue, pending Gen's design decision:** bundled `qwen-3.8-27b` normalises to `qwen3827b`, a substring of `qwen3827bmxfp4`; the resolver's longest-match rule keeps the radiance keyword and shadows the same-named GGUF recipe. No keyword or resolver change is made while that decision is pending. |
+| The radiance recipe's keyword could shadow a bundled recipe, or be shadowed | **Resolved by Gen in the PR-gate fix round:** recipes are tagged with the engine they serve, and the resolver filters by the file set's engine before the longest-match rule. Untagged recipes apply to every engine. The PR-gate fix round for `t-drv03p` implements this decision, so engine-specific recipes cannot shadow each other. |
 | The pi export marks a radiance model as text-only even when it has vision | Documented as a known gap in this round; the catalog carries no `mmproj` piece for a `.rad` |
 
 ---

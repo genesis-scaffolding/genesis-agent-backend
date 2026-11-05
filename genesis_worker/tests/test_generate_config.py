@@ -28,10 +28,12 @@ from genesis_worker.services.llama_swap.generate_config import (
     evaluate_all_report,
     evaluate_recipe,
     make_display_name,
+    walk_models,
 )
 from genesis_worker.services.llama_swap.overrides import OverridesStore
 from genesis_worker.services.llama_swap.radiance import RadianceSettings
 from genesis_worker.services.llama_swap.recipes import (
+    BUNDLED_RECIPES_PATH,
     RadianceRecipe,
     Recipe,
     Recipes,
@@ -1010,6 +1012,68 @@ def _rad_entry(name: str = "StillDeadcode/qwen3.8-27b-mxfp4") -> ModelEntry:
         notes=[],
         extra={},
     )
+
+
+def test_llama_server_mxfp4_model_keeps_bundled_qwen38_recipes(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_gguf_entry("org/Qwen3.8-27B-MXFP4")],
+    )
+    matches = list(
+        walk_models(
+            catalog,
+            Recipes.load(BUNDLED_RECIPES_PATH),
+            options=BuildOptions(repo_root=tmp_path),
+        )
+    )
+
+    assert {match.recipe.name for match in matches} == {
+        "qwen-3.8-27b-assistant",
+        "qwen-3.8-27b-agent-fast",
+        "qwen-3.8-27b-agent-long",
+        "qwen-3.8-27b-agent-xhigh",
+    }
+    assert all(match.recipe.engine == Engine.LLAMA_SERVER for match in matches)
+
+
+def test_radiance_mxfp4_model_resolves_to_radiance_recipe(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_rad_entry()],
+    )
+    matches = list(
+        walk_models(
+            catalog,
+            Recipes.load(BUNDLED_RECIPES_PATH),
+            options=_radiance_options(tmp_path),
+        )
+    )
+
+    assert {match.recipe.name for match in matches} == {"radiance-qwen3-8-27b-mxfp4"}
+
+
+def test_radiance_mxfp4_model_resolves_to_no_llama_server_recipe(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_rad_entry()],
+    )
+    matches = list(
+        walk_models(
+            catalog,
+            Recipes.load(BUNDLED_RECIPES_PATH),
+            options=_radiance_options(tmp_path),
+        )
+    )
+
+    assert matches
+    assert all(match.recipe.engine == Engine.RADIANCE for match in matches)
+    assert not any(match.recipe.name.startswith("qwen-3.8-27b-") for match in matches)
 
 
 def _evaluate_rad(
