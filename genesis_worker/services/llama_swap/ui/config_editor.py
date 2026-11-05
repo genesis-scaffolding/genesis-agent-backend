@@ -210,21 +210,27 @@ def _render_radiance_override_form(
         label: str,
         key: str,
         effective: int,
+        min_value: int,
         *,
         widget_key: str,
     ) -> None:
-        raw = st.text_input(
-            label,
-            value=str(current_block.get(key, effective)),
+        raw_current = current_block.get(key)
+        initial: int | None = None
+        if raw_current is not None:
+            try:
+                initial = int(raw_current)
+            except (TypeError, ValueError):
+                st.error(f"{label} must be an integer")
+        value = st.number_input(
+            f"{label} (effective: {effective})",
+            min_value=min_value,
+            value=initial,
+            step=1,
             key=f"ov-{entry_id}-{widget_key}",
         )
-        if not (raw or "").strip():
+        if value is None:
             return
-        try:
-            value = int(raw)
-        except ValueError:
-            st.error(f"{label} must be an integer")
-            return
+        value = int(value)
         if key in current_block or value != effective:
             new_block[key] = value
 
@@ -237,15 +243,17 @@ def _render_radiance_override_form(
             "Max model len",
             "max_model_len",
             settings.max_model_len,
+            0,
             widget_key="radiance-max-model-len",
         )
         numeric_override(
             "Max num seqs",
             "max_num_seqs",
             settings.max_num_seqs,
+            1,
             widget_key="radiance-max-num-seqs",
         )
-        numeric_override("TP", "tp", settings.tp, widget_key="radiance-tp")
+        numeric_override("TP", "tp", settings.tp, 1, widget_key="radiance-tp")
 
         dtype_options = ["(use cascade)", "bf16", "fp8", "fp8_v4", "k6_v4"]
         current_dtype = str(current_block.get("kv_cache_dtype", settings.kv_cache_dtype))
@@ -267,6 +275,7 @@ def _render_radiance_override_form(
             "GPU headroom MiB",
             "gpu_headroom_mib",
             settings.gpu_headroom_mib,
+            0,
             widget_key="radiance-gpu-headroom",
         )
 
@@ -612,8 +621,12 @@ if st.button("↻ Regenerate config", key=regen_key, disabled=not ready):
     st.rerun()
 
 catalog = worker.catalog()
-configs = svc.evaluate_model_config(catalog)
+report = svc.evaluate_model_config_report(catalog)
+configs = report.configs
 overrides_store = svc.list_overrides()
+
+for error in report.errors:
+    st.error(f"Skipped `{error.entry_id}` ({error.name}): invalid override — {error.message}")
 
 if not configs:
     st.error(

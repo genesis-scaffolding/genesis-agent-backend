@@ -23,7 +23,7 @@ class RadianceRecipe(BaseModel):
     """Tuning profile for a radiance model family."""
 
     tp: int | None = Field(default=None, ge=1)
-    max_model_len: int | None = Field(default=None, ge=1)
+    max_model_len: int | None = Field(default=None, ge=0)
     max_num_seqs: int | None = Field(default=None, ge=1)
     kv_cache_dtype: Literal["bf16", "fp8", "fp8_v4", "k6_v4"] | None = None
     gpu_headroom_mib: int | None = Field(default=None, ge=0)

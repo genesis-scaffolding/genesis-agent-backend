@@ -36,8 +36,9 @@ from .export_pi_config import build_provider_from_configs, write_models_json
 from .generate_config import (
     BuildOptions,
     EvaluatedConfig,
+    EvaluationReport,
     build_config,
-    evaluate_all,
+    evaluate_all_report,
     read_generated_at,
     write_config,
 )
@@ -689,6 +690,15 @@ class LlamaSwapService(InferenceService):
     def last_generated_at(self) -> str | None:
         return read_generated_at(self._config_path)
 
+    def evaluate_model_config_report(self, catalog: Catalog) -> EvaluationReport:
+        """Resolve catalog entries and report models skipped by invalid overrides."""
+        return evaluate_all_report(
+            catalog,
+            self._recipes.load(),
+            overrides=self._overrides.load(),
+            options=self._build_options(),
+        )
+
     def evaluate_model_config(self, catalog: Catalog) -> dict[str, EvaluatedConfig]:
         """Resolve every catalog entry's effective config (structured).
 
@@ -697,12 +707,7 @@ class LlamaSwapService(InferenceService):
         of writing yaml. Used by the config editor UI to render and
         edit.
         """
-        return evaluate_all(
-            catalog,
-            self._recipes.load(),
-            overrides=self._overrides.load(),
-            options=self._build_options(),
-        )
+        return self.evaluate_model_config_report(catalog).configs
 
     def list_overrides(self) -> dict[str, dict]:
         return self._overrides.load()

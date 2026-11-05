@@ -1,5 +1,11 @@
 # Plan (round 3): Radiance as a llama-swap engine — task `t-drv03p`
 
+> **Approved and implemented.** Gen approved this plan as-is on 2026-11-05.
+> Task `t-drv03p` implemented phases 1-3 against this plan; the ADR was
+> renumbered from 043 to 044 after `t-sgqw36` landed as 043. The text below is
+> the plan as approved — the "plan-gate" framing describes the state at the
+> time of writing, not the shipped state.
+
 Worktree: `/home/gentran/Documents/worktrees/genesis-agent-backend/t-drv03p-radiance-27b`
 Branch: `se/t-drv03p-radiance-27b` (uncommitted, as the stage requires)
 Stage: plan-gate revision. No implementation.
@@ -602,7 +608,13 @@ The match keyword is the container's own name, normalised by the resolver
 (lowercase, `-`/`_`/`.` stripped): the catalog entry name is
 `StillDeadcode/qwen3.8-27b-mxfp4` → `qwen3827bmxfp4`, and the keyword
 `qwen3.8-27b-mxfp4` → `qwen3827bmxfp4`. It does not shadow the bundled
-`qwen3.6*` keywords, and no bundled keyword matches it.
+`qwen3.6*` keywords.
+
+**Known issue, pending Gen's design decision:** the bundled `qwen-3.8-27b`
+keyword normalises to `qwen3827b`, which is a substring of the radiance
+keyword's `qwen3827bmxfp4`. The resolver's longest-match rule therefore keeps
+the radiance keyword and shadows the same-named GGUF recipe. This plan does
+not change the recipe keyword or the resolver while that decision is pending.
 
 The values equal the service option defaults today, so the recipe is the
 *editable family profile* rather than a behavioural change: when the box's
@@ -747,7 +759,7 @@ needs a human — Gen is testing this by hand):
 | Binding a single file into a `FROM scratch` image: docker must create `/models/` and the target file | Verify with a throwaway container before the first real run; the alternative (mount the whole `models--<owner>--<repo>` dir) puts the snapshot sha in the command |
 | The two dtype vocabularies get crossed (`q4_0` reaching radiance, `fp8` reaching llama-server) | Separate fields, separate renderers, separate override widgets; two tests pin each direction (`test_rad_entry_ignores_the_llama_server_kv_cache_vocabulary` and its llama-server mirror) |
 | `fp8_v4` / `k6_v4` are refused by an architecture that does not accept them | The guide restricts them to Qwen3.8-27B and Qwen3.8-Flash-Next; the override widget's help text says so, and the value stays hand-editable through the recipes overlay |
-| The radiance recipe's keyword could shadow a bundled recipe, or be shadowed | The keyword is longer than any bundled `qwen3.8*` keyword and no bundled keyword matches it; the resolver's shadowing rule keeps the longest match |
+| The radiance recipe's keyword could shadow a bundled recipe, or be shadowed | **Known issue, pending Gen's design decision:** bundled `qwen-3.8-27b` normalises to `qwen3827b`, a substring of `qwen3827bmxfp4`; the resolver's longest-match rule keeps the radiance keyword and shadows the same-named GGUF recipe. No keyword or resolver change is made while that decision is pending. |
 | The pi export marks a radiance model as text-only even when it has vision | Documented as a known gap in this round; the catalog carries no `mmproj` piece for a `.rad` |
 
 ---

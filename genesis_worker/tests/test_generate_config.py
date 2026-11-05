@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
-from pydantic import ValidationError
 
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
 from genesis_worker.contracts.host import GpuDevice
@@ -23,8 +22,10 @@ from genesis_worker.services.llama_swap.generate_config import (
     DetectedFileSet,
     EvaluatedConfig,
     FieldSource,
+    build_config,
     detect_file_sets,
     evaluate_all,
+    evaluate_all_report,
     evaluate_recipe,
     make_display_name,
 )
@@ -1137,6 +1138,13 @@ def test_rad_entry_max_model_len_lands_in_ctx_size(tmp_path: Path) -> None:
     assert evaluated.ctx_size == 16384
 
 
+def test_rad_entry_max_model_len_zero_uses_model_training_context(tmp_path: Path) -> None:
+    recipe = _recipe(radiance=RadianceRecipe(max_model_len=0))
+    evaluated = _evaluate_rad(tmp_path, recipe)
+    assert evaluated.ctx_size == 0
+    assert "--max-model-len 0" in evaluated.cmd
+
+
 def test_rad_entry_ignores_llama_server_recipe_fields(tmp_path: Path) -> None:
     recipe = _recipe(
         parallel=99,
@@ -1162,19 +1170,31 @@ def test_rad_entry_ignores_the_llama_server_kv_cache_vocabulary(tmp_path: Path) 
     assert "--kv-cache-dtype fp8" in evaluated.cmd
 
 
-def test_rad_entry_rejects_invalid_override_kv_cache_dtype(tmp_path: Path) -> None:
+def test_invalid_radiance_override_skips_only_that_entry(tmp_path: Path) -> None:
     overrides_path = tmp_path / "overrides.yaml"
-    overrides_path.write_text(
-        "entries:\n  qwen3-8-27b-mxfp4:\n    radiance:\n      kv_cache_dtype: q4_0\n"
-    )
+    overrides_path.write_text("entries:\n  bad-rad:\n    radiance:\n      kv_cache_dtype: q4_0\n")
     overrides = OverridesStore(overrides_path).load()
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            _rad_entry("StillDeadcode/bad-rad"),
+            _rad_entry("StillDeadcode/good-rad"),
+        ],
+    )
+    recipes = Recipes(default=_recipe(), matchable=[])
+    options = _radiance_options(tmp_path)
 
-    with pytest.raises(ValidationError, match="kv_cache_dtype"):
-        _evaluate_rad(
-            tmp_path,
-            _recipe(),
-            overrides=overrides["qwen3-8-27b-mxfp4"],
-        )
+    report = evaluate_all_report(catalog, recipes, overrides=overrides, options=options)
+
+    assert set(report.configs) == {"good-rad"}
+    assert len(report.errors) == 1
+    assert report.errors[0].entry_id == "bad-rad"
+    assert "kv_cache_dtype" in report.errors[0].message
+
+    entries = build_config(catalog, recipes, overrides=overrides, options=options)
+    assert [entry_id for entry_id, _data in entries] == ["good-rad"]
 
 
 def test_llama_server_entry_is_unchanged_by_the_engine_branch(tmp_path: Path) -> None:

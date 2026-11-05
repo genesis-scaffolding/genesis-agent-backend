@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from ...contracts import Catalog, ComputeDevice, ModelEntry
 from .engines import Engine, engine_for_file
@@ -194,6 +195,23 @@ class EvaluatedConfig:
     hardcoded_flags: tuple[str, ...] = DEFAULT_HARDCODED_FLAGS
     engine: Engine = Engine.LLAMA_SERVER
     radiance: RadianceSettings | None = None
+
+
+@dataclass(frozen=True)
+class ModelEvaluationError:
+    """One model skipped because its override failed validation."""
+
+    entry_id: str
+    name: str
+    message: str
+
+
+@dataclass(frozen=True)
+class EvaluationReport:
+    """Successful evaluations plus per-model validation errors."""
+
+    configs: dict[str, EvaluatedConfig]
+    errors: tuple[ModelEvaluationError, ...]
 
 
 @dataclass(frozen=True)
@@ -889,6 +907,60 @@ def cmd_from_evaluated_dict(
     return "\n".join(sections)
 
 
+def _model_validation_error(
+    exc: ValidationError,
+    *,
+    entry_id: str,
+    name: str,
+) -> ModelEvaluationError:
+    details = exc.errors()
+    if not details:
+        return ModelEvaluationError(entry_id=entry_id, name=name, message=str(exc))
+    first = details[0]
+    location = ".".join(str(part) for part in first.get("loc", ()))
+    message = str(first.get("msg", "invalid value"))
+    if location:
+        message = f"{location}: {message}"
+    return ModelEvaluationError(entry_id=entry_id, name=name, message=message)
+
+
+def evaluate_all_report(
+    catalog: Catalog,
+    recipes: Recipes,
+    overrides: dict[str, dict[str, Any]] | None = None,
+    *,
+    binary_override: str | None = None,
+    options: BuildOptions,
+) -> EvaluationReport:
+    """Evaluate every catalog entry, isolating invalid per-model overrides."""
+    configs: dict[str, EvaluatedConfig] = {}
+    errors: list[ModelEvaluationError] = []
+    for match in walk_models(
+        catalog,
+        recipes,
+        overrides=overrides,
+        binary_override=binary_override,
+        options=options,
+    ):
+        display = make_display_name(match.files.filename, match.recipe, match.multi_match)
+        try:
+            evaluated = evaluate_recipe(
+                match.recipe,
+                match.files,
+                entry_id=match.entry_id,
+                name=display,
+                default_recipe=recipes.default,
+                binary_override=binary_override,
+                options=options,
+                overrides=match.entry_overrides,
+            )
+        except ValidationError as exc:
+            errors.append(_model_validation_error(exc, entry_id=match.entry_id, name=display))
+            continue
+        configs[match.entry_id] = evaluated
+    return EvaluationReport(configs=configs, errors=tuple(errors))
+
+
 def evaluate_all(
     catalog: Catalog,
     recipes: Recipes,
@@ -902,27 +974,13 @@ def evaluate_all(
     Uses the same filter as :func:`build_config`, so the UI sees only
     models that actually make it into config.yaml.
     """
-    out: dict[str, EvaluatedConfig] = {}
-    for match in walk_models(
+    return evaluate_all_report(
         catalog,
         recipes,
         overrides=overrides,
         binary_override=binary_override,
         options=options,
-    ):
-        piece_name = match.files.filename
-        evaluated = evaluate_recipe(
-            match.recipe,
-            match.files,
-            entry_id=match.entry_id,
-            name=make_display_name(piece_name, match.recipe, match.multi_match),
-            default_recipe=recipes.default,
-            binary_override=binary_override,
-            options=options,
-            overrides=match.entry_overrides,
-        )
-        out[match.entry_id] = evaluated
-    return out
+    ).configs
 
 
 # ===========================================================================
@@ -1011,17 +1069,20 @@ def build_config(
         binary_override=binary_override,
         options=options,
     ):
-        _, data = build_entry(
-            match.entry,
-            match.recipe,
-            match.files,
-            entry_id=match.entry_id,
-            multi_match=match.multi_match,
-            default_recipe=recipes.default,
-            binary_override=binary_override,
-            options=options,
-            overrides=match.entry_overrides,
-        )
+        try:
+            _, data = build_entry(
+                match.entry,
+                match.recipe,
+                match.files,
+                entry_id=match.entry_id,
+                multi_match=match.multi_match,
+                default_recipe=recipes.default,
+                binary_override=binary_override,
+                options=options,
+                overrides=match.entry_overrides,
+            )
+        except ValidationError:
+            continue
         entries.append((match.entry_id, data))
     return entries
 
@@ -1171,7 +1232,9 @@ __all__ = [
     "BuildOptions",
     "DetectedFileSet",
     "EvaluatedConfig",
+    "EvaluationReport",
     "FieldSource",
+    "ModelEvaluationError",
     "ModelMatch",
     "build_config",
     "build_entry",
@@ -1179,6 +1242,7 @@ __all__ = [
     "cmd_from_evaluated_dict",
     "detect_file_sets",
     "evaluate_all",
+    "evaluate_all_report",
     "evaluate_recipe",
     "is_config_stale",
     "make_display_name",

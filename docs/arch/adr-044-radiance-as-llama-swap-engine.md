@@ -12,8 +12,8 @@ Proposed. The shape was decided by Gen on 2026-11-01 (rework round 1): extend
 llama-swap rather than add a standalone service. The points marked "open" below
 carry a recommended default; approving this ADR confirms them.
 
-This ADR supersedes the withdrawn round-1 radiance ADR
-(`adr-043-radiance-service-shape.md`, a standalone declarative service).
+This ADR supersedes the withdrawn round-1 radiance ADR, which proposed a
+standalone declarative service.
 
 Revision note (plan round 3, 2026-11-05): the kv-cache claim in §3 is
 corrected — radiance has `--kv-cache-dtype`, so the kv cache is a tunable on

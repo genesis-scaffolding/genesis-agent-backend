@@ -18,7 +18,7 @@ class RadianceOptions(BaseModel):
     gpu_index: int = Field(default=0, ge=0)
     group_names: list[str] = Field(default_factory=lambda: ["render", "video"])
     tp: int = Field(default=1, ge=1)
-    max_model_len: int = Field(default=32768, ge=1)
+    max_model_len: int = Field(default=32768, ge=0)
     max_num_seqs: int = Field(default=8, ge=1)
     kv_cache_dtype: Literal["bf16", "fp8", "fp8_v4", "k6_v4"] = "fp8"
     gpu_headroom_mib: int = Field(default=96, ge=0)

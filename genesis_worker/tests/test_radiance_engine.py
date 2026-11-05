@@ -6,13 +6,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from genesis_worker.services.llama_swap.engines import Engine, engine_for_file
+from genesis_worker.services.llama_swap.options import RadianceOptions
 from genesis_worker.services.llama_swap.radiance import (
     RadianceSettings,
     render_radiance_cmd,
     resolve_group_gids,
 )
+from genesis_worker.services.llama_swap.recipes import RadianceRecipe
 
 
 def _settings(**overrides: object) -> RadianceSettings:
@@ -22,6 +25,22 @@ def _settings(**overrides: object) -> RadianceSettings:
     }
     values.update(overrides)
     return RadianceSettings(**values)  # type: ignore[arg-type]
+
+
+def test_max_model_len_zero_is_valid_in_recipe_and_options() -> None:
+    assert RadianceRecipe(max_model_len=0).max_model_len == 0
+    assert RadianceOptions(max_model_len=0).max_model_len == 0
+
+
+def test_tp_and_max_num_seqs_reject_zero() -> None:
+    with pytest.raises(ValidationError):
+        RadianceRecipe(tp=0)
+    with pytest.raises(ValidationError):
+        RadianceRecipe(max_num_seqs=0)
+    with pytest.raises(ValidationError):
+        RadianceOptions(tp=0)
+    with pytest.raises(ValidationError):
+        RadianceOptions(max_num_seqs=0)
 
 
 def test_engine_for_file_detects_rad() -> None:
