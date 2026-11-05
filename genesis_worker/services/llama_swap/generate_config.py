@@ -27,7 +27,7 @@ import yaml
 from ...contracts import Catalog, ComputeDevice, ModelEntry
 from .engines import Engine, engine_for_file
 from .radiance import RadianceSettings, container_model_path, render_radiance_cmd
-from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
+from .recipes import BUNDLED_RECIPES_PATH, RadianceRecipe, Recipe, Recipes
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
 # one of these, the corresponding VRAM-saver flag is added. These are
@@ -456,9 +456,11 @@ def evaluate_recipe(
 ) -> EvaluatedConfig:
     """Resolve every overridable field, apply fallbacks, render cmd.
 
-    Precedence: ``override > recipe > default_recipe > computed``.
-    Size-based fallbacks for ``kv_cache`` and ``mmproj_offload`` fire
-    here so the rendered cmd and the structured view never disagree.
+    Llama-server precedence is ``override > recipe > default_recipe >
+    computed``. Radiance precedence is ``override > recipe > service
+    option``; it has no default-recipe layer. Size-based fallbacks for
+    ``kv_cache`` and ``mmproj_offload`` fire here so the rendered cmd and
+    the structured view never disagree.
     """
     ovr = overrides or {}
 
@@ -652,13 +654,13 @@ def evaluate_recipe(
 
 
 def _radiance_cascade_value(
-    overrides: dict[str, Any],
+    overrides: RadianceRecipe,
     recipe: Recipe,
     key: str,
     fallback: Any,
 ) -> tuple[Any, FieldSource]:
-    if key in overrides:
-        value = overrides[key]
+    if key in overrides.model_fields_set:
+        value = getattr(overrides, key)
         if value is not None:
             return value, FieldSource.OVERRIDE
     radiance_recipe = recipe.radiance
@@ -685,7 +687,7 @@ def _evaluate_radiance_recipe(
         raise ValueError(f"radiance model {entry_id!r} has no main file")
 
     raw_override = overrides.get("radiance")
-    radiance_overrides = raw_override if isinstance(raw_override, dict) else {}
+    radiance_overrides = RadianceRecipe.model_validate(raw_override or {})
     tp, tp_source = _radiance_cascade_value(radiance_overrides, recipe, "tp", base_settings.tp)
     max_model_len, max_model_len_source = _radiance_cascade_value(
         radiance_overrides, recipe, "max_model_len", base_settings.max_model_len

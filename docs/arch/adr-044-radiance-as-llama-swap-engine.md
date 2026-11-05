@@ -1,4 +1,4 @@
-# ADR-043: Radiance as a llama-swap engine — a container-backed model kind in the llama-swap config generator
+# ADR-044: Radiance as a llama-swap engine — a container-backed model kind in the llama-swap config generator
 
 ## Title
 
@@ -12,12 +12,8 @@ Proposed. The shape was decided by Gen on 2026-11-01 (rework round 1): extend
 llama-swap rather than add a standalone service. The points marked "open" below
 carry a recommended default; approving this ADR confirms them.
 
-This ADR supersedes the round-1 ADR of the same number
-(`adr-043-radiance-service-shape.md`, a standalone declarative service), which
-is withdrawn.
-
-Numbering note: this file keeps its 043 claim in the worktree and is
-renumbered to 044 at merge, after `t-sgqw36` landed as 043.
+This ADR supersedes the withdrawn round-1 radiance ADR
+(`adr-043-radiance-service-shape.md`, a standalone declarative service).
 
 Revision note (plan round 3, 2026-11-05): the kv-cache claim in §3 is
 corrected — radiance has `--kv-cache-dtype`, so the kv cache is a tunable on
@@ -485,7 +481,7 @@ inside the container).
 
 ## Plan
 
-`docs/arch/plans/plan-043-radiance-as-llama-swap-engine.md` — written on
-approval of this ADR, in three phases: the engine concept and the radiance
-renderer, the knob layers and the config editor, the seed records (the
-`docker_image` installable and the radiance recipe) and the end-to-end tests.
+`docs/arch/plans/plan-044-radiance-as-llama-swap-engine.md` — the approved
+plan, in three phases: the engine concept and the radiance renderer, the knob
+layers and the config editor, the seed records (the `docker_image` installable
+and the radiance recipe) and the end-to-end tests.

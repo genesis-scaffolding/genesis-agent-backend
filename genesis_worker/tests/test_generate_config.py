@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from pydantic import ValidationError
 
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
 from genesis_worker.contracts.host import GpuDevice
@@ -27,6 +28,7 @@ from genesis_worker.services.llama_swap.generate_config import (
     evaluate_recipe,
     make_display_name,
 )
+from genesis_worker.services.llama_swap.overrides import OverridesStore
 from genesis_worker.services.llama_swap.radiance import RadianceSettings
 from genesis_worker.services.llama_swap.recipes import (
     RadianceRecipe,
@@ -1160,8 +1162,27 @@ def test_rad_entry_ignores_the_llama_server_kv_cache_vocabulary(tmp_path: Path) 
     assert "--kv-cache-dtype fp8" in evaluated.cmd
 
 
+def test_rad_entry_rejects_invalid_override_kv_cache_dtype(tmp_path: Path) -> None:
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        "entries:\n  qwen3-8-27b-mxfp4:\n    radiance:\n      kv_cache_dtype: q4_0\n"
+    )
+    overrides = OverridesStore(overrides_path).load()
+
+    with pytest.raises(ValidationError, match="kv_cache_dtype"):
+        _evaluate_rad(
+            tmp_path,
+            _recipe(),
+            overrides=overrides["qwen3-8-27b-mxfp4"],
+        )
+
+
 def test_llama_server_entry_is_unchanged_by_the_engine_branch(tmp_path: Path) -> None:
-    recipe = _recipe(parallel=2, ctx_size=4096)
+    recipe = _recipe(
+        parallel=2,
+        ctx_size=4096,
+        radiance=RadianceRecipe(tp=4, kv_cache_dtype="fp8"),
+    )
     files = detect_file_sets(_entry())[0]
     evaluated = evaluate_recipe(
         recipe,
@@ -1176,4 +1197,6 @@ def test_llama_server_entry_is_unchanged_by_the_engine_branch(tmp_path: Path) ->
     )
     assert "--parallel 2" in evaluated.cmd
     assert "-c 4096" in evaluated.cmd
+    assert "--tp" not in evaluated.cmd
+    assert "--kv-cache-dtype" not in evaluated.cmd
     assert "docker run" not in evaluated.cmd
