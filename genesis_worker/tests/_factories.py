@@ -7,6 +7,7 @@ from typing import Any
 
 from genesis_worker.contracts import (
     NoSecretsAccessor,
+    PortAllocator,
     SecretsAccessor,
     ServiceContext,
     SourceContext,
@@ -58,6 +59,7 @@ def service_ctx(
     options: dict[str, Any] | None = None,
     secrets: SecretsAccessor | None = None,
     host_info: HostInfo | None = None,
+    port_allocator: PortAllocator | None = None,
 ) -> ServiceContext:
     return ServiceContext(
         name=name,
@@ -67,6 +69,7 @@ def service_ctx(
         options=options or {},
         host_info=host_info if host_info is not None else HostInfo.empty(),
         secrets=secrets if secrets is not None else NoSecretsAccessor(),
+        port_allocator=port_allocator,
         **_dirs(root),
     )
 

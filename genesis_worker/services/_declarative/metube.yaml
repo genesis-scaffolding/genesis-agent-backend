@@ -7,8 +7,10 @@
 # downloads stay in their own subdirectory rather than scattering across
 # the vault root) so Jellyfin picks them up via the shared media vault. The ``STATE_DIR`` defaults to ``/downloads/.metube`` and
 # stores the queue, history, subscriptions, and uploaded cookies so
-# sessions survive container restarts. Host port 8098 avoids every other
-# in-use port in this stack.
+# sessions survive container restarts. The host port is allocated by the
+# framework (``$auto_port.listen``) — the worker picks a free port from
+# its own range at start time, so this spec no longer collides with
+# anything else on the node.
 # See https://github.com/alexta69/metube and the wiki at
 # https://github.com/alexta69/metube/wiki.
 
@@ -61,9 +63,9 @@ volumes:
 options:
   listen_port:
     type: port
-    default: 8098
+    default: "$auto_port.listen"
     ui_label: Web UI port
-    ui_help: Host-side port the MeTube web UI listens on
+    ui_help: Host-side port the MeTube web UI listens on; the framework allocates one when left on "assign automatically"
     ui_group: Network
   download_dir:
     type: path

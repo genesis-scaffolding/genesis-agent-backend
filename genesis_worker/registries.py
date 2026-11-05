@@ -17,6 +17,8 @@ from .contracts import (
     ServiceContext,
     SourceContext,
 )
+from .utils.ports import NodePortAllocator, framework_ports
+from .utils.process.docker import container_port_bindings
 from .utils.state.enabled_services import load_enabled_set, save_enabled_set
 
 if TYPE_CHECKING:
@@ -158,6 +160,14 @@ class ServiceRegistry(_Registry):
 
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
+        # One port allocator per worker (ADR-043). It owns the node-level
+        # registry of allocated host ports; every service context carries
+        # the handle.
+        self._port_allocator = NodePortAllocator(
+            settings.paths.state_dir,
+            fixed_ports=self._reserved_ports,
+            container_bindings=container_port_bindings,
+        )
         # Python plugins first (they win duplicate-name conflicts so a
         # service can pin a YAML aside while keeping the Python class).
         for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
@@ -203,7 +213,23 @@ class ServiceRegistry(_Registry):
             cache_dir=p.cache_dir / name.replace("_", "-"),
             state_dir=p.state_dir / name.replace("_", "-"),
             log_dir=p.log_dir / name.replace("_", "-"),
+            port_allocator=self._port_allocator,
         )
+
+    def _reserved_ports(self) -> set[int]:
+        """The ports the allocator must stay off.
+
+        The framework's own ports plus every registered service's fixed
+        host port — a service that is not running still owns its port,
+        so the bind test alone would not catch it.
+        """
+        ports = set(framework_ports())
+        services = cast("dict[str, InferenceService]", self._instances)
+        for svc in services.values():
+            port = svc.declared_host_port()
+            if port is not None:
+                ports.add(port)
+        return ports
 
     def _context(self, cls: type[InferenceService]) -> ServiceContext:
         return self._context_for_name(cls.name)
@@ -310,6 +336,10 @@ class ServiceRegistry(_Registry):
 
         new_svc = load_service_spec(spec_path, ctx=self._context_for_name(name))
         self._instances[name] = new_svc
+        # The rebuilt spec may no longer declare an auto-port marker (the
+        # user pinned a fixed port instead) — release the stale record so
+        # the range does not leak.
+        self._port_allocator.reconcile(name, new_svc.declared_port_markers())
         return new_svc
 
 

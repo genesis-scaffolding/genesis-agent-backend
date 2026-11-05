@@ -20,6 +20,7 @@ from .docker_service import (
     AuthConfig,
     DockerService,
     DockerServiceConfig,
+    ExtraPort,
 )
 from .loader import load_service_spec, resolve_placeholders
 from .spec import (
@@ -45,6 +46,7 @@ __all__ = [
     "DockerService",
     "DockerServiceConfig",
     "DockerServiceSpec",
+    "ExtraPort",
     "OptionSpec",
     "ServiceSpecUnion",
     "UiSpec",

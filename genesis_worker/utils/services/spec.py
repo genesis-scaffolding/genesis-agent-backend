@@ -18,12 +18,27 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, create_model, model_validator
 
 from ...contracts import (
     ServiceCapabilities,
     ServiceCategory,
     ServiceResourceEstimate,
+)
+from ..ports.markers import AUTO_PORT_MARKER_PATTERN, is_marker
+
+# A host port: a fixed integer, or a ``$auto_port.<name>`` marker asking the
+# framework to allocate one at start time (ADR-043).
+#
+# The numeric constraints sit on the *int member*, not on the field: a
+# constraint on the union raises a ``TypeError`` (not a ``ValidationError``)
+# when a marker is validated, which the loader's ``except ValidationError``
+# would not catch. The marker branch is constrained by pattern, so a plain
+# string ("8096") fails it and falls through to the int branch, which coerces
+# it in lax mode — user overrides stay integers.
+PortValue = (
+    Annotated[int, Field(gt=0, lt=65536)]
+    | Annotated[str, StringConstraints(pattern=AUTO_PORT_MARKER_PATTERN)]
 )
 
 
@@ -61,13 +76,27 @@ class ImageSpec(BaseModel):
     source_url: str | None = None
 
 
+class ExtraPortSpec(BaseModel):
+    """One extra published port of a docker container.
+
+    ``container`` is the port inside the container; ``host`` is the port on
+    the node — a fixed integer or a ``$auto_port.<name>`` marker (ADR-043).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    container: int
+    host: PortValue
+
+
 class ContainerSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     listen_host: str = "0.0.0.0"
-    listen_port: int
+    listen_port: PortValue
     internal_port: int | None = None
+    extra_ports: list[ExtraPortSpec] = Field(default_factory=list)
     public_host: str | None = None
     web_ui_path: str = "/"
     restart_policy: str = "unless-stopped"
@@ -78,6 +107,19 @@ class ContainerSpec(BaseModel):
     runtime: str | None = None
     gpu_flags: list[str] | None = None
     security_opts: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _require_internal_port_for_marker(self) -> ContainerSpec:
+        # A marker means the host port is unknown until start time, so the
+        # container port cannot default to it — the spec has to say which
+        # port the container itself listens on.
+        if is_marker(self.listen_port) and self.internal_port is None:
+            raise ValueError(
+                "container.internal_port is required when container.listen_port is a "
+                "$auto_port marker: the container port cannot default to an "
+                "allocated host port"
+            )
+        return self
 
 
 class HookSpec(BaseModel):
@@ -192,7 +234,7 @@ class UvServiceSpec(BaseModel):
     command_env: dict[str, Any] = Field(default_factory=dict)
 
     listen_host: str = "0.0.0.0"
-    listen_port: int
+    listen_port: PortValue
     public_host: str | None = None
     health_probe_path: str = "/"
     health_timeout_s: float = 60.0
@@ -261,7 +303,7 @@ class ComposeServiceSpec(BaseModel):
     # ``listen_port`` option (the norm), the loader derives the runtime
     # port from the resolved option so there is a single source of truth.
     listen_host: str = "0.0.0.0"
-    listen_port: int = 0
+    listen_port: PortValue = 0
     health_probe_path: str = "/"
 
     # Top-level compose env / volumes (project-wide, not per-service)
@@ -353,17 +395,20 @@ def _build_scalar_field(type_name: str, optional: bool, default: Any) -> Any:
 
 
 def _build_port_field(optional: bool, default: Any) -> Any:
-    """``int`` constrained to ``(0, 65536)`` via pydantic Field constraints.
+    """A port option: a fixed ``int`` in ``(0, 65536)`` or an auto-port marker.
 
-    Optional ports allow ``None``; required ports reject 0 and values
-    in the ephemeral range. The constraint fires at options-validation
+    Optional ports allow ``None``; required ports reject 0 and values in
+    the ephemeral range. The constraint fires at options-validation
     time, so a bad user override fails loudly rather than reaching the
     container's port mapper.
+
+    The numeric constraint lives on the int member of the union (see
+    :data:`PortValue`); the field itself carries only the default.
     """
     if optional:
-        return (int | None, default)
+        return (PortValue | None, default)
     base = default if default is not None else 0
-    return (int, Field(base, gt=0, lt=65536))
+    return (PortValue, base)
 
 
 def _build_env_map_field(optional: bool, default: Any) -> Any:
@@ -435,9 +480,11 @@ __all__ = [
     "ComposeServiceSpec",
     "ContainerSpec",
     "DockerServiceSpec",
+    "ExtraPortSpec",
     "HookSpec",
     "ImageSpec",
     "OptionSpec",
+    "PortValue",
     "ServiceSpecUnion",
     "UiSpec",
     "UvServiceSpec",

@@ -218,6 +218,16 @@ class InferenceService(Plugin):
         """
         return []
 
+    def declared_host_port(self) -> int | None:
+        """The fixed host port this service binds, or ``None``.
+
+        The framework's port allocator asks every registered service for
+        this so it never hands out a port that a service already owns
+        (ADR-043). A service that asks the framework for a port instead
+        declares none.
+        """
+        return None
+
 
 __all__ = [
     "InferenceService",
