@@ -27,6 +27,7 @@ from genesis_worker import GenesisWorker
 from genesis_worker.contracts import ServiceCategory
 from genesis_worker.settings import PathsSettings, Settings
 from genesis_worker.tests._factories import service_ctx
+from genesis_worker.utils.ports.allocator import NodePortAllocator
 from genesis_worker.utils.services import ComposeService, load_service_spec
 from genesis_worker.utils.services.hooks import PreStartHookContext
 from genesis_worker.utils.services.hooks import run as run_hooks
@@ -34,13 +35,38 @@ from genesis_worker.utils.services.hooks import run as run_hooks
 _DECLARATIVE_DIR = Path(__file__).resolve().parent.parent / "services" / "_declarative"
 
 
+def _allocator(tmp_path: Path) -> NodePortAllocator:
+    """A port allocator with every probe stubbed — no docker, no real binds."""
+    return NodePortAllocator(
+        tmp_path / "state",
+        fixed_ports=lambda: set(),
+        container_bindings=list,
+        bind_probe=lambda port: True,
+    )
+
+
 def _load(tmp_path: Path, options: dict | None = None) -> ComposeService:
     svc = load_service_spec(
         _DECLARATIVE_DIR / "traefik.yaml",
-        ctx=service_ctx(tmp_path, name="traefik", options=options or {}),
+        ctx=service_ctx(
+            tmp_path,
+            name="traefik",
+            options=options or {},
+            port_allocator=_allocator(tmp_path),
+        ),
     )
     assert isinstance(svc, ComposeService)
     return svc
+
+
+def _render(svc: ComposeService) -> str:
+    """The rendered compose file, with the host ports allocated.
+
+    The start path renders through the port binder (``$auto_port.*`` is
+    materialised there); rendering without it leaves the marker in the
+    file and the framework refuses to write it.
+    """
+    return svc._render_compose_file(ports=svc.port_binder().resolver()).read_text()
 
 
 # --- identity --------------------------------------------------------------
@@ -74,8 +100,37 @@ def test_default_options_are_the_fleet_case(tmp_path: Path) -> None:
     svc = _load(tmp_path)
     assert svc.options.dns_provider == "godaddyv3"  # type: ignore[attr-defined]
     assert svc.options.ingress_port == 443  # type: ignore[attr-defined]
-    assert svc.options.listen_port == 8080  # type: ignore[attr-defined]
     assert svc.options.listen_host == "127.0.0.1"  # type: ignore[attr-defined]
+
+
+def test_the_ping_port_is_allocated_not_fixed(tmp_path: Path) -> None:
+    """A fixed 8080 collided with llama-swap; the framework allocates one.
+
+    Docker programs a container's endpoint ports atomically — one failed
+    bind rolls the whole endpoint back, so the proxy came up with no
+    published port at all (not even 443) and no network.
+    """
+    svc = _load(tmp_path)
+    assert svc.options.listen_port == "$auto_port.listen"  # type: ignore[attr-defined]
+    assert svc.config.listen_port == "$auto_port.listen"
+    assert svc.declared_port_markers() == ("listen",)
+    assert svc.declared_host_port() is None
+    assert svc.effective_host_port() is None  # not started yet
+
+
+def test_the_ingress_port_stays_fixed(tmp_path: Path) -> None:
+    """443 is the fleet's stable entry point — the DNS record points at it."""
+    svc = _load(tmp_path)
+    assert svc.options.ingress_port == 443  # type: ignore[attr-defined]
+    assert "443:443" in _render(svc)
+
+
+def test_the_probe_follows_the_allocated_port(tmp_path: Path) -> None:
+    """The health probe watches the allocated host port, not a fixed one."""
+    svc = _load(tmp_path)
+    assert svc.effective_host_port() is None  # never started
+    _render(svc)
+    assert svc.effective_host_port() == 18000
 
 
 def test_health_probe_uses_the_plain_http_ping_entrypoint(tmp_path: Path) -> None:
@@ -89,27 +144,31 @@ def test_health_probe_uses_the_plain_http_ping_entrypoint(tmp_path: Path) -> Non
 
 def test_rendered_compose_carries_the_godaddy_token(tmp_path: Path) -> None:
     svc = _load(tmp_path, options={"dns_api_token": "the-token"})
-    rendered = svc._render_compose_file().read_text()
-    assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "the-token"' in rendered
+    assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "the-token"' in _render(svc)
 
 
 def test_rendered_compose_file_is_not_world_readable(tmp_path: Path) -> None:
     """The compose file carries the DNS credential."""
     svc = _load(tmp_path, options={"dns_api_token": "the-token"})
-    path = svc._render_compose_file()
+    path = svc._render_compose_file(ports=svc.port_binder().resolver())
     assert path.stat().st_mode & 0o077 == 0
 
 
 def test_rendered_compose_publishes_the_ingress_and_ping_ports(tmp_path: Path) -> None:
+    """The ingress port is fixed; the ping port is the allocated one."""
     svc = _load(tmp_path)
-    rendered = svc._render_compose_file().read_text()
+    rendered = _render(svc)
     assert '- "443:443"' in rendered
-    assert '- "127.0.0.1:8080:8080"' in rendered
+    # The ping port: the allocated host port, the container side stays 8080.
+    assert '- "127.0.0.1:18000:8080"' in rendered
+    # The old fixed host port is gone — it collided with llama-swap.
+    assert '"127.0.0.1:8080:8080"' not in rendered
+    assert "$auto_port." not in rendered
 
 
 def test_rendered_compose_uses_the_dns_provider_and_acme_email(tmp_path: Path) -> None:
     svc = _load(tmp_path, options={"acme_email": "admin@example.com"})
-    rendered = svc._render_compose_file().read_text()
+    rendered = _render(svc)
     assert "--certificatesResolvers.letsencrypt.acme.dnschallenge.provider=godaddyv3" in rendered
     assert "--certificatesResolvers.letsencrypt.acme.email=admin@example.com" in rendered
     assert "--certificatesResolvers.letsencrypt.acme.dnschallenge=true" in rendered
@@ -118,7 +177,7 @@ def test_rendered_compose_uses_the_dns_provider_and_acme_email(tmp_path: Path) -
 
 def test_rendered_compose_mounts_the_config_and_data_dirs(tmp_path: Path) -> None:
     svc = _load(tmp_path)
-    rendered = svc._render_compose_file().read_text()
+    rendered = _render(svc)
     assert f"{tmp_path}/config:/etc/traefik" in rendered
     assert f"{tmp_path}/data/data:/data" in rendered
 
@@ -197,7 +256,7 @@ def test_orchestrator_options_reach_the_rendered_compose_file(tmp_path: Path) ->
             {"routes": {}, "options": {"dns_api_token": "pushed-token", "acme_email": "a@b.c"}},
         ),
     )
-    rendered = svc._render_compose_file().read_text()
+    rendered = _render(svc)
     assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "pushed-token"' in rendered
     assert "--certificatesResolvers.letsencrypt.acme.email=a@b.c" in rendered
 

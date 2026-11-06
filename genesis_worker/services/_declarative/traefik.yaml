@@ -11,9 +11,25 @@
 # A TLS-only listener on 443 would never answer the probe, so the
 # service would report ``starting`` forever. The compose kind publishes
 # several ports, so we expose the ingress listener (443) AND a
-# loopback-only plain-HTTP ``ping`` entrypoint (8080) that the probe
-# can reach. The ping port is bound to 127.0.0.1 — it is a health
-# endpoint, not a service.
+# loopback-only plain-HTTP ``ping`` entrypoint that the probe can reach.
+# The ping port is bound to 127.0.0.1 — it is a health endpoint, not a
+# service.
+#
+# PORTS — the ping port is allocated, the ingress port is fixed
+# -----------------------------------------------------------
+# The ping port's HOST side is allocated by the framework
+# (``$auto_port.listen``): the worker picks a free port from its own
+# range at start time. A fixed 8080 collided with llama-swap on the
+# proxy node, and Docker programs a container's endpoint ports
+# atomically — one failed bind rolls the whole endpoint back, so the
+# container came up with NO published port (not even 443) and no
+# network at all. The health probe follows the allocated port
+# (``effective_host_port()``), so an allocated ping port is fully
+# compatible with the probe.
+#
+# The ingress port (443) stays FIXED: it is the fleet's single stable
+# entry point — the port the wildcard DNS record points at, and the
+# one clients dial. It is deliberately NOT an auto port.
 #
 # TLS — DNS-01, not HTTP-01
 # ------------------------
@@ -109,9 +125,9 @@ options:
     ui_group: Network
   listen_port:
     type: port
-    default: 8080
+    default: "$auto_port.listen"
     ui_label: Ping port
-    ui_help: Host port the plain-HTTP ping entrypoint listens on (health probe only)
+    ui_help: Host-side port for the plain-HTTP ping entrypoint (health probe only, bound to loopback); the framework allocates one when left on "assign automatically"
     ui_group: Network
   ingress_port:
     type: port
