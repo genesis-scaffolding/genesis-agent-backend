@@ -92,10 +92,14 @@ _BUILT_IN_SPECS = (
     "romm.yaml",
     "sillytavern.yaml",
     "tidarr.yaml",
+    "traefik.yaml",
 )
 
+# Compose-kind specs (they publish several ports and are tested separately)
+_COMPOSE_SPECS = ("romm.yaml", "traefik.yaml")
+
 # Docker-kind specs only (excludes compose services like romm.yaml)
-_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s != "romm.yaml")
+_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS)
 
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
@@ -111,7 +115,7 @@ def _load_spec(name: str, tmp_path: Path) -> DockerService:
     return svc
 
 
-@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s != "romm.yaml"])
+@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS])
 def test_built_in_spec_parses_and_constructs(spec_name: str, tmp_path: Path) -> None:
     """Every built-in YAML must parse + construct via the framework loader."""
     svc = _load_spec(spec_name, tmp_path)
