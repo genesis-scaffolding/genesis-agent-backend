@@ -26,26 +26,28 @@ def _llama_swap(registry: ServiceRegistry) -> LlamaSwapService:
 
 def test_llama_swap_is_auto_discovered() -> None:
     """Drop a new service subpackage under services/ and the registry finds it."""
-    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    names = {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()}
     assert "llama_swap" in names
 
 
 def test_llama_swap_service_is_constructible_via_registry() -> None:
-    reg = ServiceRegistry(Settings())
+    reg = ServiceRegistry(Settings(), adopt_published_ports=False)
     assert isinstance(reg.get("llama_swap"), LlamaSwapService)
 
 
 def test_llama_swap_service_is_an_inference_service() -> None:
-    assert isinstance(ServiceRegistry(Settings()).get("llama_swap"), InferenceService)
+    assert isinstance(
+        ServiceRegistry(Settings(), adopt_published_ports=False).get("llama_swap"), InferenceService
+    )
 
 
 def test_registry_unknown_service_raises() -> None:
     with pytest.raises(KeyError):
-        ServiceRegistry(Settings()).get("does_not_exist")
+        ServiceRegistry(Settings(), adopt_published_ports=False).get("does_not_exist")
 
 
 def test_registry_all_returns_every_service() -> None:
-    assert {svc.name for svc in ServiceRegistry(Settings()).all()} == {
+    assert {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()} == {
         "actualbudget",
         "bifrost",
         "comfyui",
@@ -72,21 +74,21 @@ def test_registry_all_returns_every_service() -> None:
 
 def test_comfyui_service_is_auto_discovered() -> None:
     """Adding the comfyui subpackage should auto-register it."""
-    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    names = {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()}
     assert "comfyui" in names
 
 
 def test_sillytavern_service_is_auto_discovered() -> None:
     """Adding the sillytavern subpackage should auto-register it."""
 
-    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    names = {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()}
     assert "sillytavern" in names
 
 
 def test_crawl4ai_service_is_auto_discovered() -> None:
     """Adding the crawl4ai subpackage should auto-register it."""
 
-    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    names = {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()}
     assert "crawl4ai" in names
 
 
@@ -95,7 +97,7 @@ def test_ntfy_service_is_auto_discovered() -> None:
     ``services/_declarative/ntfy.yaml``.
     """
 
-    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    names = {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()}
     assert "ntfy" in names
 
 
@@ -104,7 +106,7 @@ def test_freshrss_service_is_auto_discovered() -> None:
     ``services/_declarative/freshrss.yaml``.
     """
 
-    names = {svc.name for svc in ServiceRegistry(Settings()).all()}
+    names = {svc.name for svc in ServiceRegistry(Settings(), adopt_published_ports=False).all()}
     assert "freshrss" in names
 
 
@@ -126,14 +128,17 @@ def test_abstract_service_cannot_be_instantiated(tmp_path: Path) -> None:
 
 def test_registry_passes_option_slice_to_plugin() -> None:
     s = Settings(services={"llama_swap": {"listen_addr": "0.0.0.0:9000"}})
-    svc = _llama_swap(ServiceRegistry(s))
+    svc = _llama_swap(ServiceRegistry(s, adopt_published_ports=False))
     assert svc._options.listen_addr == "0.0.0.0:9000"
 
 
 def test_registry_constructs_each_service_exactly_once() -> None:
     s1 = Settings(services={"llama_swap": {"listen_addr": "a:1"}})
     s2 = Settings(services={"llama_swap": {"listen_addr": "a:2"}})
-    r1, r2 = ServiceRegistry(s1), ServiceRegistry(s2)
+    r1, r2 = (
+        ServiceRegistry(s1, adopt_published_ports=False),
+        ServiceRegistry(s2, adopt_published_ports=False),
+    )
     assert r1.get("llama_swap") is not r2.get("llama_swap")
     assert _llama_swap(r1)._options.listen_addr == "a:1"
     assert _llama_swap(r2)._options.listen_addr == "a:2"
@@ -152,7 +157,7 @@ def test_service_defaults_when_no_option_slice(tmp_path: Path) -> None:
 def test_registry_scopes_paths_by_dir_name() -> None:
     """``llama_swap`` writes under ``<data_dir>/llama-swap/`` (ADR-009)."""
     s = Settings(paths=PathsSettings(data_dir=Path("/d")))
-    svc = ServiceRegistry(s).get("llama_swap")
+    svc = ServiceRegistry(s, adopt_published_ports=False).get("llama_swap")
     assert svc.config_path == Path("/d/llama-swap/config.yaml")
 
 

@@ -20,6 +20,7 @@ from genesis_worker.contracts import (
 from genesis_worker.tests._factories import service_ctx
 from genesis_worker.utils.ports.allocator import NodePortAllocator
 from genesis_worker.utils.process import DockerContainer
+from genesis_worker.utils.process.docker import ContainerPortBinding
 from genesis_worker.utils.registry_tags import (
     read_tag_cache,
     tag_cache_path,
@@ -854,3 +855,108 @@ def test_start_without_an_allocator_fails_loudly(tmp_path: Path, monkeypatch) ->
     svc = _service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
     with pytest.raises(RuntimeError, match="no port allocator"):
         svc.start()
+
+
+# --- published ports (ADR-045) ----------------------------------------------
+
+
+def _bindings(*, running: bool = True) -> list[ContainerPortBinding]:
+    """A snapshot of the node's containers: ours publishes 8081 on host 8098."""
+    return [
+        ContainerPortBinding(
+            name="svc",
+            host_ports=(8098,),
+            running=running,
+            port_map=((8081, 8098),),
+        )
+    ]
+
+
+def test_published_host_ports_reads_the_container_bindings(tmp_path: Path) -> None:
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    assert svc.published_host_ports(_bindings()) == {"listen": 8098}
+
+
+def test_a_stopped_container_publishes_nothing(tmp_path: Path) -> None:
+    """A stopped container declares its bindings but holds none of them."""
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    assert svc.published_host_ports(_bindings(running=False)) == {}
+
+
+def test_published_host_ports_ignores_another_services_container(tmp_path: Path) -> None:
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    other = [
+        ContainerPortBinding(
+            name="other", host_ports=(8098,), running=True, port_map=((8081, 8098),)
+        )
+    ]
+    assert svc.published_host_ports(other) == {}
+
+
+def test_published_host_ports_covers_the_extra_use_sites(tmp_path: Path) -> None:
+    svc = _auto_port_service(
+        tmp_path,
+        listen_port="$auto_port.listen",
+        internal_port=8081,
+        extra_ports=(ExtraPort(container_port=9000, host="$auto_port.api"),),
+    )
+    bindings = [
+        ContainerPortBinding(
+            name="svc",
+            host_ports=(8098, 9001),
+            running=True,
+            port_map=((8081, 8098), (9000, 9001)),
+        )
+    ]
+    assert svc.published_host_ports(bindings) == {"listen": 8098, "api": 9001}
+
+
+def test_status_is_running_when_the_container_publishes_an_unrecorded_port(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The migration case: the container runs, the record did not exist yet."""
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    assert svc.port_binder().adopt("listen", 8098) is True
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.is_running",
+        lambda self: True,
+    )
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.HealthProbe.probe", lambda self: True
+    )
+    assert svc.effective_host_port() == 8098
+    status = svc.status()
+    assert status.state == ServiceState.RUNNING
+    assert status.endpoint == "http://127.0.0.1:8098/"
+    assert svc.web_ui_endpoint() == f"http://{svc.public_host()}:8098/"
+
+
+def test_the_adopted_port_survives_into_the_next_process(tmp_path: Path) -> None:
+    """The next worker process reuses the adopted port, not a fresh one."""
+    first = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    first.port_binder().adopt("listen", 8098)
+    second = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    assert second.effective_host_port() == 8098
+    assert second.port_binder().allocate("listen") == 8098
+
+
+def test_a_service_with_no_published_port_is_not_adopted(tmp_path: Path, monkeypatch) -> None:
+    """Nothing published — no record, and the status explains itself."""
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    assert svc.published_host_ports([]) == {}
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.is_running",
+        lambda self: True,
+    )
+    status = svc.status()
+    assert status.state == ServiceState.STARTING
+    assert status.message != ""
+
+
+def test_the_status_message_names_the_missing_marker(tmp_path: Path, monkeypatch) -> None:
+    svc = _auto_port_service(tmp_path, listen_port="$auto_port.listen", internal_port=8081)
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.docker_service.DockerContainer.is_running",
+        lambda self: True,
+    )
+    assert "$auto_port.listen" in svc.status().message

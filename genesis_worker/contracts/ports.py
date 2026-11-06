@@ -37,6 +37,16 @@ class PortAllocator(Protocol):
         """
         ...
 
+    def adopt(self, service: str, name: str, port: int) -> bool:
+        """Record the port ``service``'s own container already publishes.
+
+        The observation side of the registry: a running container is the
+        truth about the port it holds (ADR-045). Idempotent — an existing
+        record is never overwritten — and it refuses a port another
+        service holds. Returns whether the record was written.
+        """
+        ...
+
     def allocated(self, service: str, name: str) -> int | None:
         """The recorded port for one use site, or ``None`` when it has none."""
         ...

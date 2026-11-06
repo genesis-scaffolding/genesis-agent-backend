@@ -15,6 +15,10 @@ The registry is what makes an allocation survive a worker restart: the
 container keeps running across the restart, and the framework's view of its
 port has to match.
 
+A record is written by the start path (:meth:`NodePortAllocator.allocate`)
+or adopted from a running container that already publishes the port
+(:meth:`NodePortAllocator.adopt`, ADR-045).
+
 **Two processes, one node.** The worker runs a Streamlit UI process and a
 FastAPI API process; both can start a service. Every mutation therefore runs
 inside an exclusive ``fcntl.flock`` *and* re-reads the file from disk inside
@@ -115,6 +119,32 @@ class NodePortAllocator:
             f"the dynamic host-port range {self._port_range[0]}-{self._port_range[1]} "
             f"is exhausted; no free port for {service!r} use site {name!r}"
         )
+
+    def adopt(self, service: str, name: str, port: int) -> bool:
+        """Record the port ``service``'s own container already publishes.
+
+        The read-side sibling of :meth:`allocate`: a running container is
+        the truth about the port it holds (ADR-045). Idempotent — a use
+        site that already has a record keeps it — and it refuses a port
+        another service holds. No bind probe: the port is not a
+        candidate, it is already published by our own container.
+        """
+        with self._locked():
+            registry = self._read_registry()
+            if registry.get(service, {}).get(name) is not None:
+                return False
+            for other_service, records in registry.items():
+                for other_name, other_port in records.items():
+                    if other_port != port:
+                        continue
+                    if other_service == service and other_name == name:
+                        continue
+                    return False
+            if port in set(self._fixed_ports()):
+                return False
+            registry.setdefault(service, {})[name] = port
+            self._write_registry(registry)
+            return True
 
     def allocated(self, service: str, name: str) -> int | None:
         """The recorded port for one use site, or ``None`` when it has none."""

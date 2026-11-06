@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, TypeVar, cast
@@ -158,7 +158,7 @@ class ServiceRegistry(_Registry):
     ``is_available() == True``. After that the set is user-controlled.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, adopt_published_ports: bool = True) -> None:
         super().__init__(settings)
         # One port allocator per worker (ADR-043). It owns the node-level
         # registry of allocated host ports; every service context carries
@@ -190,6 +190,35 @@ class ServiceRegistry(_Registry):
             self._instances[svc.name] = svc
             self._spec_paths[svc.name] = spec_path
         self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
+        self._adopt_enabled = adopt_published_ports
+        if adopt_published_ports:
+            self._adopt_published_ports()
+
+    def _adopt_published_ports(self, services: Iterable[InferenceService] | None = None) -> None:
+        """Record the host ports our running containers already publish (ADR-045).
+
+        A service that was running when its spec adopted the marker has no
+        allocation record — the record is only written on the start path —
+        and would report ``starting`` with no endpoint forever. The running
+        container is the truth: its published port is adopted.
+        """
+        from .utils.services.base import DeclarativeServiceBase
+
+        registry = cast("dict[str, InferenceService]", self._instances)
+        targets = [
+            svc
+            for svc in (services if services is not None else registry.values())
+            if isinstance(svc, DeclarativeServiceBase) and svc.declared_port_markers()
+        ]
+        if not targets:
+            return
+        bindings = container_port_bindings()  # one snapshot for every service
+        for svc in targets:
+            for marker, port in svc.published_host_ports(bindings).items():
+                try:
+                    svc.port_binder().adopt(marker, port)
+                except OSError:
+                    continue  # a read-only state dir must not stop the worker
 
     def _context_for_name(self, name: str) -> ServiceContext:
         """Build a ``ServiceContext`` keyed by ``name``.
@@ -340,6 +369,8 @@ class ServiceRegistry(_Registry):
         # user pinned a fixed port instead) — release the stale record so
         # the range does not leak.
         self._port_allocator.reconcile(name, new_svc.declared_port_markers())
+        if self._adopt_enabled:
+            self._adopt_published_ports([new_svc])
         return new_svc
 
 

@@ -1025,15 +1025,45 @@ def test_metube_asks_the_framework_for_its_host_port(tmp_path: Path) -> None:
 
 
 def test_genesis_productivity_asks_for_two_ports(tmp_path: Path) -> None:
-    """The productivity stack publishes two ports — two allocations."""
+    """The productivity stack publishes two ports — both pinned (ADR-045).
+
+    Clients hard-code them (the genesis CLI token stores point at
+    ``http://p3:8765``; the UI is bookmarked at ``:3000``), so the spec
+    declares them instead of asking the framework for one.
+    """
     svc = load_service_spec(
         _DECLARATIVE_DIR / "genesis-productivity.yaml",
         ctx=service_ctx(tmp_path, name="genesis-productivity"),
     )
     assert isinstance(svc, ComposeService)
-    assert svc.config.listen_port == "$auto_port.listen"
-    assert sorted(svc.declared_port_markers()) == ["api", "listen"]
-    assert svc.declared_host_port() is None
-    # The template publishes both markers, so the runtime port is bound.
-    assert "$auto_port.listen" in svc.config.compose_template
-    assert "$auto_port.api" in svc.config.compose_template
+    assert svc.config.listen_port == 3000
+    assert svc.declared_port_markers() == ()
+    assert svc.declared_host_port() == 3000
+    assert svc.effective_host_port() == 3000
+    # The template publishes both fixed ports.
+    assert '"0.0.0.0:3000:3000"' in svc.config.compose_template
+    assert '"0.0.0.0:8765:8765"' in svc.config.compose_template
+    assert "$auto_port." not in svc.config.compose_template
+
+
+def test_the_adopters_adopt_their_published_ports(tmp_path: Path, monkeypatch) -> None:
+    """A running container's published port is adopted, not reallocated."""
+    from genesis_worker.registries import ServiceRegistry
+    from genesis_worker.settings import PathsSettings, Settings
+    from genesis_worker.utils.process.docker import ContainerPortBinding
+
+    monkeypatch.setattr(
+        "genesis_worker.registries.container_port_bindings",
+        lambda: [
+            ContainerPortBinding(
+                name="metube",
+                host_ports=(8098,),
+                running=True,
+                port_map=((8081, 8098),),
+            )
+        ],
+    )
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    ServiceRegistry(settings)
+    data = yaml.safe_load((tmp_path / "state" / "port_allocations.yaml").read_text())
+    assert data == {"allocations": {"metube": {"listen": 8098}}}

@@ -37,6 +37,17 @@ class PortBinder:
     def service(self) -> str:
         return self._service
 
+    def adopt(self, name: str, port: int) -> bool:
+        """Record a port this service's own running container publishes.
+
+        Returns whether the record was written; ``False`` when the use
+        site already had one, when another service holds the port, or
+        when no allocator is wired in.
+        """
+        if self._allocator is None:
+            return False
+        return self._allocator.adopt(self._service, name, port)
+
     def allocated(self, name: str) -> int | None:
         """The port recorded for one use site, or ``None``."""
         if self._allocator is None:
