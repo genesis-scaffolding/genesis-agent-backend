@@ -15,17 +15,26 @@ import pytest
 
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
 from genesis_worker.contracts.host import GpuDevice
+from genesis_worker.services.llama_swap.engines import Engine
 from genesis_worker.services.llama_swap.generate_config import (
     DEFAULT_HARDCODED_FLAGS,
     BuildOptions,
     DetectedFileSet,
     EvaluatedConfig,
     FieldSource,
+    build_config,
     detect_file_sets,
     evaluate_all,
+    evaluate_all_report,
     evaluate_recipe,
+    make_display_name,
+    walk_models,
 )
+from genesis_worker.services.llama_swap.overrides import OverridesStore
+from genesis_worker.services.llama_swap.radiance import RadianceSettings
 from genesis_worker.services.llama_swap.recipes import (
+    BUNDLED_RECIPES_PATH,
+    RadianceRecipe,
     Recipe,
     Recipes,
 )
@@ -51,6 +60,7 @@ def _recipe(
     ctx_size: int | None = None,
     reasoning_budget: int | None = None,
     reasoning_budget_message: str | None = None,
+    radiance: RadianceRecipe | None = None,
 ) -> Recipe:
     return Recipe(
         name=name,
@@ -66,6 +76,7 @@ def _recipe(
         ctx_size=ctx_size,
         reasoning_budget=reasoning_budget,
         reasoning_budget_message=reasoning_budget_message,
+        radiance=radiance,
     )
 
 
@@ -964,3 +975,312 @@ def _recipes():
     from genesis_worker.services.llama_swap.recipes import Recipes
 
     return Recipes(default=_recipe(), matchable=[])
+
+
+# ---------------------------------------------------------------------------
+# Radiance engine
+# ---------------------------------------------------------------------------
+
+
+def _radiance_options(tmp_path: Path, **overrides: object) -> BuildOptions:
+    values: dict[str, object] = {
+        "image_ref": "stilldeadcode/radiance:latest",
+        "group_gids": (("render", "992"), ("video", "44")),
+    }
+    values.update(overrides)
+    return BuildOptions(
+        repo_root=tmp_path,
+        radiance=RadianceSettings(**values),  # type: ignore[arg-type]
+    )
+
+
+def _rad_entry(name: str = "StillDeadcode/qwen3.8-27b-mxfp4") -> ModelEntry:
+    bare = name.split("/", 1)[-1]
+    return ModelEntry(
+        name=name,
+        source="huggingface",
+        pieces=[
+            ModelPiece(
+                role="main",
+                filename=f"{bare}.rad",
+                path=Path("/tmp/vault/models--StillDeadcode--qwen3.8-27b-mxfp4/blobs/sha"),
+                bytes=19_000_000_000,
+            )
+        ],
+        total_bytes=19_000_000_000,
+        directory="/tmp/vault/models--StillDeadcode--qwen3.8-27b-mxfp4",
+        notes=[],
+        extra={},
+    )
+
+
+def test_llama_server_mxfp4_model_keeps_bundled_qwen38_recipes(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_gguf_entry("org/Qwen3.8-27B-MXFP4")],
+    )
+    matches = list(
+        walk_models(
+            catalog,
+            Recipes.load(BUNDLED_RECIPES_PATH),
+            options=BuildOptions(repo_root=tmp_path),
+        )
+    )
+
+    assert {match.recipe.name for match in matches} == {
+        "qwen-3.8-27b-assistant",
+        "qwen-3.8-27b-agent-fast",
+        "qwen-3.8-27b-agent-long",
+        "qwen-3.8-27b-agent-xhigh",
+    }
+    assert all(match.recipe.engine == Engine.LLAMA_SERVER for match in matches)
+
+
+def test_radiance_mxfp4_model_resolves_to_radiance_recipe(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_rad_entry()],
+    )
+    matches = list(
+        walk_models(
+            catalog,
+            Recipes.load(BUNDLED_RECIPES_PATH),
+            options=_radiance_options(tmp_path),
+        )
+    )
+
+    assert {match.recipe.name for match in matches} == {"radiance-qwen3-8-27b-mxfp4"}
+
+
+def test_radiance_mxfp4_model_resolves_to_no_llama_server_recipe(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_rad_entry()],
+    )
+    matches = list(
+        walk_models(
+            catalog,
+            Recipes.load(BUNDLED_RECIPES_PATH),
+            options=_radiance_options(tmp_path),
+        )
+    )
+
+    assert matches
+    assert all(match.recipe.engine == Engine.RADIANCE for match in matches)
+    assert not any(match.recipe.name.startswith("qwen-3.8-27b-") for match in matches)
+
+
+def _evaluate_rad(
+    tmp_path: Path,
+    recipe: Recipe,
+    *,
+    options: BuildOptions | None = None,
+    overrides: dict | None = None,
+) -> EvaluatedConfig:
+    files = detect_file_sets(_rad_entry())[0]
+    return evaluate_recipe(
+        recipe,
+        files,
+        entry_id="qwen3-8-27b-mxfp4",
+        name="qwen3.8-27b-mxfp4",
+        options=options or _radiance_options(tmp_path),
+        overrides=overrides,
+    )
+
+
+def test_rad_piece_is_an_llm_candidate(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_rad_entry()],
+    )
+    out = evaluate_all(
+        catalog,
+        Recipes(default=_recipe(), matchable=[]),
+        options=_radiance_options(tmp_path),
+    )
+    assert "qwen3-8-27b-mxfp4" in out
+
+
+def test_rad_entry_id_strips_the_rad_extension(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[_rad_entry()],
+    )
+    out = evaluate_all(
+        catalog,
+        Recipes(default=_recipe(), matchable=[]),
+        options=_radiance_options(tmp_path),
+    )
+    assert set(out) == {"qwen3-8-27b-mxfp4"}
+
+
+def test_rad_display_name_strips_the_rad_extension() -> None:
+    assert (
+        make_display_name("qwen3.8-27b-mxfp4.rad", _recipe(), multi_match=False)
+        == "qwen3.8-27b-mxfp4"
+    )
+
+
+def test_rad_entry_evaluates_to_the_radiance_engine(tmp_path: Path) -> None:
+    evaluated = _evaluate_rad(tmp_path, _recipe())
+    assert evaluated.engine == Engine.RADIANCE
+    assert evaluated.cmd.startswith("docker run --init --rm")
+
+
+def test_rad_entry_knobs_prefer_override_over_recipe_over_option(tmp_path: Path) -> None:
+    recipe = _recipe(
+        radiance=RadianceRecipe(
+            tp=2,
+            max_model_len=16384,
+            max_num_seqs=16,
+            kv_cache_dtype="bf16",
+            gpu_headroom_mib=128,
+        )
+    )
+    evaluated = _evaluate_rad(
+        tmp_path,
+        recipe,
+        overrides={"radiance": {"tp": 4, "max_model_len": 8192}},
+    )
+    assert evaluated.radiance is not None
+    assert evaluated.radiance.tp == 4
+    assert evaluated.radiance.max_model_len == 8192
+    assert evaluated.radiance.max_num_seqs == 16
+    assert evaluated.radiance.kv_cache_dtype == "bf16"
+    assert evaluated.radiance.gpu_headroom_mib == 128
+
+
+def test_rad_entry_kv_cache_dtype_follows_the_cascade(tmp_path: Path) -> None:
+    recipe = _recipe(radiance=RadianceRecipe(kv_cache_dtype="bf16"))
+    service_value = _evaluate_rad(tmp_path, _recipe())
+    recipe_value = _evaluate_rad(tmp_path, recipe)
+    override_value = _evaluate_rad(
+        tmp_path,
+        recipe,
+        overrides={"radiance": {"kv_cache_dtype": "fp8_v4"}},
+    )
+    assert service_value.radiance is not None
+    assert recipe_value.radiance is not None
+    assert override_value.radiance is not None
+    assert service_value.radiance.kv_cache_dtype == "fp8"
+    assert recipe_value.radiance.kv_cache_dtype == "bf16"
+    assert override_value.radiance.kv_cache_dtype == "fp8_v4"
+    assert "--kv-cache-dtype fp8_v4" in override_value.cmd
+
+
+def test_rad_entry_tp_follows_the_cascade(tmp_path: Path) -> None:
+    recipe = _recipe(radiance=RadianceRecipe(tp=2))
+    service_value = _evaluate_rad(tmp_path, _recipe())
+    recipe_value = _evaluate_rad(tmp_path, recipe)
+    override_value = _evaluate_rad(
+        tmp_path,
+        recipe,
+        overrides={"radiance": {"tp": 4}},
+    )
+    assert service_value.radiance is not None
+    assert recipe_value.radiance is not None
+    assert override_value.radiance is not None
+    assert service_value.radiance.tp == 1
+    assert recipe_value.radiance.tp == 2
+    assert override_value.radiance.tp == 4
+    assert "--tp 4" in override_value.cmd
+
+
+def test_rad_entry_max_model_len_lands_in_ctx_size(tmp_path: Path) -> None:
+    recipe = _recipe(radiance=RadianceRecipe(max_model_len=16384))
+    evaluated = _evaluate_rad(tmp_path, recipe)
+    assert evaluated.ctx_size == 16384
+
+
+def test_rad_entry_max_model_len_zero_uses_model_training_context(tmp_path: Path) -> None:
+    recipe = _recipe(radiance=RadianceRecipe(max_model_len=0))
+    evaluated = _evaluate_rad(tmp_path, recipe)
+    assert evaluated.ctx_size == 0
+    assert "--max-model-len 0" in evaluated.cmd
+
+
+def test_rad_entry_ignores_llama_server_recipe_fields(tmp_path: Path) -> None:
+    recipe = _recipe(
+        parallel=99,
+        ctx_min=131072,
+        ctx_size=4096,
+        mmproj_offload=True,
+        radiance=RadianceRecipe(max_model_len=32768),
+    )
+    evaluated = _evaluate_rad(tmp_path, recipe)
+    assert evaluated.parallel is None
+    assert evaluated.ctx_min is None
+    assert evaluated.mmproj_offload is None
+    assert "--parallel" not in evaluated.cmd
+    assert "--fit-ctx" not in evaluated.cmd
+    assert " -c " not in evaluated.cmd
+
+
+def test_rad_entry_ignores_the_llama_server_kv_cache_vocabulary(tmp_path: Path) -> None:
+    recipe = _recipe(kv_cache="q4_0", radiance=RadianceRecipe(kv_cache_dtype="fp8"))
+    evaluated = _evaluate_rad(tmp_path, recipe)
+    assert evaluated.kv_cache is None
+    assert "q4_0" not in evaluated.cmd
+    assert "--kv-cache-dtype fp8" in evaluated.cmd
+
+
+def test_invalid_radiance_override_skips_only_that_entry(tmp_path: Path) -> None:
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text("entries:\n  bad-rad:\n    radiance:\n      kv_cache_dtype: q4_0\n")
+    overrides = OverridesStore(overrides_path).load()
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            _rad_entry("StillDeadcode/bad-rad"),
+            _rad_entry("StillDeadcode/good-rad"),
+        ],
+    )
+    recipes = Recipes(default=_recipe(), matchable=[])
+    options = _radiance_options(tmp_path)
+
+    report = evaluate_all_report(catalog, recipes, overrides=overrides, options=options)
+
+    assert set(report.configs) == {"good-rad"}
+    assert len(report.errors) == 1
+    assert report.errors[0].entry_id == "bad-rad"
+    assert "kv_cache_dtype" in report.errors[0].message
+
+    entries = build_config(catalog, recipes, overrides=overrides, options=options)
+    assert [entry_id for entry_id, _data in entries] == ["good-rad"]
+
+
+def test_llama_server_entry_is_unchanged_by_the_engine_branch(tmp_path: Path) -> None:
+    recipe = _recipe(
+        parallel=2,
+        ctx_size=4096,
+        radiance=RadianceRecipe(tp=4, kv_cache_dtype="fp8"),
+    )
+    files = detect_file_sets(_entry())[0]
+    evaluated = evaluate_recipe(
+        recipe,
+        files,
+        entry_id="test",
+        name="Test",
+        options=BuildOptions(repo_root=tmp_path),
+    )
+    assert evaluated.engine == Engine.LLAMA_SERVER
+    assert evaluated.cmd.startswith(
+        str((tmp_path / "vendor/llama.cpp/build/bin/llama-server").resolve())
+    )
+    assert "--parallel 2" in evaluated.cmd
+    assert "-c 4096" in evaluated.cmd
+    assert "--tp" not in evaluated.cmd
+    assert "--kv-cache-dtype" not in evaluated.cmd
+    assert "docker run" not in evaluated.cmd

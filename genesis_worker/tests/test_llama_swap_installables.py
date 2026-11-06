@@ -24,7 +24,20 @@ from genesis_worker.utils.config_overrides import (
     service_overrides_path,
     write_service_overrides,
 )
-from genesis_worker.utils.installables import GithubReleaseRecord, match_asset
+from genesis_worker.utils.installables import (
+    DockerImageInstall,
+    DockerImageRecord,
+    GithubReleaseRecord,
+    match_asset,
+)
+
+
+@pytest.fixture(autouse=True)
+def _stub_radiance_group_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "genesis_worker.services.llama_swap.service.resolve_group_gids",
+        lambda names: (),
+    )
 
 
 def _user_record(**overrides: object) -> dict[str, object]:
@@ -67,15 +80,34 @@ def test_ensure_unique_installable_name_allows_editing_existing_record() -> None
     )
 
 
-def test_seed_records_define_the_four_builtin_installables() -> None:
+def test_seed_records_define_the_five_builtin_installables() -> None:
     records = load_seed_records()
     assert [record.name for record in records] == [
         "llama-swap",
         "llama-server-cuda",
         "llama-server-cpu",
         "llama-server-vulkan",
+        "radiance",
     ]
     assert records[0].primary is True
+
+
+def test_seed_records_include_the_radiance_docker_image() -> None:
+    record = next(item for item in load_seed_records() if item.name == "radiance")
+    assert isinstance(record, DockerImageRecord)
+    assert record.kind == "docker_image"
+    assert record.image == "stilldeadcode/radiance"
+    assert record.default_tag == "latest"
+    assert record.primary is False
+    assert record.variant is None
+    assert record.backend is None
+
+
+def test_radiance_record_builds_a_docker_image_installable(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    installable = next(item for item in svc.installs() if item.name == "radiance")
+    assert isinstance(installable, DockerImageInstall)
+    assert installable.image_ref == "stilldeadcode/radiance:latest"
 
 
 def test_seed_record_patterns_match_real_upstream_asset_names() -> None:
@@ -96,7 +128,7 @@ def test_seed_record_patterns_match_real_upstream_asset_names() -> None:
 
 def test_installs_returns_one_installable_per_enabled_record(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path, options={"installables": [_user_record()]}))
-    assert len(svc.installs()) == 5
+    assert len(svc.installs()) == 6
     assert svc.installs()[-1].name == "llama-server-prism"
 
 
@@ -107,6 +139,7 @@ def test_installs_preserves_seed_order(tmp_path: Path) -> None:
         "llama-server-cuda",
         "llama-server-cpu",
         "llama-server-vulkan",
+        "radiance",
     ]
 
 
@@ -138,7 +171,7 @@ def test_user_record_overrides_seed_with_same_name(tmp_path: Path) -> None:
     assert isinstance(record, GithubReleaseRecord)
     assert record.label == "custom CPU"
     assert record.repo == "owner/repo"
-    assert len(svc.installs()) == 4
+    assert len(svc.installs()) == 5
 
 
 def test_primary_installable_is_the_llama_swap_proxy(tmp_path: Path) -> None:
@@ -219,7 +252,7 @@ def test_malformed_record_does_not_break_service_construction(tmp_path: Path) ->
     svc = LlamaSwapService(
         service_ctx(tmp_path, options={"installables": [{"kind": "unknown", "name": "bad"}]})
     )
-    assert len(svc.installs()) == 4
+    assert len(svc.installs()) == 5
     assert svc.installable_records_error is not None
 
 

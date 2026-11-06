@@ -31,3 +31,8 @@ installables:
     repo: ggml-org/llama.cpp
     asset_pattern: "llama-*-bin-ubuntu-vulkan-x64.tar.gz"
     binary_name: llama-server
+  - kind: docker_image
+    name: radiance
+    label: Radiance engine (container)
+    image: stilldeadcode/radiance
+    default_tag: latest
