@@ -20,6 +20,14 @@ from .engines import Engine
 BUNDLED_RECIPES_PATH = Path(__file__).parent / "data" / "recipes.yaml"
 
 
+def _represent_engine(dumper, data):
+    return dumper.represent_str(data.value)
+
+
+# Recipe.model_dump() keeps Engine instances, which SafeDumper cannot represent.
+yaml.add_representer(Engine, _represent_engine, Dumper=yaml.SafeDumper)
+
+
 class RadianceRecipe(BaseModel):
     """Tuning profile for a radiance model family."""
 

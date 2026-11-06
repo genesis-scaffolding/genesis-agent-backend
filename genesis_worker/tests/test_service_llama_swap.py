@@ -14,6 +14,7 @@ import yaml
 from genesis_worker import GenesisWorker
 from genesis_worker.contracts.host import Hardware, HostInfo
 from genesis_worker.services.llama_swap import LlamaSwapService
+from genesis_worker.services.llama_swap.engines import Engine
 from genesis_worker.services.llama_swap.generate_config import (
     is_config_stale,
     read_generated_at,
@@ -120,6 +121,18 @@ def test_malformed_override_recipes_raises_naming_file(tmp_path: Path) -> None:
     svc = LlamaSwapService(service_ctx(tmp_path))
     with pytest.raises(RuntimeError, match=str(override)):
         svc.list_recipes()
+
+
+def test_save_recipe_override_with_engine_tag_round_trips(tmp_path: Path) -> None:
+    svc = LlamaSwapService(service_ctx(tmp_path))
+    name = "radiance-qwen3-8-27b-mxfp4"
+
+    svc.save_recipe_override(name, {"engine": Engine.RADIANCE})
+
+    raw = yaml.safe_load(svc.recipe_overlay_path.read_text())
+    assert raw["recipes"][name]["engine"] == "radiance"
+    saved = svc.list_recipe_overrides()[name]
+    assert saved.engine == Engine.RADIANCE
 
 
 # ---------------------------------------------------------------------------
