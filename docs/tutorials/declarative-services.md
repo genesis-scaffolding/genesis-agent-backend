@@ -464,7 +464,11 @@ changes nothing.
 ```json
 {
   "routes": { "http": { "routers": {} } },
-  "options": { "dns_provider": "godaddy", "acme_email": "admin@example.com" }
+  "options": {
+    "dns_provider": "godaddyv3",
+    "dns_api_token": "<the provider's personal access token>",
+    "acme_email": "admin@example.com"
+  }
 }
 ```
 

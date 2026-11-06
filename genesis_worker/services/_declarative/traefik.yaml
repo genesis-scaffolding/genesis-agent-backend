@@ -21,11 +21,19 @@
 # challenge is impossible. We use the DNS-01 challenge, which needs a
 # DNS provider credential. The fleet's registrar is GoDaddy, and the
 # Lego library embedded in the official Traefik image ships a
-# first-party ``godaddy`` provider: it reads ``GODADDY_API_KEY`` and
-# ``GODADDY_API_SECRET`` from the environment (the key needs DNS write
-# scope for the zone). The provider name and the credential are
-# options — the orchestrator pushes them with the route table, and the
-# worker's own Configure panel can set them for single-node work.
+# first-party ``godaddyv3`` provider: it reads ONE environment
+# variable, ``GODADDYV3_PERSONAL_ACCESS_TOKEN`` — a GoDaddy Personal
+# Access Token, which is what the Domains v3 API requires. The legacy
+# ``godaddy`` provider (an ``sso-key`` pair) is deprecated for Domains
+# through 2026 and does not work with v3 at all.
+#
+# The PAT needs the ``domains.dns:update`` scope (create, update and
+# delete DNS zone records); a write scope satisfies the reads for the
+# same resource. The provider name and the credential are options — the
+# orchestrator pushes them with the route table, and the worker's own
+# Configure panel can set them for single-node work. Another provider
+# needs its own credential variable, so switching providers is not only
+# this field.
 #
 # CONFIG DIR — what the orchestrator is expected to write
 # -------------------------------------------------------
@@ -115,25 +123,19 @@ options:
     type: string
     default: ""
     ui_label: ACME e-mail
-    ui_help: Contact address for the ACME account (Let's Encrypt expiry notices)
+    ui_help: "Identifier of the ACME account. Lego registers the account with Let's Encrypt automatically on the first issuance. Let's Encrypt ended its expiration-notification e-mail service on 4 June 2025, so the address is not used for expiry notices."
     ui_group: TLS
   dns_provider:
     type: string
-    default: "godaddy"
+    default: "godaddyv3"
     ui_label: DNS provider
-    ui_help: "Traefik DNS-01 provider name (lego): godaddy, cloudflare, route53, ovh, azure, digitalocean, gandi, linode, vultr"
+    ui_help: "Traefik DNS-01 provider name (lego): godaddyv3 (the GoDaddy case — Personal Access Token), cloudflare, route53, ovh, azure, digitalocean, gandi, linode, vultr. Another provider needs its own credential variable, so switching providers is not only this field."
     ui_group: TLS
-  dns_api_key:
+  dns_api_token:
     type: string
     default: ""
-    ui_label: DNS API key
-    ui_help: "Provider credential (GoDaddy: the API key). Needs DNS write scope for the zone."
-    ui_group: TLS
-  dns_api_secret:
-    type: string
-    default: ""
-    ui_label: DNS API secret
-    ui_help: "Provider credential (GoDaddy: the API secret that pairs with the key)"
+    ui_label: DNS API token
+    ui_help: "The DNS provider credential — for GoDaddy a Personal Access Token with the domains.dns:update scope (create, update and delete DNS zone records)."
     ui_group: TLS
 
 pre_start_hooks:
@@ -166,9 +168,8 @@ compose_template: |
         - "$options.listen_host:$options.listen_port:8080"
       environment:
         # Lego (embedded in the official image) reads the GoDaddy
-        # credential from the environment.
-        GODADDY_API_KEY: "$options.dns_api_key"
-        GODADDY_API_SECRET: "$options.dns_api_secret"
+        # Personal Access Token from the environment.
+        GODADDYV3_PERSONAL_ACCESS_TOKEN: "$options.dns_api_token"
       volumes:
         # The PARENT of dynamic/ is mounted — Traefik watches the
         # directory, and a bind mount over the watched dir itself

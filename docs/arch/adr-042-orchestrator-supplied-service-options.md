@@ -14,9 +14,9 @@ it to the hook verbatim.
 
 The cluster ingress proxy (ADR-015 in the orchestrator repo) needs more
 than a config file. Its TLS material — the DNS provider, the DNS
-credential and the ACME contact address — has to reach the container as
-*options*, because the container's command line and environment are
-built from the service's option values. The orchestrator owns those
+provider token and the ACME account identifier — has to reach the
+container as *options*, because the container's command line and
+environment are built from the service's option values. The orchestrator owns those
 settings (the admin types them into the Ingress page), and the decision
 recorded on 1 Nov 2026 is that the orchestrator is the primary input:
 on deploy / refresh it pushes the route table **and** the option values,
@@ -84,7 +84,7 @@ Accepted
   entries with the pushed values for the same keys. The Configure panel
   and the orchestrator write to the same store; the last writer wins
   for the keys they share.
-- Negative: the DNS credential now lives in two places — the
+- Negative: the DNS token now lives in two places — the
   orchestrator's secret store and the worker's override sidecar. The
   worker's copy is what the container needs; the orchestrator's is the
   admin-facing source.

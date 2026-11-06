@@ -72,7 +72,7 @@ def test_traefik_image_is_declared(tmp_path: Path) -> None:
 def test_default_options_are_the_fleet_case(tmp_path: Path) -> None:
     """GoDaddy is the fleet's registrar; the ping port is loopback-only."""
     svc = _load(tmp_path)
-    assert svc.options.dns_provider == "godaddy"  # type: ignore[attr-defined]
+    assert svc.options.dns_provider == "godaddyv3"  # type: ignore[attr-defined]
     assert svc.options.ingress_port == 443  # type: ignore[attr-defined]
     assert svc.options.listen_port == 8080  # type: ignore[attr-defined]
     assert svc.options.listen_host == "127.0.0.1"  # type: ignore[attr-defined]
@@ -87,19 +87,15 @@ def test_health_probe_uses_the_plain_http_ping_entrypoint(tmp_path: Path) -> Non
 # --- rendered compose file -------------------------------------------------
 
 
-def test_rendered_compose_carries_the_godaddy_credential(tmp_path: Path) -> None:
-    svc = _load(
-        tmp_path,
-        options={"dns_api_key": "the-key", "dns_api_secret": "the-secret"},
-    )
+def test_rendered_compose_carries_the_godaddy_token(tmp_path: Path) -> None:
+    svc = _load(tmp_path, options={"dns_api_token": "the-token"})
     rendered = svc._render_compose_file().read_text()
-    assert 'GODADDY_API_KEY: "the-key"' in rendered
-    assert 'GODADDY_API_SECRET: "the-secret"' in rendered
+    assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "the-token"' in rendered
 
 
 def test_rendered_compose_file_is_not_world_readable(tmp_path: Path) -> None:
     """The compose file carries the DNS credential."""
-    svc = _load(tmp_path, options={"dns_api_key": "the-key"})
+    svc = _load(tmp_path, options={"dns_api_token": "the-token"})
     path = svc._render_compose_file()
     assert path.stat().st_mode & 0o077 == 0
 
@@ -114,7 +110,7 @@ def test_rendered_compose_publishes_the_ingress_and_ping_ports(tmp_path: Path) -
 def test_rendered_compose_uses_the_dns_provider_and_acme_email(tmp_path: Path) -> None:
     svc = _load(tmp_path, options={"acme_email": "admin@example.com"})
     rendered = svc._render_compose_file().read_text()
-    assert "--certificatesResolvers.letsencrypt.acme.dnschallenge.provider=godaddy" in rendered
+    assert "--certificatesResolvers.letsencrypt.acme.dnschallenge.provider=godaddyv3" in rendered
     assert "--certificatesResolvers.letsencrypt.acme.email=admin@example.com" in rendered
     assert "--certificatesResolvers.letsencrypt.acme.dnschallenge=true" in rendered
     assert "--certificatesResolvers.letsencrypt.acme.tlschallenge=false" in rendered
@@ -134,7 +130,7 @@ def test_routes_hook_writes_the_dynamic_config(tmp_path: Path) -> None:
     svc = _load(tmp_path)
     svc._pending_orchestrator_config = {
         "routes": {"http": {"routers": {"r": {"rule": "Host(`a.example`)"}}}},
-        "options": {"dns_provider": "godaddy"},
+        "options": {"dns_provider": "godaddyv3"},
     }
     run_hooks(
         list(svc.config.pre_start_hooks),
@@ -147,7 +143,7 @@ def test_routes_hook_writes_the_dynamic_config(tmp_path: Path) -> None:
 def test_routes_hook_fails_loudly_on_a_missing_key(tmp_path: Path) -> None:
     """A half-supplied body must never fall back to a stale route table."""
     svc = _load(tmp_path)
-    svc._pending_orchestrator_config = {"options": {"dns_provider": "godaddy"}}
+    svc._pending_orchestrator_config = {"options": {"dns_provider": "godaddyv3"}}
     with pytest.raises(ValueError, match="routes"):
         run_hooks(
             list(svc.config.pre_start_hooks),
@@ -198,11 +194,11 @@ def test_orchestrator_options_reach_the_rendered_compose_file(tmp_path: Path) ->
         ComposeService,
         worker._apply_orchestrator_options(
             "traefik",
-            {"routes": {}, "options": {"dns_api_key": "pushed-key", "acme_email": "a@b.c"}},
+            {"routes": {}, "options": {"dns_api_token": "pushed-token", "acme_email": "a@b.c"}},
         ),
     )
     rendered = svc._render_compose_file().read_text()
-    assert 'GODADDY_API_KEY: "pushed-key"' in rendered
+    assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "pushed-token"' in rendered
     assert "--certificatesResolvers.letsencrypt.acme.email=a@b.c" in rendered
 
 
@@ -217,5 +213,5 @@ def test_orchestrator_options_are_persisted_in_the_workers_option_store(tmp_path
 def test_a_config_body_without_options_changes_nothing(tmp_path: Path) -> None:
     worker = _worker(tmp_path)
     svc = worker._apply_orchestrator_options("traefik", {"routes": {}})
-    assert svc.options.dns_provider == "godaddy"  # type: ignore[attr-defined]
+    assert svc.options.dns_provider == "godaddyv3"  # type: ignore[attr-defined]
     assert not (tmp_path / "config" / "services" / "traefik.overrides.json").exists()
