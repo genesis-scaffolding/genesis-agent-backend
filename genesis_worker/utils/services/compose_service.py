@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+
+import yaml
 
 from ...contracts import (
     ServiceCapabilities,
@@ -29,12 +31,37 @@ from ...contracts import (
 )
 from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
-from ..ports.markers import assert_no_markers
+from ..ports.markers import assert_no_markers, marker_name
 from ..process import DockerContainer
+from ..process.docker import ContainerPortBinding, container_port_bindings
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_stack import DockerComposeStack
 
 _IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
+
+
+def _split_ports_entry(entry: str) -> tuple[str, int] | None:
+    """(host_port, container_port) of a compose ``ports:`` entry, or ``None``.
+
+    Docker's port spec is ``[HOST_IP:][HOST:]CONTAINER[/PROTOCOL]`` — the
+    container port is always last, the host port is the field before it. An
+    entry with only a container port publishes no host port at all, so there
+    is nothing to observe.
+    """
+    text = entry.strip()
+    if text.startswith("["):  # bracketed IPv6 host address
+        close = text.find("]")
+        if close == -1 or not text[close + 1 :].startswith(":"):
+            return None
+        text = text[close + 2 :]
+    parts = text.split(":")
+    if len(parts) < 2:
+        return None
+    host_port, container_port = parts[-2], parts[-1]
+    container_port = container_port.split("/")[0]
+    if not container_port.isdigit():
+        return None
+    return host_port, int(container_port)
 
 
 @dataclass(frozen=True)
@@ -135,6 +162,64 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
     def own_container_names(self) -> tuple[str, ...]:
         # Compose labels every container of a stack with its project name.
         return (self._project_name,)
+
+    def published_host_ports(
+        self, bindings: Sequence[ContainerPortBinding] | None = None
+    ) -> Mapping[str, int]:
+        """The host ports this stack already publishes, per use site.
+
+        The marker-to-container-port mapping lives in the template text, so
+        the template is parsed; the container port is then looked up in the
+        project's running containers (ADR-045).
+        """
+        snapshot = container_port_bindings() if bindings is None else bindings
+        own = [b for b in snapshot if b.compose_project == self._project_name and b.running]
+        if not own:
+            return {}
+        ports: dict[int, int] = {}
+        for binding in own:
+            ports.update(binding.port_map)
+        published: dict[str, int] = {}
+        for marker, container_port in self._template_marker_container_ports().items():
+            host = ports.get(container_port)
+            if host is not None:
+                published[marker] = host
+        return published
+
+    def _template_marker_container_ports(self) -> Mapping[str, int]:
+        """Marker name -> container port, read from the template's ``ports:``.
+
+        Best-effort and total: anything the parse cannot read yields no
+        observation, never a wrong one.
+        """
+        try:
+            doc = yaml.safe_load(self.config.compose_template)
+        except yaml.YAMLError:
+            return {}
+        if not isinstance(doc, dict):
+            return {}
+        services = doc.get("services")
+        if not isinstance(services, dict):
+            return {}
+        out: dict[str, int] = {}
+        for spec in services.values():
+            if not isinstance(spec, dict):
+                continue
+            entries = spec.get("ports")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, str):
+                    continue
+                parsed = _split_ports_entry(entry)
+                if parsed is None:
+                    continue
+                host_port, container_port = parsed
+                name = marker_name(host_port)
+                if name is None:
+                    continue
+                out.setdefault(name, container_port)
+        return out
 
     @property
     def data_dir(self) -> Path:
@@ -296,7 +381,11 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         if not self._stack.is_running():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
         if port is None:
-            return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
+            return ServiceStatus(
+                state=ServiceState.STARTING,
+                endpoint=endpoint,
+                message=self.unrecorded_port_message(),
+            )
         probe = HealthProbe(
             self.config.listen_host,
             port,

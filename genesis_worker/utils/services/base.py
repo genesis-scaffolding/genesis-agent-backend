@@ -37,6 +37,7 @@ from ...contracts import (
 )
 from ..ports.binder import PortBinder
 from ..ports.markers import marker_name
+from ..process.docker import ContainerPortBinding
 from .spec import OptionSpec
 
 ConfigT = TypeVar("ConfigT")
@@ -272,6 +273,33 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
         restart of a running container.
         """
         return ()
+
+    def published_host_ports(
+        self, bindings: Sequence[ContainerPortBinding] | None = None
+    ) -> Mapping[str, int]:
+        """The host ports this service's own running container publishes.
+
+        Keyed by auto-port use-site name. Empty for a service that
+        publishes nothing, is not running, or has no auto-port use site
+        (ADR-045).
+
+        ``bindings`` is the node's container-binding snapshot; ``None``
+        means "probe the daemon yourself". The registry passes one
+        snapshot to every service, so the daemon is read once per
+        adoption pass.
+        """
+        return {}
+
+    def unrecorded_port_message(self) -> str:
+        """Why the effective port is unknown while the service is up."""
+        marker = marker_name(getattr(self.config, "listen_port", None))
+        ref = f"$auto_port.{marker}" if marker else "the auto-port marker"
+        return (
+            f"the container is running but no host port is recorded for {ref} — "
+            "the worker could not map the container's published port to this use "
+            "site (the service may have been started before its spec adopted the "
+            "marker); restart the service to allocate one"
+        )
 
     # --- contract: abstract lifecycle (subclasses fill these) ------------
 

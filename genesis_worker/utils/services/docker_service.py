@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,9 @@ from ...contracts import (
 )
 from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
-from ..ports.markers import assert_no_markers
+from ..ports.markers import assert_no_markers, marker_name
 from ..process import DockerContainer
+from ..process.docker import ContainerPortBinding, container_port_bindings
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 
 
@@ -176,6 +178,35 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
 
     def own_container_names(self) -> tuple[str, ...]:
         return (self.config.container_name,)
+
+    def published_host_ports(
+        self, bindings: Sequence[ContainerPortBinding] | None = None
+    ) -> Mapping[str, int]:
+        """The host ports this container already publishes, per use site.
+
+        The mapping is structural: the primary use site is the container's
+        internal port, each extra use site is its own container port
+        (ADR-045).
+        """
+        snapshot = container_port_bindings() if bindings is None else bindings
+        own = [b for b in snapshot if b.name == self.config.container_name and b.running]
+        if not own:
+            return {}
+        ports = dict(own[0].port_map)
+        published: dict[str, int] = {}
+        marker = marker_name(self.config.listen_port)
+        if marker is not None and self.config.internal_port is not None:
+            host = ports.get(self.config.internal_port)
+            if host is not None:
+                published[marker] = host
+        for extra in self.config.extra_ports:
+            name = marker_name(extra.host)
+            if name is None:
+                continue
+            host = ports.get(extra.container_port)
+            if host is not None:
+                published[name] = host
+        return published
 
     @property
     def data_dir(self) -> Path:
@@ -429,7 +460,11 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         if not DockerContainer(self.config.container_name).is_running():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
         if port is None:
-            return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
+            return ServiceStatus(
+                state=ServiceState.STARTING,
+                endpoint=endpoint,
+                message=self.unrecorded_port_message(),
+            )
         probe = HealthProbe(
             self.config.listen_host,
             port,

@@ -20,10 +20,10 @@
 # the docker kind supports exactly one. The runtime port (health probe
 # + web UI endpoint) is the Streamlit UI port, per framework convention.
 #
-# Both host ports are allocated by the framework (``$auto_port.listen`` and
-# ``$auto_port.api``): the worker picks two free ports from its own range
-# at start time, so this stack no longer collides with anything else on
-# the node.
+# Both host ports are pinned: the Streamlit UI on 3000 and the FastAPI
+# server on 8765. Clients hard-code them (the genesis CLI token stores in
+# two working directories point at http://p3:8765; the UI is bookmarked at
+# :3000), so the framework must not be free to move them. ADR-045.
 
 version: 1
 kind: compose
@@ -100,15 +100,15 @@ options:
     ui_group: Network
   listen_port:
     type: port
-    default: "$auto_port.listen"
+    default: 3000
     ui_label: Web UI port
-    ui_help: Host-side port for the Streamlit UI; the framework allocates one when left on "assign automatically"
+    ui_help: Host-side port for the Streamlit UI
     ui_group: Network
   api_port:
     type: port
-    default: "$auto_port.api"
+    default: 8765
     ui_label: API port
-    ui_help: Host-side port for the FastAPI server (CLI/agent access); the framework allocates one when left on "assign automatically"
+    ui_help: Host-side port for the FastAPI server (CLI/agent access)
     ui_group: Network
   tz:
     type: string

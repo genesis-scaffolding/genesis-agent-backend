@@ -190,3 +190,66 @@ def test_reconcile_releases_records_the_service_no_longer_declares(tmp_path: Pat
     alloc.reconcile("metube", ["listen"])
     assert alloc.allocated("metube", "listen") is not None
     assert alloc.allocated("metube", "api") is None
+
+
+# --- adoption (ADR-045) -----------------------------------------------------
+
+
+def test_adopt_records_a_published_port(tmp_path: Path) -> None:
+    alloc = _allocator(tmp_path, _Env())
+    assert alloc.adopt("metube", "listen", 8098) is True
+    assert alloc.allocated("metube", "listen") == 8098
+    path = tmp_path / "state" / "port_allocations.yaml"
+    assert yaml.safe_load(path.read_text()) == {"allocations": {"metube": {"listen": 8098}}}
+    assert alloc.snapshot() == {"metube": {"listen": 8098}}
+
+
+def test_adopt_does_not_overwrite_an_existing_record(tmp_path: Path) -> None:
+    """A live allocation is never clobbered by an observation."""
+    alloc = _allocator(tmp_path, _Env())
+    alloc.adopt("metube", "listen", 8098)
+    assert alloc.adopt("metube", "listen", 9000) is False
+    assert alloc.allocated("metube", "listen") == 8098
+
+
+def test_adopt_refuses_a_port_another_service_holds(tmp_path: Path) -> None:
+    alloc = _allocator(tmp_path, _Env())
+    port = alloc.allocate("other", "listen")
+    assert alloc.adopt("metube", "listen", port) is False
+    assert alloc.allocated("metube", "listen") is None
+
+
+def test_adopt_refuses_a_reserved_fixed_port(tmp_path: Path) -> None:
+    alloc = _allocator(tmp_path, _Env(fixed={8098}))
+    assert alloc.adopt("metube", "listen", 8098) is False
+    assert alloc.allocated("metube", "listen") is None
+
+
+def test_adopt_is_visible_to_a_second_allocator(tmp_path: Path) -> None:
+    """The second worker process reads the adopted port."""
+    first = _allocator(tmp_path, _Env())
+    first.adopt("metube", "listen", 8098)
+    second = _allocator(tmp_path, _Env())
+    assert second.allocated("metube", "listen") == 8098
+
+
+def test_adopting_twice_is_idempotent(tmp_path: Path) -> None:
+    """Both worker processes adopt at startup — the second one changes nothing."""
+    alloc = _allocator(tmp_path, _Env())
+    assert alloc.adopt("metube", "listen", 8098) is True
+    assert alloc.adopt("metube", "listen", 8098) is False
+    assert alloc.snapshot() == {"metube": {"listen": 8098}}
+
+
+def test_adopt_does_not_run_the_bind_probe(tmp_path: Path) -> None:
+    """The port is already published by our own container — no bind test."""
+    probed: list[int] = []
+    env = _Env(busy={8098})
+    alloc = NodePortAllocator(
+        tmp_path / "state",
+        fixed_ports=env.fixed_ports,
+        container_bindings=env.container_bindings,
+        bind_probe=lambda port: probed.append(port) or True,
+    )
+    assert alloc.adopt("metube", "listen", 8098) is True
+    assert probed == []

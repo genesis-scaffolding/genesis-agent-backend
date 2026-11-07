@@ -114,6 +114,20 @@ def _stub_docker_probes(request, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _stub_container_port_bindings(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the registry's adoption pass off the docker daemon (ADR-045).
+
+    The pass reads every container's port bindings once per registry
+    construction; without this stub that is a real ``docker ps`` +
+    ``docker inspect`` roundtrip in the test suite. Tests that exercise
+    adoption patch their own snapshot on top of this stub.
+    """
+    if "integration" in request.keywords:
+        return
+    monkeypatch.setattr("genesis_worker.registries.container_port_bindings", list)
+
+
+@pytest.fixture(autouse=True)
 def _stub_collect_metrics(request, monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace ``collect_metrics`` so unit tests don't block on nvmlInit.
 

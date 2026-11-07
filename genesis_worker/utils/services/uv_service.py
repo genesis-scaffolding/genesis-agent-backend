@@ -353,7 +353,11 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
         if not TmuxProcess(self._session_name).exists():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
         if port is None:
-            return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
+            return ServiceStatus(
+                state=ServiceState.STARTING,
+                endpoint=endpoint,
+                message=self.unrecorded_port_message(),
+            )
         if HealthProbe(
             self.config.listen_host,
             port,

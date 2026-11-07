@@ -75,11 +75,22 @@ class ContainerPortBinding:
     ``compose_project`` is the ``com.docker.compose.project`` label compose
     puts on every container of a stack — that is how a compose service
     recognises its own containers.
+
+    ``running`` says whether the container is up right now. A stopped
+    container declares its bindings but holds none of them, so only a
+    running container's port can be adopted (ADR-045).
+
+    ``port_map`` pairs the container port with the host port it is
+    published on — ``((8081, 8098),)`` for a container that publishes
+    ``8081/tcp`` on host port 8098. The container port is the half the
+    allocator's callers need to map a service's use site to a binding.
     """
 
     name: str
     host_ports: tuple[int, ...]
     compose_project: str | None = None
+    running: bool = False
+    port_map: tuple[tuple[int, int], ...] = ()
 
 
 def container_port_bindings() -> list[ContainerPortBinding]:
@@ -123,8 +134,12 @@ def _binding_from_inspect(entry: dict) -> ContainerPortBinding:
     host_config = entry.get("HostConfig") or {}
     port_bindings = host_config.get("PortBindings") or {}
     ports: set[int] = set()
+    port_map: dict[int, int] = {}
     if isinstance(port_bindings, dict):
-        for entries in port_bindings.values():
+        for container_port, entries in port_bindings.items():
+            container = str(container_port).split("/")[0]
+            if not container.isdigit():
+                continue
             for binding in entries or []:
                 if not isinstance(binding, dict):
                     continue
@@ -132,16 +147,24 @@ def _binding_from_inspect(entry: dict) -> ContainerPortBinding:
                 if raw in (None, ""):
                     continue
                 try:
-                    ports.add(int(raw))
+                    host_port = int(raw)
                 except (TypeError, ValueError):
                     continue
+                ports.add(host_port)
+                # A container port published on several addresses keeps the
+                # first binding — one host port per container port.
+                port_map.setdefault(int(container), host_port)
     config = entry.get("Config") or {}
     labels = config.get("Labels") or {} if isinstance(config, dict) else {}
     project = labels.get("com.docker.compose.project") if isinstance(labels, dict) else None
+    state = entry.get("State") or {}
+    running = bool(state.get("Running")) if isinstance(state, dict) else False
     return ContainerPortBinding(
         name=name,
         host_ports=tuple(sorted(ports)),
         compose_project=str(project) if project else None,
+        running=running,
+        port_map=tuple(port_map.items()),
     )
 
 

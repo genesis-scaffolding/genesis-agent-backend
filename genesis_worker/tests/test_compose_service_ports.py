@@ -16,8 +16,10 @@ from typing import Any
 import pytest
 import yaml
 
+from genesis_worker.contracts import ServiceState
 from genesis_worker.tests._factories import service_ctx
 from genesis_worker.utils.ports.allocator import NodePortAllocator
+from genesis_worker.utils.process.docker import ContainerPortBinding
 from genesis_worker.utils.services import ComposeService, load_service_spec
 
 _TEMPLATE = (
@@ -147,3 +149,113 @@ def test_a_compose_spec_that_does_not_publish_its_runtime_port_is_rejected(
     ctx = service_ctx(tmp_path, name="demo", port_allocator=_allocator(tmp_path))
     with pytest.raises(ValueError, match="does not publish it"):
         load_service_spec(path, ctx=ctx)
+
+
+# --- published ports (ADR-045) ----------------------------------------------
+
+
+def _project_bindings(*, running: bool = True) -> list[ContainerPortBinding]:
+    """A snapshot of the node's containers: our stack publishes 3000 and 8765."""
+    return [
+        ContainerPortBinding(
+            name="genesis-productivity",
+            host_ports=(3000, 8765),
+            compose_project="demo-stack",
+            running=running,
+            port_map=((3000, 3000), (8765, 8765)),
+        )
+    ]
+
+
+def test_the_template_parse_maps_a_marker_to_its_container_port(tmp_path: Path) -> None:
+    svc = _load(tmp_path, _spec(listen_port="$auto_port.listen", api_port="$auto_port.api"))
+    assert svc._template_marker_container_ports() == {"listen": 3000, "api": 8765}
+
+
+def test_a_ports_entry_without_a_container_port_yields_no_observation(tmp_path: Path) -> None:
+    """``HOST:CONTAINER`` is the only shape that names both halves."""
+    payload = _spec(listen_port="$auto_port.listen", api_port="$auto_port.api")
+    payload["compose_template"] = (
+        'version: "3.8"\n'
+        "services:\n"
+        "  app:\n"
+        "    image: $images.app\n"
+        "    ports:\n"
+        '      - "$options.listen_host:$options.listen_port"\n'
+    )
+    svc = _load(tmp_path, payload)
+    assert svc._template_marker_container_ports() == {}
+    assert svc.published_host_ports(_project_bindings()) == {}
+
+
+def test_a_ports_entry_without_a_marker_is_not_a_use_site(tmp_path: Path) -> None:
+    payload = _spec(listen_port="$auto_port.listen", api_port="$auto_port.api")
+    payload["compose_template"] = (
+        'version: "3.8"\n'
+        "services:\n"
+        "  app:\n"
+        "    image: $images.app\n"
+        "    ports:\n"
+        '      - "0.0.0.0:8080:8080"\n'
+        '      - "$options.listen_host:$options.listen_port:3000"\n'
+    )
+    svc = _load(tmp_path, payload)
+    assert svc._template_marker_container_ports() == {"listen": 3000}
+
+
+def test_a_template_that_does_not_parse_yields_no_observation(tmp_path: Path) -> None:
+    """An unreadable template observes nothing — never a wrong port."""
+    payload = _spec(listen_port="$auto_port.listen", api_port="$auto_port.api")
+    payload["compose_template"] = (
+        'version: "3.8"\n'
+        "services:\n"
+        "  app:\n"
+        "    image: $images.app\n"
+        "    ports:\n"
+        '      - "$options.listen_host:$options.listen_port:3000"\n'
+        "\tbroken: [\n"
+    )
+    svc = _load(tmp_path, payload)
+    assert svc._template_marker_container_ports() == {}
+    assert svc.published_host_ports(_project_bindings()) == {}
+
+
+def test_published_host_ports_reads_the_projects_container(tmp_path: Path) -> None:
+    svc = _load(tmp_path, _spec(listen_port="$auto_port.listen", api_port="$auto_port.api"))
+    assert svc.published_host_ports(_project_bindings()) == {"listen": 3000, "api": 8765}
+
+
+def test_a_stopped_stack_publishes_nothing(tmp_path: Path) -> None:
+    svc = _load(tmp_path, _spec(listen_port="$auto_port.listen", api_port="$auto_port.api"))
+    assert svc.published_host_ports(_project_bindings(running=False)) == {}
+
+
+def test_status_is_running_for_a_running_stack_with_unrecorded_ports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The migration case: the stack runs, the record did not exist yet."""
+    svc = _load(tmp_path, _spec(listen_port="$auto_port.listen", api_port="$auto_port.api"))
+    assert svc.port_binder().adopt("listen", 3000) is True
+    assert svc.port_binder().adopt("api", 8765) is True
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.compose_service.DockerComposeStack.is_running",
+        lambda self: True,
+    )
+    monkeypatch.setattr(
+        "genesis_worker.utils.services.compose_service.HealthProbe.probe", lambda self: True
+    )
+    assert svc.effective_host_port() == 3000
+    status = svc.status()
+    assert status.state == ServiceState.RUNNING
+    assert status.endpoint == "http://127.0.0.1:3000/"
+    assert svc.port_binder().allocated("api") == 8765
+
+
+def test_the_rendered_file_after_adoption_keeps_the_published_ports(tmp_path: Path) -> None:
+    """The rendered file still publishes the ports the container holds."""
+    svc = _load(tmp_path, _spec(listen_port="$auto_port.listen", api_port="$auto_port.api"))
+    svc.port_binder().adopt("listen", 3000)
+    svc.port_binder().adopt("api", 8765)
+    body = svc._render_compose_file(ports=svc.port_binder().resolver()).read_text()
+    assert '"0.0.0.0:3000:3000"' in body
+    assert '"0.0.0.0:8765:8765"' in body

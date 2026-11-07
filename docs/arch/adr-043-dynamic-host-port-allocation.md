@@ -472,6 +472,12 @@ allocation is *not* written back into the options model: the configure panel
 renders the options model, so a written-back port would read as a declared value
 and the next Apply would pin it.
 
+> **Amended by ADR-045 (2026-11-06).** The record was only ever written on
+> the start path, so a container that was already running when its spec adopted
+> the marker had no record and the framework reported `starting` with no
+> endpoint forever. ADR-045 adds the adoption pass: the worker records the
+> port the service's own running container publishes.
+
 ### 9. Materialisation, per kind
 
 | Kind | Marker lives in | Materialised at | Effective port used by |
@@ -589,7 +595,10 @@ is a fixed integer" bullet.
   change between runs if its previous port was taken. Anything that hard-codes the
   port (bookmarks, the reverse proxy's generated config) has to re-read it.
 - A service that asks for a port has no endpoint until it has started once. The
-  status payload reports `None` rather than a wrong number.
+  status payload reports `None` rather than a wrong number. **Amended by
+  ADR-045 (2026-11-06):** "started once" now also includes "adopted once" — the
+  worker records the port the service's own running container publishes, so a
+  container that outlived its spec's marker migration is not stranded.
 - A second persistence file at the worker's state level, next to
   `enabled_services.yaml`.
 - The allocator needs an `fcntl` lock and a file re-read, because the worker is

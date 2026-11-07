@@ -255,14 +255,21 @@ materialised into an allocated integer when the service starts (ADR-043).
    allocations:
      metube:
        listen: 18000
-     genesis-productivity:
-       listen: 18001
-       api: 18002
    ```
 
    The file is the reason an allocation survives a worker restart: the
    container keeps running, and the framework's view of its port has to
    match.
+
+**A running container's port is adopted.** The allocation is written when
+the service starts — but a container that was already running when its spec
+adopted the marker has no record, and the framework would report `starting`
+with no endpoint forever. So the worker also *observes* the node: at startup
+it reads the port bindings of the running containers it owns and records the
+port each one publishes (ADR-045). The record is an ordinary record, so the
+sticky rule keeps the port across the next restart. A stopped container
+publishes nothing, so nothing is adopted from it, and a port another service
+already holds is refused.
 
 **The range.** `18000-18999`, outside the Linux ephemeral range, so the
 kernel never hands one of these to an outbound connection. The range is a
