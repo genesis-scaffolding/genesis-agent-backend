@@ -461,7 +461,7 @@ picked up by accident because the new body happened to omit a key. With
 `key` unset the behaviour is unchanged (the whole body is written).
 
 **The `options` key — option values the orchestrator pushes**
-(ADR-042). A config body may carry an `options` key: the values the
+(ADR-046). A config body may carry an `options` key: the values the
 service's own options should take. The start path applies them to the
 service's per-service override sidecar (the same store the Configure
 panel writes to) and rebuilds the service, so the values the container

@@ -1,4 +1,4 @@
-# ADR-042: Orchestrator-supplied service options
+# ADR-046: Orchestrator-supplied service options
 
 ## Title
 
@@ -12,7 +12,7 @@ the worker materialises it through the `materialize_orchestrator_config`
 pre-start hook. The body is opaque to the worker — the framework hands
 it to the hook verbatim.
 
-The cluster ingress proxy (ADR-015 in the orchestrator repo) needs more
+The cluster ingress proxy (ADR-016 in the orchestrator repo) needs more
 than a config file. Its TLS material — the DNS provider, the DNS
 provider token and the ACME account identifier — has to reach the
 container as *options*, because the container's command line and

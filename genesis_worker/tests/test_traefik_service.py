@@ -1,6 +1,6 @@
 """Traefik service tests — the cluster ingress proxy.
 
-The declarative spec is the worker's half of ADR-015: it declares the
+The declarative spec is the worker's half of ADR-016: it declares the
 proxy container, its TLS / DNS-01 options, and the pre-start hook that
 materialises the orchestrator's route table into Traefik's dynamic
 configuration.
