@@ -9,7 +9,11 @@ See ADR-028.
 """
 
 from .docker_pull import DockerPullAcquireSession
-from .github_release import GithubReleaseAcquireSession, GithubReleaseTarball
+from .github_release import (
+    GithubReleaseAcquireSession,
+    GithubReleaseTarball,
+    fetch_latest_release,
+)
 from .uv_tool import UvToolAcquireSession
 
 __all__ = [
@@ -17,4 +21,5 @@ __all__ = [
     "GithubReleaseAcquireSession",
     "GithubReleaseTarball",
     "UvToolAcquireSession",
+    "fetch_latest_release",
 ]

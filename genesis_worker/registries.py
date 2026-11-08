@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, TypeVar, cast
@@ -17,6 +17,8 @@ from .contracts import (
     ServiceContext,
     SourceContext,
 )
+from .utils.ports import NodePortAllocator, framework_ports
+from .utils.process.docker import container_port_bindings
 from .utils.state.enabled_services import load_enabled_set, save_enabled_set
 
 if TYPE_CHECKING:
@@ -156,8 +158,16 @@ class ServiceRegistry(_Registry):
     ``is_available() == True``. After that the set is user-controlled.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, adopt_published_ports: bool = True) -> None:
         super().__init__(settings)
+        # One port allocator per worker (ADR-043). It owns the node-level
+        # registry of allocated host ports; every service context carries
+        # the handle.
+        self._port_allocator = NodePortAllocator(
+            settings.paths.state_dir,
+            fixed_ports=self._reserved_ports,
+            container_bindings=container_port_bindings,
+        )
         # Python plugins first (they win duplicate-name conflicts so a
         # service can pin a YAML aside while keeping the Python class).
         for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
@@ -180,6 +190,35 @@ class ServiceRegistry(_Registry):
             self._instances[svc.name] = svc
             self._spec_paths[svc.name] = spec_path
         self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
+        self._adopt_enabled = adopt_published_ports
+        if adopt_published_ports:
+            self._adopt_published_ports()
+
+    def _adopt_published_ports(self, services: Iterable[InferenceService] | None = None) -> None:
+        """Record the host ports our running containers already publish (ADR-045).
+
+        A service that was running when its spec adopted the marker has no
+        allocation record — the record is only written on the start path —
+        and would report ``starting`` with no endpoint forever. The running
+        container is the truth: its published port is adopted.
+        """
+        from .utils.services.base import DeclarativeServiceBase
+
+        registry = cast("dict[str, InferenceService]", self._instances)
+        targets = [
+            svc
+            for svc in (services if services is not None else registry.values())
+            if isinstance(svc, DeclarativeServiceBase) and svc.declared_port_markers()
+        ]
+        if not targets:
+            return
+        bindings = container_port_bindings()  # one snapshot for every service
+        for svc in targets:
+            for marker, port in svc.published_host_ports(bindings).items():
+                try:
+                    svc.port_binder().adopt(marker, port)
+                except OSError:
+                    continue  # a read-only state dir must not stop the worker
 
     def _context_for_name(self, name: str) -> ServiceContext:
         """Build a ``ServiceContext`` keyed by ``name``.
@@ -203,7 +242,23 @@ class ServiceRegistry(_Registry):
             cache_dir=p.cache_dir / name.replace("_", "-"),
             state_dir=p.state_dir / name.replace("_", "-"),
             log_dir=p.log_dir / name.replace("_", "-"),
+            port_allocator=self._port_allocator,
         )
+
+    def _reserved_ports(self) -> set[int]:
+        """The ports the allocator must stay off.
+
+        The framework's own ports plus every registered service's fixed
+        host port — a service that is not running still owns its port,
+        so the bind test alone would not catch it.
+        """
+        ports = set(framework_ports())
+        services = cast("dict[str, InferenceService]", self._instances)
+        for svc in services.values():
+            port = svc.declared_host_port()
+            if port is not None:
+                ports.add(port)
+        return ports
 
     def _context(self, cls: type[InferenceService]) -> ServiceContext:
         return self._context_for_name(cls.name)
@@ -310,6 +365,12 @@ class ServiceRegistry(_Registry):
 
         new_svc = load_service_spec(spec_path, ctx=self._context_for_name(name))
         self._instances[name] = new_svc
+        # The rebuilt spec may no longer declare an auto-port marker (the
+        # user pinned a fixed port instead) — release the stale record so
+        # the range does not leak.
+        self._port_allocator.reconcile(name, new_svc.declared_port_markers())
+        if self._adopt_enabled:
+            self._adopt_published_ports([new_svc])
         return new_svc
 
 

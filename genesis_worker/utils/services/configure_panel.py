@@ -28,6 +28,8 @@ from typing import Any
 import streamlit as st
 
 from ...contracts import InferenceService
+from ..ports.allocator import DYNAMIC_PORT_RANGE
+from ..ports.markers import is_marker, marker_name
 from .base import DeclarativeServiceBase
 from .spec import OptionSpec
 
@@ -48,6 +50,45 @@ def _section_key(svc_name: str, group: str) -> str:
 # --- widget rendering ------------------------------------------------------
 
 
+def _render_auto_port(
+    svc: DeclarativeServiceBase, name: str, spec: OptionSpec, current: Any
+) -> Any:
+    """Render a port option whose value is an auto-port marker (ADR-043).
+
+    The effective port is shown read-only, and a checkbox decides who owns
+    the port: ticked, the framework keeps allocating it and Apply writes
+    nothing for this option (so the YAML default — the marker — survives);
+    unticked, the number input's value is written and the port is pinned.
+    """
+    label = spec.ui_label or name
+    help_text = spec.ui_help or None
+    marker = marker_name(current) or ""
+    effective = svc.port_binder().allocated(marker)
+    st.caption(
+        f"{label}: assigned automatically"
+        + (f" — host port {effective}" if effective is not None else " — not allocated yet")
+    )
+    auto = st.checkbox(
+        "Assign automatically",
+        value=True,
+        key=_widget_key(svc.name, name, "auto"),
+        help=help_text,
+    )
+    if auto:
+        return None
+    # Untick the box to pin a port: seed with the port the framework would
+    # have allocated, so pinning keeps the same port where possible.
+    seed = effective if effective is not None else DYNAMIC_PORT_RANGE[0]
+    return st.number_input(
+        label,
+        value=int(seed),
+        min_value=1,
+        max_value=65535,
+        step=1,
+        key=_widget_key(svc.name, name, "port"),
+    )
+
+
 def _render_scalar(svc: InferenceService, name: str, spec: OptionSpec, current: Any) -> Any:
     """Render a scalar (string / int / float / bool / port / path) widget.
 
@@ -64,6 +105,11 @@ def _render_scalar(svc: InferenceService, name: str, spec: OptionSpec, current: 
         return st.checkbox(label, value=bool(current), key=key, help=help_text)
 
     if spec.type == "port":
+        # A port option may carry a ``$auto_port.<name>`` marker instead of
+        # a number — the framework allocates it (ADR-043). It gets its own
+        # widget; a ``number_input`` cannot seed from a marker.
+        if is_marker(current) and isinstance(svc, DeclarativeServiceBase):
+            return _render_auto_port(svc, name, spec, current)
         # ``port`` carries an int constraint; number_input with min/max
         # matches the constraint at the widget level. The pydantic
         # field re-validates at Apply time.
@@ -264,7 +310,7 @@ def _render_option(svc: InferenceService, name: str, spec: OptionSpec, current: 
 
 def _persist(
     worker: Any,
-    svc: InferenceService,
+    svc: DeclarativeServiceBase,
     scalars: Mapping[str, Any],
     maps: Mapping[str, Any],
 ) -> None:
@@ -276,17 +322,30 @@ def _persist(
     sidecar. The merge order inside ``Settings.options_for`` is
     scalars-first, maps-second, so the sidecar wins for keys that
     collide (ADR-036).
+
+    The write is a read-modify-write scoped to this service's own
+    scalar options: the other services' keys and the non-service keys
+    are preserved, and an option the panel deliberately left out (an
+    auto-assigned port) loses its pinned override so the YAML default
+    survives. A whole-file replace would wipe every other service's
+    overrides (ADR-043 §11).
     """
-    flat: dict[str, str] = {}
+    prefix = f"GENESIS_SERVICES__{svc.name.upper()}__"
+    managed = {
+        f"{prefix}{name.upper()}"
+        for name, spec in svc.config.option_specs.items()
+        if spec.type not in {"env_map", "mount_map"}
+    }
+    merged = {k: v for k, v in worker.read_user_overrides().items() if k not in managed}
     for key, value in scalars.items():
-        namespaced = f"GENESIS_SERVICES__{svc.name.upper()}__{key.upper()}"
+        namespaced = f"{prefix}{key.upper()}"
         if isinstance(value, bool):
-            flat[namespaced] = "true" if value else "false"
+            merged[namespaced] = "true" if value else "false"
         elif value is None:
             continue
         else:
-            flat[namespaced] = str(value)
-    worker.write_user_overrides(flat)
+            merged[namespaced] = str(value)
+    worker.write_user_overrides(merged)
     worker.write_service_overrides(svc.name, dict(maps))
 
 
@@ -383,7 +442,7 @@ def _open_configure_dialog(svc: InferenceService) -> None:
 
 def _handle_apply(
     worker: Any,
-    svc: InferenceService,
+    svc: DeclarativeServiceBase,
     scalars: Mapping[str, Any],
     maps: Mapping[str, Any],
     *,

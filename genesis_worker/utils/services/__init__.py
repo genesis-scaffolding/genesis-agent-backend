@@ -9,6 +9,7 @@ The package is a leaf under ``genesis_worker/utils`` — plugins may
 import from it without violating the framework boundary (ADR-009).
 """
 
+from ..installables.docker_image import DockerImageInstall
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_service import (
     ComposeImage,
@@ -17,9 +18,9 @@ from .compose_service import (
 )
 from .docker_service import (
     AuthConfig,
-    DockerImageInstall,
     DockerService,
     DockerServiceConfig,
+    ExtraPort,
 )
 from .loader import load_service_spec, resolve_placeholders
 from .spec import (
@@ -45,6 +46,7 @@ __all__ = [
     "DockerService",
     "DockerServiceConfig",
     "DockerServiceSpec",
+    "ExtraPort",
     "OptionSpec",
     "ServiceSpecUnion",
     "UiSpec",

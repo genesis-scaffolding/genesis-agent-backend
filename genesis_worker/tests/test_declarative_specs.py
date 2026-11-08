@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -91,10 +92,14 @@ _BUILT_IN_SPECS = (
     "romm.yaml",
     "sillytavern.yaml",
     "tidarr.yaml",
+    "traefik.yaml",
 )
 
+# Compose-kind specs (they publish several ports and are tested separately)
+_COMPOSE_SPECS = ("romm.yaml", "traefik.yaml")
+
 # Docker-kind specs only (excludes compose services like romm.yaml)
-_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s != "romm.yaml")
+_DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS)
 
 
 def _load_spec(name: str, tmp_path: Path) -> DockerService:
@@ -110,7 +115,7 @@ def _load_spec(name: str, tmp_path: Path) -> DockerService:
     return svc
 
 
-@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s != "romm.yaml"])
+@pytest.mark.parametrize("spec_name", [s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS])
 def test_built_in_spec_parses_and_constructs(spec_name: str, tmp_path: Path) -> None:
     """Every built-in YAML must parse + construct via the framework loader."""
     svc = _load_spec(spec_name, tmp_path)
@@ -946,12 +951,13 @@ def test_romm_images_are_real_installables(tmp_path: Path) -> None:
     assert isinstance(svc, ComposeService)
     installables = svc.installs()
     assert len(installables) == 2
-    refs = {i.image_ref for i in installables}
-    assert refs == {"rommapp/romm:latest", "postgres:16-alpine"}
     assert all(isinstance(i, DockerImageInstall) for i in installables)
+    typed_installables = cast(list[DockerImageInstall], installables)
+    refs = {i.image_ref for i in typed_installables}
+    assert refs == {"rommapp/romm:latest", "postgres:16-alpine"}
     # installed_version is a real tag (or None before first install),
     # never a template hash.
-    for i in installables:
+    for i in typed_installables:
         assert i.installed_version() in (None, i.image_ref.split(":", 1)[1])
 
 
@@ -964,12 +970,15 @@ def test_romm_render_uses_recorded_selection(
     the selection file exists, and render substitutes the tracked tag
     marker with the selected tag.
     """
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
     svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
     assert isinstance(svc, ComposeService)
-    installable = svc.installs()[0]
+    installable = cast(DockerImageInstall, svc.installs()[0])
     installable._record_selection("2.9.1")
     # rebuild so the installable reads the fresh selection
     svc2 = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc2, ComposeService)
     rendered = svc2._render_compose_file().read_text()
     assert "image: rommapp/romm:2.9.1" in rendered
     # the other image keeps its load-time default tag
@@ -1001,3 +1010,60 @@ def test_romm_ui_panels_include_compose_status(tmp_path: Path) -> None:
     assert "container_info" in svc.ui_panels
     assert "log_tail" in svc.ui_panels
     assert "configure" in svc.ui_panels
+
+
+# --- the auto-port adopters (ADR-043) --------------------------------------
+
+
+def test_metube_asks_the_framework_for_its_host_port(tmp_path: Path) -> None:
+    """MeTube's port is allocated, not hand-picked (ADR-043)."""
+    svc = _load_spec("metube.yaml", tmp_path)
+    assert svc.config.listen_port == "$auto_port.listen"
+    assert svc.declared_port_markers() == ("listen",)
+    assert svc.declared_host_port() is None
+    assert svc.effective_host_port() is None  # not started yet
+
+
+def test_genesis_productivity_asks_for_two_ports(tmp_path: Path) -> None:
+    """The productivity stack publishes two ports — both pinned (ADR-045).
+
+    Clients hard-code them (the genesis CLI token stores point at
+    ``http://p3:8765``; the UI is bookmarked at ``:3000``), so the spec
+    declares them instead of asking the framework for one.
+    """
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-productivity.yaml",
+        ctx=service_ctx(tmp_path, name="genesis-productivity"),
+    )
+    assert isinstance(svc, ComposeService)
+    assert svc.config.listen_port == 3000
+    assert svc.declared_port_markers() == ()
+    assert svc.declared_host_port() == 3000
+    assert svc.effective_host_port() == 3000
+    # The template publishes both fixed ports.
+    assert '"0.0.0.0:3000:3000"' in svc.config.compose_template
+    assert '"0.0.0.0:8765:8765"' in svc.config.compose_template
+    assert "$auto_port." not in svc.config.compose_template
+
+
+def test_the_adopters_adopt_their_published_ports(tmp_path: Path, monkeypatch) -> None:
+    """A running container's published port is adopted, not reallocated."""
+    from genesis_worker.registries import ServiceRegistry
+    from genesis_worker.settings import PathsSettings, Settings
+    from genesis_worker.utils.process.docker import ContainerPortBinding
+
+    monkeypatch.setattr(
+        "genesis_worker.registries.container_port_bindings",
+        lambda: [
+            ContainerPortBinding(
+                name="metube",
+                host_ports=(8098,),
+                running=True,
+                port_map=((8081, 8098),),
+            )
+        ],
+    )
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    ServiceRegistry(settings)
+    data = yaml.safe_load((tmp_path / "state" / "port_allocations.yaml").read_text())
+    assert data == {"allocations": {"metube": {"listen": 8098}}}

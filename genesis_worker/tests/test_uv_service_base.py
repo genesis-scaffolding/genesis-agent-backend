@@ -19,6 +19,7 @@ from genesis_worker.contracts import (
 )
 from genesis_worker.services.cptr.options import CptrOptions
 from genesis_worker.tests._factories import service_ctx
+from genesis_worker.utils.ports.allocator import NodePortAllocator
 from genesis_worker.utils.services import UvService, UvServiceConfig, UvToolInstall
 from genesis_worker.utils.services.uv_service import _uv_tool_installed_version
 
@@ -687,3 +688,41 @@ def test_uninstall_swallows_missing_uv(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_installable_name_is_package_name() -> None:
     inst = UvToolInstall(package_name="svcpkg", binary_name="svc")
     assert inst.name == "svcpkg"
+
+
+# --- auto ports (ADR-043) ---------------------------------------------------
+
+
+def _allocator(tmp_path: Path) -> NodePortAllocator:
+    """A hermetic allocator — no docker daemon, no real bind."""
+    return NodePortAllocator(
+        tmp_path / "state",
+        fixed_ports=lambda: set(),
+        container_bindings=list,
+        bind_probe=lambda port: True,
+    )
+
+
+def test_start_materialises_an_auto_port_in_the_command(tmp_path: Path, monkeypatch) -> None:
+    """The uv kind materialises the marker in its command line (ADR-043)."""
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/svc")
+    ctx = service_ctx(tmp_path, name="svc", port_allocator=_allocator(tmp_path))
+    svc = UvService(
+        ctx,
+        config=_config(
+            command=["run", "--port", "$auto_port.listen"],
+            listen_port="$auto_port.listen",
+        ),
+    )
+    with (
+        patch(
+            "genesis_worker.utils.services.uv_service.TmuxProcess.start",
+            return_value=type("R", (), {"ok": True, "message": "ok"})(),
+        ) as start,
+        patch.object(svc, "wait_ready", return_value=True),
+    ):
+        r = svc.start()
+    assert r.ok is True
+    assert "18000" in start.call_args.args[0]
+    assert "$auto_port" not in start.call_args.args[0]
+    assert svc.effective_host_port() == 18000

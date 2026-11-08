@@ -17,15 +17,18 @@ import json
 import re
 import shlex
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from ...contracts import Catalog, ComputeDevice, ModelEntry
-from .recipes import BUNDLED_RECIPES_PATH, Recipe, Recipes
+from .engines import Engine, engine_for_file
+from .radiance import RadianceSettings, container_model_path, render_radiance_cmd
+from .recipes import BUNDLED_RECIPES_PATH, RadianceRecipe, Recipe, Recipes
 
 # Resource policy thresholds (bytes). When a model's weight size exceeds
 # one of these, the corresponding VRAM-saver flag is added. These are
@@ -109,6 +112,8 @@ class BuildOptions:
     # a non-empty tuple replaces the default set wholesale. Supplied from
     # the service's ``hardcoded_flags`` option (status-page editable).
     hardcoded_flags: tuple[str, ...] | None = None
+    radiance: RadianceSettings | None = None
+    health_check_timeout_s: int = 60
 
 
 def _env_for(binary_variant: str | None, device: ComputeDevice | None) -> tuple[str, ...]:
@@ -126,7 +131,7 @@ def _env_for(binary_variant: str | None, device: ComputeDevice | None) -> tuple[
 
 @dataclass(frozen=True)
 class DetectedFileSet:
-    """Auto-detected file paths for one GGUF piece.
+    """Auto-detected file paths for one model-weight piece.
 
     ``main`` and ``piece_bytes`` are per-piece; ``mmproj``, ``draft``,
     and ``is_mtp`` are shared across all pieces in the same entry.
@@ -134,7 +139,7 @@ class DetectedFileSet:
     ``filename`` is the symlink name from the catalog (e.g.
     ``LFM2.5-VL-3B-UD-Q8_K_XL.gguf``), distinct from ``main``
     which is the resolved blob path. Use ``filename`` for entry
-    naming; use ``main`` for the llama-server cmd.
+    naming and engine detection; use ``main`` for the engine cmd.
     """
 
     main: Path | None
@@ -143,6 +148,7 @@ class DetectedFileSet:
     draft: Path | None
     is_mtp: bool
     weight_bytes: int
+    engine: Engine = Engine.LLAMA_SERVER
 
 
 class FieldSource(StrEnum):
@@ -187,11 +193,30 @@ class EvaluatedConfig:
     # (ADR-039 §4).
     env: tuple[str, ...] = ()
     hardcoded_flags: tuple[str, ...] = DEFAULT_HARDCODED_FLAGS
+    engine: Engine = Engine.LLAMA_SERVER
+    radiance: RadianceSettings | None = None
+
+
+@dataclass(frozen=True)
+class ModelEvaluationError:
+    """One model skipped because its override failed validation."""
+
+    entry_id: str
+    name: str
+    message: str
+
+
+@dataclass(frozen=True)
+class EvaluationReport:
+    """Successful evaluations plus per-model validation errors."""
+
+    configs: dict[str, EvaluatedConfig]
+    errors: tuple[ModelEvaluationError, ...]
 
 
 @dataclass(frozen=True)
 class ModelMatch:
-    """One catalog entry * one matched recipe * one GGUF piece - what the walker yields."""
+    """One catalog entry * one matched recipe * one weight piece - what the walker yields."""
 
     entry_id: str
     entry: ModelEntry
@@ -214,7 +239,7 @@ def _is_llm_candidate(entry: ModelEntry, source: str) -> bool:
     if not entry.pieces:
         return False
     if source == "huggingface":
-        return any(p.filename.lower().endswith(".gguf") for p in entry.pieces)
+        return any(p.filename.lower().endswith((".gguf", ".rad")) for p in entry.pieces)
     return any(p.role not in ("config",) for p in entry.pieces)
 
 
@@ -235,10 +260,10 @@ def short_source_label(source: str) -> str:
 
 
 def detect_file_sets(entry: ModelEntry) -> list[DetectedFileSet]:
-    """Return one DetectedFileSet per main (GGUF) piece in the entry.
+    """Return one DetectedFileSet per main weight piece in the entry.
 
     Each set shares the same mmproj/draft/is_mtp and has its own
-    main path and piece-bytes. An entry with N GGUF files yields N
+    main path and piece-bytes. An entry with N weight files yields N
     file sets.
     """
     mains = [p for p in entry.pieces if p.role == "main"]
@@ -265,6 +290,7 @@ def detect_file_sets(entry: ModelEntry) -> list[DetectedFileSet]:
             draft=base.draft,
             is_mtp=base.is_mtp,
             weight_bytes=p.bytes,
+            engine=engine_for_file(Path(p.filename)),
         )
         for p in mains
     ]
@@ -335,11 +361,13 @@ def make_display_name(name: str, recipe: Recipe, multi_match: bool) -> str:
     """Derive the display name shown in llama-swap UI from a piece filename.
 
     The input is always a piece filename (not a model name). The
-    ``.gguf`` extension is stripped if present.
+    ``.gguf`` and ``.rad`` extensions are stripped if present.
     """
     base = name.split("/", 1)[-1]
-    if base.lower().endswith(".gguf"):
-        base = base[:-5]
+    for extension in (".gguf", ".rad"):
+        if base.lower().endswith(extension):
+            base = base[: -len(extension)]
+            break
     if multi_match:
         suffix = recipe.name.split(".")[-1].split("-")[-1]
         return f"{base} ({suffix})"
@@ -367,17 +395,21 @@ def walk_models(
         for entry in entries_for_source:
             if not _is_llm_candidate(entry, source_key):
                 continue
-            resolved = recipes.resolve(entry.name)
-            if not resolved.matched:
-                continue
-            multi = len(resolved.matched) > 1
 
             for file_set in detect_file_sets(entry):
+                if file_set.engine == Engine.RADIANCE and options.radiance is None:
+                    continue
+                resolved = recipes.resolve(entry.name, engine=file_set.engine)
+                if not resolved.matched:
+                    continue
+                multi = len(resolved.matched) > 1
                 for recipe in resolved.matched:
                     piece_name = file_set.filename
-                    # Strip .gguf so it doesn't become "-gguf" in the YAML key.
-                    if piece_name.lower().endswith(".gguf"):
-                        piece_name = piece_name[:-5]
+                    # Strip weight extensions so they don't become YAML-key suffixes.
+                    for extension in (".gguf", ".rad"):
+                        if piece_name.lower().endswith(extension):
+                            piece_name = piece_name[: -len(extension)]
+                            break
                     entry_id = make_entry_id(
                         piece_name,
                         recipe,
@@ -442,11 +474,23 @@ def evaluate_recipe(
 ) -> EvaluatedConfig:
     """Resolve every overridable field, apply fallbacks, render cmd.
 
-    Precedence: ``override > recipe > default_recipe > computed``.
-    Size-based fallbacks for ``kv_cache`` and ``mmproj_offload`` fire
-    here so the rendered cmd and the structured view never disagree.
+    Llama-server precedence is ``override > recipe > default_recipe >
+    computed``. Radiance precedence is ``override > recipe > service
+    option``; it has no default-recipe layer. Size-based fallbacks for
+    ``kv_cache`` and ``mmproj_offload`` fire here so the rendered cmd and
+    the structured view never disagree.
     """
     ovr = overrides or {}
+
+    if files.engine == Engine.RADIANCE:
+        return _evaluate_radiance_recipe(
+            recipe,
+            files,
+            entry_id=entry_id,
+            name=name,
+            options=options,
+            overrides=ovr,
+        )
 
     # --- binary (5-level) ---
     binary_str = (
@@ -627,8 +671,110 @@ def evaluate_recipe(
     )
 
 
+def _radiance_cascade_value(
+    overrides: RadianceRecipe,
+    recipe: Recipe,
+    key: str,
+    fallback: Any,
+) -> tuple[Any, FieldSource]:
+    if key in overrides.model_fields_set:
+        value = getattr(overrides, key)
+        if value is not None:
+            return value, FieldSource.OVERRIDE
+    radiance_recipe = recipe.radiance
+    if radiance_recipe is not None and key in radiance_recipe.model_fields_set:
+        value = getattr(radiance_recipe, key)
+        if value is not None:
+            return value, FieldSource.RECIPE
+    return fallback, FieldSource.COMPUTED
+
+
+def _evaluate_radiance_recipe(
+    recipe: Recipe,
+    files: DetectedFileSet,
+    *,
+    entry_id: str,
+    name: str,
+    options: BuildOptions,
+    overrides: dict[str, Any],
+) -> EvaluatedConfig:
+    base_settings = options.radiance
+    if base_settings is None:
+        raise RuntimeError("radiance engine is not available")
+    if files.main is None:
+        raise ValueError(f"radiance model {entry_id!r} has no main file")
+
+    raw_override = overrides.get("radiance")
+    radiance_overrides = RadianceRecipe.model_validate(raw_override or {})
+    tp, tp_source = _radiance_cascade_value(radiance_overrides, recipe, "tp", base_settings.tp)
+    max_model_len, max_model_len_source = _radiance_cascade_value(
+        radiance_overrides, recipe, "max_model_len", base_settings.max_model_len
+    )
+    max_num_seqs, max_num_seqs_source = _radiance_cascade_value(
+        radiance_overrides, recipe, "max_num_seqs", base_settings.max_num_seqs
+    )
+    kv_cache_dtype, kv_cache_dtype_source = _radiance_cascade_value(
+        radiance_overrides, recipe, "kv_cache_dtype", base_settings.kv_cache_dtype
+    )
+    gpu_headroom_mib, gpu_headroom_mib_source = _radiance_cascade_value(
+        radiance_overrides, recipe, "gpu_headroom_mib", base_settings.gpu_headroom_mib
+    )
+    extra_flags, extra_flags_source = _radiance_cascade_value(
+        radiance_overrides, recipe, "extra_flags", base_settings.extra_flags
+    )
+    settings = replace(
+        base_settings,
+        tp=int(tp),
+        max_model_len=int(max_model_len),
+        max_num_seqs=int(max_num_seqs),
+        kv_cache_dtype=str(kv_cache_dtype),
+        gpu_headroom_mib=int(gpu_headroom_mib),
+        extra_flags=tuple(str(flag) for flag in extra_flags),
+    )
+
+    model_path = container_model_path(files.filename)
+    cmd = render_radiance_cmd(settings, files.main, model_path)
+    provenance = {
+        "tp": tp_source,
+        "max_model_len": max_model_len_source,
+        "max_num_seqs": max_num_seqs_source,
+        "kv_cache_dtype": kv_cache_dtype_source,
+        "gpu_headroom_mib": gpu_headroom_mib_source,
+        "extra_flags": extra_flags_source,
+        "ctx_size": max_model_len_source,
+    }
+    return EvaluatedConfig(
+        name=name,
+        entry_id=entry_id,
+        matched_recipe=recipe.name,
+        binary="",
+        files=files,
+        kv_cache=None,
+        mmproj_offload=None,
+        spec=None,
+        ctx_min=None,
+        ctx_size=settings.max_model_len,
+        parallel=None,
+        reasoning_budget=None,
+        reasoning_budget_message=None,
+        chat_template_file=None,
+        sampling={},
+        chat_template_kwargs={},
+        provenance=provenance,
+        cmd=cmd,
+        extra_flags=settings.extra_flags,
+        device=None,
+        env=(),
+        hardcoded_flags=(),
+        engine=Engine.RADIANCE,
+        radiance=settings,
+    )
+
+
 def cmd_from_evaluated(evaluated: EvaluatedConfig) -> str:
     """Format the cmd string from an EvaluatedConfig (convenience wrapper)."""
+    if evaluated.engine == Engine.RADIANCE:
+        return evaluated.cmd
     return cmd_from_evaluated_dict(
         binary=evaluated.binary,
         files=evaluated.files,
@@ -761,6 +907,60 @@ def cmd_from_evaluated_dict(
     return "\n".join(sections)
 
 
+def _model_validation_error(
+    exc: ValidationError,
+    *,
+    entry_id: str,
+    name: str,
+) -> ModelEvaluationError:
+    details = exc.errors()
+    if not details:
+        return ModelEvaluationError(entry_id=entry_id, name=name, message=str(exc))
+    first = details[0]
+    location = ".".join(str(part) for part in first.get("loc", ()))
+    message = str(first.get("msg", "invalid value"))
+    if location:
+        message = f"{location}: {message}"
+    return ModelEvaluationError(entry_id=entry_id, name=name, message=message)
+
+
+def evaluate_all_report(
+    catalog: Catalog,
+    recipes: Recipes,
+    overrides: dict[str, dict[str, Any]] | None = None,
+    *,
+    binary_override: str | None = None,
+    options: BuildOptions,
+) -> EvaluationReport:
+    """Evaluate every catalog entry, isolating invalid per-model overrides."""
+    configs: dict[str, EvaluatedConfig] = {}
+    errors: list[ModelEvaluationError] = []
+    for match in walk_models(
+        catalog,
+        recipes,
+        overrides=overrides,
+        binary_override=binary_override,
+        options=options,
+    ):
+        display = make_display_name(match.files.filename, match.recipe, match.multi_match)
+        try:
+            evaluated = evaluate_recipe(
+                match.recipe,
+                match.files,
+                entry_id=match.entry_id,
+                name=display,
+                default_recipe=recipes.default,
+                binary_override=binary_override,
+                options=options,
+                overrides=match.entry_overrides,
+            )
+        except ValidationError as exc:
+            errors.append(_model_validation_error(exc, entry_id=match.entry_id, name=display))
+            continue
+        configs[match.entry_id] = evaluated
+    return EvaluationReport(configs=configs, errors=tuple(errors))
+
+
 def evaluate_all(
     catalog: Catalog,
     recipes: Recipes,
@@ -774,27 +974,13 @@ def evaluate_all(
     Uses the same filter as :func:`build_config`, so the UI sees only
     models that actually make it into config.yaml.
     """
-    out: dict[str, EvaluatedConfig] = {}
-    for match in walk_models(
+    return evaluate_all_report(
         catalog,
         recipes,
         overrides=overrides,
         binary_override=binary_override,
         options=options,
-    ):
-        piece_name = match.files.filename
-        evaluated = evaluate_recipe(
-            match.recipe,
-            match.files,
-            entry_id=match.entry_id,
-            name=make_display_name(piece_name, match.recipe, match.multi_match),
-            default_recipe=recipes.default,
-            binary_override=binary_override,
-            options=options,
-            overrides=match.entry_overrides,
-        )
-        out[match.entry_id] = evaluated
-    return out
+    ).configs
 
 
 # ===========================================================================
@@ -831,7 +1017,23 @@ def build_entry(
         options=options,
         overrides=overrides,
     )
-    payload: dict[str, Any] = {
+    if evaluated.engine == Engine.RADIANCE:
+        settings = evaluated.radiance
+        if settings is None:
+            raise RuntimeError("radiance engine is not available")
+        payload: dict[str, Any] = {
+            "name": evaluated.name,
+            "cmd": evaluated.cmd + "\n",
+            "cmdStop": f"docker stop --time {settings.stop_grace_s} ${{MODEL_ID}}",
+            "checkEndpoint": settings.check_endpoint,
+            "proxy": "http://127.0.0.1:${PORT}",
+            "ttl": settings.ttl_s,
+            "unloadTimeout": settings.unload_timeout_s,
+            "resolved_from": evaluated.matched_recipe,
+        }
+        return entry_id, payload
+
+    payload = {
         "name": evaluated.name,
         "cmd": evaluated.cmd + "\n",
         "proxy": "http://127.0.0.1:${PORT}",
@@ -867,17 +1069,20 @@ def build_config(
         binary_override=binary_override,
         options=options,
     ):
-        _, data = build_entry(
-            match.entry,
-            match.recipe,
-            match.files,
-            entry_id=match.entry_id,
-            multi_match=match.multi_match,
-            default_recipe=recipes.default,
-            binary_override=binary_override,
-            options=options,
-            overrides=match.entry_overrides,
-        )
+        try:
+            _, data = build_entry(
+                match.entry,
+                match.recipe,
+                match.files,
+                entry_id=match.entry_id,
+                multi_match=match.multi_match,
+                default_recipe=recipes.default,
+                binary_override=binary_override,
+                options=options,
+                overrides=match.entry_overrides,
+            )
+        except ValidationError:
+            continue
         entries.append((match.entry_id, data))
     return entries
 
@@ -891,6 +1096,8 @@ def emit_payload(
     entries: list[tuple[str, dict]],
     root: str,
     generated_at: str,
+    *,
+    health_check_timeout_s: int = 60,
 ) -> dict:
     """Build the dict that ``yaml.safe_dump`` will serialize.
 
@@ -912,7 +1119,7 @@ def emit_payload(
             d["cmd"] = _LiteralBlock(d["cmd"])
         models[entry_id] = d
     return {
-        "healthCheckTimeout": 60,
+        "healthCheckTimeout": health_check_timeout_s,
         "logLevel": "info",
         "generated_at": generated_at,
         "root": root,
@@ -934,7 +1141,12 @@ yaml.add_representer(_LiteralBlock, _literal_block_representer, Dumper=yaml.Safe
 
 
 def write_config(
-    path: Path, entries: list[tuple[str, dict]], *, root: str, generated_at: str
+    path: Path,
+    entries: list[tuple[str, dict]],
+    *,
+    root: str,
+    generated_at: str,
+    health_check_timeout_s: int = 60,
 ) -> bool:
     """Write ``config.yaml`` iff content differs. Returns True iff a write happened.
 
@@ -942,7 +1154,12 @@ def write_config(
     ``-watch-config`` doesn't reload on a no-op (this is the same
     safety the old hand-rolled emitter had).
     """
-    payload = emit_payload(entries, root, generated_at)
+    payload = emit_payload(
+        entries,
+        root,
+        generated_at,
+        health_check_timeout_s=health_check_timeout_s,
+    )
     text = yaml.safe_dump(
         payload,
         sort_keys=False,
@@ -1015,7 +1232,9 @@ __all__ = [
     "BuildOptions",
     "DetectedFileSet",
     "EvaluatedConfig",
+    "EvaluationReport",
     "FieldSource",
+    "ModelEvaluationError",
     "ModelMatch",
     "build_config",
     "build_entry",
@@ -1023,6 +1242,7 @@ __all__ = [
     "cmd_from_evaluated_dict",
     "detect_file_sets",
     "evaluate_all",
+    "evaluate_all_report",
     "evaluate_recipe",
     "is_config_stale",
     "make_display_name",

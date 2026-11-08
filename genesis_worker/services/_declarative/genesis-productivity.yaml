@@ -19,6 +19,11 @@
 # compose kind (not docker kind) because two ports must be published;
 # the docker kind supports exactly one. The runtime port (health probe
 # + web UI endpoint) is the Streamlit UI port, per framework convention.
+#
+# Both host ports are pinned: the Streamlit UI on 3000 and the FastAPI
+# server on 8765. Clients hard-code them (the genesis CLI token stores in
+# two working directories point at http://p3:8765; the UI is bookmarked at
+# :3000), so the framework must not be free to move them. ADR-045.
 
 version: 1
 kind: compose

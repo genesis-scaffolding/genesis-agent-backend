@@ -36,6 +36,7 @@ from ...contracts import (
 )
 from ..acquire import UvToolAcquireSession
 from ..net import HealthProbe
+from ..ports.markers import assert_no_markers
 from ..process import TmuxProcess
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 
@@ -103,7 +104,7 @@ class UvServiceConfig(DeclarativeServiceConfig):
     command_env: dict[str, str] = field(default_factory=dict)
 
     listen_host: str = "0.0.0.0"
-    listen_port: int = 0
+    listen_port: int | str = 0
     public_host: str | None = None
     health_probe_path: str = "/"
     health_timeout_s: float = 60.0
@@ -210,8 +211,12 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
     # --- introspection ----------------------------------------------------
 
     @property
-    def listen_address(self) -> str:
-        return f"{self.config.listen_host}:{self.config.listen_port}"
+    def listen_address(self) -> str | None:
+        """The bind address, or ``None`` when the port is not known yet."""
+        port = self.effective_host_port()
+        if port is None:
+            return None
+        return f"{self.config.listen_host}:{port}"
 
     @property
     def installed_version(self) -> str | None:
@@ -246,7 +251,10 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
     def web_ui_endpoint(self) -> str | None:
         if not self.is_running():
             return None
-        return f"http://{self.public_host()}:{self.config.listen_port}/"
+        port = self.effective_host_port()
+        if port is None:
+            return None
+        return f"http://{self.public_host()}:{port}/"
 
     def tail_log(self, n_bytes: int = 8192) -> str:
         """Return the last ``n_bytes`` of the log file, or "" if missing.
@@ -270,7 +278,10 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
             return StartResult(ok=False, message=f"{self.config.binary_name} binary not installed")
         # Build command from binary + configured command args.
         cmd = " ".join(
-            [shlex.quote(str(binary)), *(shlex.quote(str(c)) for c in self.config.command)]
+            [
+                shlex.quote(str(binary)),
+                *(shlex.quote(str(c)) for c in self._materialised_command()),
+            ]
         )
         # Prepend command_env exports so the child sees them in its
         # environment (ADR-035 regression fix: cptr's CPTR_STREAM_*_TIMEOUT
@@ -291,6 +302,24 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
             ok=False,
             message=f"did not become ready in {self.config.health_timeout_s:.0f}s; see {self.log_file}",
         )
+
+    def _materialised_command(self) -> list[str]:
+        """The command line with every auto-port marker resolved (ADR-043).
+
+        The marker is materialised at start time — the point where the
+        port is actually needed — through the same substitution engine the
+        loader uses, with the allocator as the resolution source.
+        """
+        from .loader import resolve_placeholders
+
+        resolved = resolve_placeholders(
+            self.config.command,
+            self._ctx,
+            {},
+            ports=self.port_binder().resolver(),
+        )
+        assert_no_markers(resolved, f"{self.name} command")
+        return [str(part) for part in resolved]
 
     def _post_install(self) -> None:
         """Hook subclasses override for per-service post-install patches.
@@ -315,24 +344,35 @@ class UvService(DeclarativeServiceBase[UvServiceConfig]):
         return StopResult(ok=True, message=f"killed {self._session_name} (forced)")
 
     def status(self) -> ServiceStatus:
+        port = self.effective_host_port()
         endpoint = (
-            f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}"
-            f":{self.config.listen_port}/"
+            None
+            if port is None
+            else f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}:{port}/"
         )
         if not TmuxProcess(self._session_name).exists():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
+        if port is None:
+            return ServiceStatus(
+                state=ServiceState.STARTING,
+                endpoint=endpoint,
+                message=self.unrecorded_port_message(),
+            )
         if HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         ).probe():
             return ServiceStatus(state=ServiceState.RUNNING, endpoint=endpoint)
         return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
 
     def wait_ready(self, timeout_s: float) -> bool:
+        port = self.effective_host_port()
+        if port is None:
+            return False
         return HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         ).wait_ready(timeout_s)
 

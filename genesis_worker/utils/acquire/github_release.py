@@ -38,7 +38,7 @@ from ...contracts import (
     SecretsAccessor,
 )
 from ..background_session import BackgroundSession, _Canceled
-from ..install import InstallLayout, Manifest, ManifestSource
+from ..install import InstallLayout, Manifest, ManifestSource, resolve_binary
 
 _USER_AGENT = "genesis-worker"
 _GITHUB_TOKEN_NAME = "github_token"
@@ -136,6 +136,22 @@ def _parse_checksums(content: str, target_filename: str) -> str | None:
         if name.lstrip("*") == target_filename:
             return digest
     return None
+
+
+def fetch_latest_release(
+    repo_owner: str,
+    repo_name: str,
+    *,
+    api_base: str | None = None,
+    auth_token: str | None = None,
+) -> dict[str, Any]:
+    """Fetch the latest GitHub release record for a repository."""
+    base = (api_base or GithubReleaseTarball.api_base()).rstrip("/")
+    url = f"{base}/repos/{repo_owner}/{repo_name}/releases/latest"
+    release = _http_get_json(url, auth_token=auth_token)
+    if not isinstance(release, dict):
+        raise TypeError(f"invalid release record for {repo_owner}/{repo_name}")
+    return release
 
 
 # --- config holder ---------------------------------------------------------
@@ -464,6 +480,10 @@ class GithubReleaseAcquireSession(BackgroundSession):
             shutil.rmtree(install_root, ignore_errors=True)
             raise RuntimeError(f"extract failed: {exc}") from exc
 
+        if resolve_binary(install_root, backend.binary_rel, legacy_rel=backend.binary_rel) is None:
+            shutil.rmtree(install_root, ignore_errors=True)
+            raise RuntimeError(f"archive contains no {backend.binary_rel!r} binary")
+
         # --- manifest + symlink ---------------------------------------------
         manifest = Manifest(
             name=backend.name,
@@ -481,4 +501,4 @@ class GithubReleaseAcquireSession(BackgroundSession):
         self._state.kind = AcquireStateKind.COMPLETE
 
 
-__all__ = ["GithubReleaseAcquireSession", "GithubReleaseTarball"]
+__all__ = ["GithubReleaseAcquireSession", "GithubReleaseTarball", "fetch_latest_release"]

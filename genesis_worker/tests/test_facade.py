@@ -26,11 +26,7 @@ from genesis_worker.utils.models import MachineMetrics
 
 
 def test_facade_lists_services(tmp_path: Path) -> None:
-    (
-        """Hermetic: isolated state_dir so the bootstrap doesn't auto-enable
-    services on the real install."""
-        ""
-    )
+    """Hermetic: isolated state_dir so bootstrap does not enable real services."""
     from genesis_worker.settings import PathsSettings, Settings
 
     settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))

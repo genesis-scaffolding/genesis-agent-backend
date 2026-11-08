@@ -14,6 +14,27 @@ A toolkit for managing GGUF models behind [llama-swap](https://github.com/mostly
 | `cptr` | Open WebUI Computer | uv-installed Python tool |
 | `comfyui` | Image/video generation via ComfyUI | Docker container |
 
+## llama-swap installables
+
+The llama-swap service builds its installables from declarative records. The five
+built-ins (the llama-swap proxy plus CPU, Vulkan, and CUDA llama-server builds,
+and the Radiance container image) ship as seed records in
+`genesis_worker/services/llama_swap/data/installables.yaml`. The Binaries page
+lets you add, edit, enable, disable, or remove any record, including the
+built-ins.
+
+Radiance `.rad` models are served through llama-swap as a second engine kind.
+The config generator starts the installed Radiance container on demand, mounts
+the model file, and applies the radiance-specific recipe or per-model override
+knobs (tensor parallelism, context bound, KV-cache dtype, and GPU headroom).
+
+A GitHub release record uses a repository, an asset-name glob, and the binary
+name to expect in the extracted archive. A Docker image record uses a registry
+image and an optional tag glob. User records are stored per node in
+`<config_dir>/services/llama_swap.overrides.json` and override a bundled seed
+with the same name. Adding a GitHub record reads release metadata only; the
+asset is not downloaded until installation.
+
 ## ComfyUI service
 
 ComfyUI runs as a Docker container (`ghcr.io/genesis-scaffolding/comfyui-cuda`). The service pulls the image, manages the container lifecycle, and bridges files between the source-organised model vault and ComfyUI's role-organised model directory.

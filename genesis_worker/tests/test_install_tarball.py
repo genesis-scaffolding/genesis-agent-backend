@@ -178,6 +178,53 @@ def test_install_completes(
 
 
 @pytest.mark.integration
+def test_acquire_session_succeeds_when_archive_has_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
+) -> None:
+    archive = _make_tarball(tmp_path, {"bin/test-tool": b"#!/bin/sh\necho ok\n"})
+    asset_url = f"http://127.0.0.1:{fake_github.port}/asset.tar.gz"
+    fake_github.route(
+        "/repos/o/r/releases/latest",
+        json.dumps(
+            _release_json("v1.0.0", "asset.tar.gz", asset_url, archive.stat().st_size)
+        ).encode(),
+    )
+    fake_github.route(
+        "/asset.tar.gz", archive.read_bytes(), content_type="application/octet-stream"
+    )
+    monkeypatch.setenv("GENESIS_INSTALL_GITHUB_API", f"http://127.0.0.1:{fake_github.port}")
+
+    final = _backend(tmp_path, asset_url=asset_url).install().wait()
+    assert final.kind == "complete"
+    assert (final.error or "") == ""
+
+
+@pytest.mark.integration
+def test_acquire_session_fails_when_archive_has_no_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
+) -> None:
+    archive = _make_tarball(tmp_path, {"README.md": b"no binary here"})
+    asset_url = f"http://127.0.0.1:{fake_github.port}/asset.tar.gz"
+    fake_github.route(
+        "/repos/o/r/releases/latest",
+        json.dumps(
+            _release_json("v1.0.0", "asset.tar.gz", asset_url, archive.stat().st_size)
+        ).encode(),
+    )
+    fake_github.route(
+        "/asset.tar.gz", archive.read_bytes(), content_type="application/octet-stream"
+    )
+    monkeypatch.setenv("GENESIS_INSTALL_GITHUB_API", f"http://127.0.0.1:{fake_github.port}")
+
+    backend = _backend(tmp_path, asset_url=asset_url)
+    final = backend.install().wait()
+    assert final.kind == "failed"
+    assert "archive contains no" in (final.error or "")
+    assert not (backend.layout.installs_root / "v1.0.0").exists()
+    assert not backend.layout.current_symlink.exists()
+
+
+@pytest.mark.integration
 def test_install_fails_on_sha_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_github: _FakeServer
 ) -> None:
@@ -259,25 +306,35 @@ def _sha256_hex(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Upstream asset-name matchers — runs against the real repo's release payload
+# Declarative asset patterns — runs against the real repo's release payload
 # ---------------------------------------------------------------------------
 
 
-from genesis_worker.services.llama_swap.installs import (  # noqa: E402
-    _ai_dock_llama_cpp_cuda_asset,
-    _asset_name_matches_linux_amd64_tarball,
-    _find_asset_by_suffix,
+from genesis_worker.services.llama_swap.installables import load_seed_records  # noqa: E402
+from genesis_worker.utils.installables import (  # noqa: E402
+    GithubReleaseRecord,
+    find_asset_by_suffix,
+    match_asset,
 )
 
 
-def test_linux_amd64_matcher_matches_goreleaser_convention() -> None:
+def _seed_patterns() -> dict[str, str]:
+    return {
+        record.name: record.asset_pattern
+        for record in load_seed_records()
+        if isinstance(record, GithubReleaseRecord)
+    }
+
+
+def test_linux_amd64_pattern_matches_goreleaser_convention() -> None:
     """mostlygeek/llama-swap ships ``..._linux_amd64.tar.gz`` for x86_64 Linux."""
-    asset = {"name": "llama-swap_249_linux_amd64.tar.gz"}
-    assert _asset_name_matches_linux_amd64_tarball(asset) is True
+    pattern = _seed_patterns()["llama-swap"]
+    assert match_asset({"name": "llama-swap_249_linux_amd64.tar.gz"}, pattern) is True
 
 
-def test_linux_amd64_matcher_ignores_other_platforms() -> None:
+def test_linux_amd64_pattern_ignores_other_platforms() -> None:
     """Darwin, ARM64, FreeBSD, and Windows assets are not matches."""
+    pattern = _seed_patterns()["llama-swap"]
     for name in (
         "llama-swap_249_darwin_amd64.tar.gz",
         "llama-swap_249_darwin_arm64.tar.gz",
@@ -286,28 +343,29 @@ def test_linux_amd64_matcher_ignores_other_platforms() -> None:
         "llama-swap_249_windows_amd64.zip",
         "llama-swap_249_checksums.txt",
     ):
-        assert _asset_name_matches_linux_amd64_tarball({"name": name}) is False, name
+        assert match_asset({"name": name}, pattern) is False, name
 
 
-def test_llama_cpp_cuda_matcher_matches_actual_upstream() -> None:
-    """ai-dock/llama.cpp-cuda publishes ``llama.cpp-b<build>-cuda-<ver>-amd64.tar.gz``."""
-    asset = {"name": "llama.cpp-b10375-cuda-12.8-amd64.tar.gz"}
-    assert _ai_dock_llama_cpp_cuda_asset(asset) is True
+def test_llama_cpp_cuda_pattern_matches_actual_upstream() -> None:
+    """genesis-scaffolding publishes ``llama.cpp-b<build>-cuda-<ver>-amd64.tar.gz``."""
+    pattern = _seed_patterns()["llama-server-cuda"]
+    assert match_asset({"name": "llama.cpp-b10375-cuda-12.8-amd64.tar.gz"}, pattern) is True
 
 
-def test_llama_cpp_cuda_matcher_matches_semver_naming() -> None:
-    """ai-dock switched to semver tags; the matcher must accept ``v<MAJOR>.<MINOR>.<PATCH>``."""
-    asset = {"name": "llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz"}
-    assert _ai_dock_llama_cpp_cuda_asset(asset) is True
+def test_llama_cpp_cuda_pattern_matches_semver_naming() -> None:
+    """The CUDA seed also accepts the fork's semver naming."""
+    pattern = _seed_patterns()["llama-server-cuda"]
+    assert match_asset({"name": "llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz"}, pattern) is True
 
 
-def test_llama_cpp_cuda_matcher_rejects_other_platforms() -> None:
+def test_llama_cpp_cuda_pattern_rejects_other_platforms() -> None:
+    pattern = _seed_patterns()["llama-server-cuda"]
     for name in (
         "llama.cpp-b10375-cuda-12.8-arm64.tar.gz",
-        "llama.cpp-b10375-cuda-12.8.tar.gz",  # missing arch
-        "llama.cpp-cuda-12.8-amd64.tar.gz",  # old/incorrect prefix
+        "llama.cpp-b10375-cuda-12.8.tar.gz",
+        "llama.cpp-cuda-12.8-amd64.tar.gz",
     ):
-        assert _ai_dock_llama_cpp_cuda_asset({"name": name}) is False, name
+        assert match_asset({"name": name}, pattern) is False, name
 
 
 def test_find_asset_by_suffix_resolves_checksums() -> None:
@@ -317,7 +375,7 @@ def test_find_asset_by_suffix_resolves_checksums() -> None:
         {"name": "llama-swap_249_linux_amd64.tar.gz", "browser_download_url": "u2"},
         {"name": "llama-swap_249_checksums.txt", "browser_download_url": "u3"},
     ]
-    assert _find_asset_by_suffix(release_assets, "_checksums.txt") == release_assets[2]
+    assert find_asset_by_suffix(release_assets, "_checksums.txt") == release_assets[2]
 
 
 # ---------------------------------------------------------------------------

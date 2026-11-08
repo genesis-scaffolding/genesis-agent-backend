@@ -125,6 +125,14 @@ the loader derives the runtime port (health probe, web UI endpoint) from the
 when the user overrides the port in the configure panel. Top-level
 `listen_port` on the spec is a fallback for services without a port option.
 
+The option may also carry a `$auto_port.<name>` marker, in which case the
+framework allocates the host port at start time and the template publishes
+the allocation (ADR-043 — see
+[the declarative-services tutorial](declarative-services.md#auto-port-placeholders-auto_portname)).
+The loader rejects a compose spec whose runtime port is a marker the
+template does not publish: the health probe would watch a port the stack
+never binds.
+
 ## Two-phase placeholder resolution
 
 This is the one genuinely new idea in compose specs, and it's worth

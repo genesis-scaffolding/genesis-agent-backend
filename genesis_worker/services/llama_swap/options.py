@@ -5,9 +5,29 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...contracts.host import ComputeDevice
+from ...utils.installables import InstallableRecord
+
+
+class RadianceOptions(BaseModel):
+    """Deployment and tuning defaults for the radiance engine."""
+
+    container_port: int = Field(default=8000, gt=0)
+    gpu_index: int = Field(default=0, ge=0)
+    group_names: list[str] = Field(default_factory=lambda: ["render", "video"])
+    tp: int = Field(default=1, ge=1)
+    max_model_len: int = Field(default=32768, ge=0)
+    max_num_seqs: int = Field(default=8, ge=1)
+    kv_cache_dtype: Literal["bf16", "fp8", "fp8_v4", "k6_v4"] = "fp8"
+    gpu_headroom_mib: int = Field(default=96, ge=0)
+    ttl_s: int = Field(default=0, ge=0)
+    unload_timeout_s: int = Field(default=90, ge=0)
+    stop_grace_s: int = Field(default=60, ge=0)
+    check_endpoint: str = "/v1/models"
+    extra_docker_args: list[str] = Field(default_factory=list)
+    extra_flags: list[str] = Field(default_factory=list)
 
 
 class LlamaSwapOptions(BaseModel):
@@ -30,12 +50,12 @@ class LlamaSwapOptions(BaseModel):
     # Which framework-managed llama-server binary the config generator
     # should use as the default. ``"auto"`` picks via hardware detection:
     # NVIDIA GPU + cuda installed → cuda; else vulkan; else cpu. The
-    # explicit ``"cuda" / "cpu" / "vulkan"`` overrides auto when the
-    # matching installable is on disk. ``None`` falls back to the legacy
-    # ``default_binary_rel`` path. Default is ``"auto"`` so the framework-
-    # managed binary wins without a one-time setup step. Override via
+    # explicit variant key overrides auto when the matching installable is
+    # on disk. ``None`` falls back to the legacy ``default_binary_rel`` path.
+    # Default is ``"auto"`` so the framework-managed binary wins without a
+    # one-time setup step. Override via
     # ``GENESIS_SERVICES__LLAMA_SWAP__LLAMA_SERVER_VARIANT``.
-    llama_server_variant: Literal["auto", "cuda", "cpu", "vulkan"] | None = "auto"
+    llama_server_variant: str | None = "auto"
     # Pin a specific compute device. ``None`` falls back to the smart
     # auto-pick (NVIDIA 0 → AMD 0 → Intel 0 → CPU). When set, the
     # matching variant binary is required — the service fails loud at
@@ -52,10 +72,19 @@ class LlamaSwapOptions(BaseModel):
     # per-service JSON sidecar (list-typed, like comfyui's extra_args);
     # edited on the status page's "Server flags" section.
     hardcoded_flags: list[str] | None = None
+    # Radiance engine defaults. The image itself comes from its docker_image
+    # installable record rather than this option slice.
+    radiance: RadianceOptions = Field(default_factory=RadianceOptions)
+    # Global llama-swap health-check budget in seconds. Radiance loads large
+    # models before opening its HTTP server, so this covers a multi-minute load.
+    health_check_timeout_s: int = Field(default=600, ge=0)
+    # User-defined installable records. Seed records are merged underneath
+    # these by the service; a user record replaces the seed with the same name.
+    installables: list[InstallableRecord] = Field(default_factory=list)
 
     config_path: Path | None = None
     recipes_path: Path | None = None
     log_file: Path | None = None
 
 
-__all__ = ["LlamaSwapOptions"]
+__all__ = ["LlamaSwapOptions", "RadianceOptions"]

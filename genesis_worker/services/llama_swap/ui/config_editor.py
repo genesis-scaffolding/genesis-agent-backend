@@ -14,7 +14,9 @@ from typing import Any
 import streamlit as st
 
 from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
+from genesis_worker.services.llama_swap.engines import Engine
 from genesis_worker.services.llama_swap.generate_config import EvaluatedConfig, FieldSource
+from genesis_worker.services.llama_swap.radiance import container_model_path
 
 SERVICE_NAME = "llama_swap"
 
@@ -65,6 +67,10 @@ def _badge(source: FieldSource) -> str:
 
 
 def _render_effective(cfg: EvaluatedConfig) -> None:
+    if cfg.engine == Engine.RADIANCE:
+        _render_radiance_effective(cfg)
+        return
+
     rows: list[tuple[str, str, str]] = []
 
     rows.append(("Binary", cfg.binary, _badge(cfg.provenance["binary"])))
@@ -150,9 +156,172 @@ def _render_effective(cfg: EvaluatedConfig) -> None:
     )
 
 
+def _render_radiance_effective(cfg: EvaluatedConfig) -> None:
+    settings = cfg.radiance
+    if settings is None:
+        st.error("Radiance settings are unavailable.")
+        return
+
+    def source(key: str) -> str:
+        return _badge(cfg.provenance.get(key, FieldSource.COMPUTED))
+
+    group_gids = ", ".join(f"{name}={gid}" for name, gid in settings.group_gids)
+    rows: list[tuple[str, str, str]] = [
+        ("Engine", "radiance (container)", ""),
+        ("Image", settings.image_ref, ""),
+        ("Container model path", container_model_path(cfg.files.filename), ""),
+        ("GPU index", str(settings.gpu_index), ""),
+        ("Group GIDs", group_gids or "none", ""),
+        ("tp", str(settings.tp), source("tp")),
+        ("max_model_len", str(settings.max_model_len), source("max_model_len")),
+        ("max_num_seqs", str(settings.max_num_seqs), source("max_num_seqs")),
+        ("kv_cache_dtype", settings.kv_cache_dtype, source("kv_cache_dtype")),
+        ("gpu_headroom_mib", str(settings.gpu_headroom_mib), source("gpu_headroom_mib")),
+        ("ttl", str(settings.ttl_s), ""),
+        ("unloadTimeout", str(settings.unload_timeout_s), ""),
+        ("checkEndpoint", settings.check_endpoint, ""),
+    ]
+    if settings.extra_flags:
+        rows.append(("Extra flags", " ".join(settings.extra_flags), source("extra_flags")))
+
+    st.dataframe(
+        [{"Field": k, "Value": v, "Source": badge} for k, v, badge in rows],
+        hide_index=True,
+        width="stretch",
+    )
+
+
+def _render_radiance_override_form(
+    svc: Any,
+    entry_id: str,
+    cfg: EvaluatedConfig,
+    current_overrides: dict,
+) -> None:
+    settings = cfg.radiance
+    if settings is None:
+        st.error("Radiance settings are unavailable.")
+        return
+
+    raw_current = current_overrides.get("radiance")
+    current_block = raw_current if isinstance(raw_current, dict) else {}
+    new_block: dict[str, Any] = {}
+
+    def numeric_override(
+        label: str,
+        key: str,
+        effective: int,
+        min_value: int,
+        *,
+        widget_key: str,
+    ) -> None:
+        raw_current = current_block.get(key)
+        initial: int | None = None
+        if raw_current is not None:
+            try:
+                initial = int(raw_current)
+            except (TypeError, ValueError):
+                st.error(f"{label} must be an integer")
+        value = st.number_input(
+            f"{label} (effective: {effective})",
+            min_value=min_value,
+            value=initial,
+            step=1,
+            key=f"ov-{entry_id}-{widget_key}",
+        )
+        if value is None:
+            return
+        value = int(value)
+        if key in current_block or value != effective:
+            new_block[key] = value
+
+    with st.expander("Override"):
+        st.caption(
+            "Edit a radiance field to override the recipe value. "
+            "Clearing a field reverts to the recipe default."
+        )
+        numeric_override(
+            "Max model len",
+            "max_model_len",
+            settings.max_model_len,
+            0,
+            widget_key="radiance-max-model-len",
+        )
+        numeric_override(
+            "Max num seqs",
+            "max_num_seqs",
+            settings.max_num_seqs,
+            1,
+            widget_key="radiance-max-num-seqs",
+        )
+        numeric_override("TP", "tp", settings.tp, 1, widget_key="radiance-tp")
+
+        dtype_options = ["(use cascade)", "bf16", "fp8", "fp8_v4", "k6_v4"]
+        current_dtype = str(current_block.get("kv_cache_dtype", settings.kv_cache_dtype))
+        if current_dtype not in dtype_options:
+            dtype_options.append(current_dtype)
+        dtype_choice = st.selectbox(
+            "KV cache dtype",
+            dtype_options,
+            index=dtype_options.index(current_dtype),
+            key=f"ov-{entry_id}-radiance-kv",
+            help=("fp8_v4 and k6_v4 are accepted only by Qwen3.8-27B and Qwen3.8-Flash-Next."),
+        )
+        if dtype_choice != "(use cascade)" and (
+            "kv_cache_dtype" in current_block or dtype_choice != settings.kv_cache_dtype
+        ):
+            new_block["kv_cache_dtype"] = dtype_choice
+
+        numeric_override(
+            "GPU headroom MiB",
+            "gpu_headroom_mib",
+            settings.gpu_headroom_mib,
+            0,
+            widget_key="radiance-gpu-headroom",
+        )
+
+        raw_extra = current_block.get("extra_flags")
+        current_extra = raw_extra if isinstance(raw_extra, list) else list(settings.extra_flags)
+        extra_value = st.text_area(
+            "Extra radiance flags (one per line)",
+            value="\n".join(str(flag) for flag in current_extra),
+            key=f"ov-{entry_id}-radiance-ef",
+            height=100,
+        )
+        extra_flags = [line.strip() for line in (extra_value or "").splitlines() if line.strip()]
+        if extra_flags and (
+            "extra_flags" in current_block or extra_flags != list(settings.extra_flags)
+        ):
+            new_block["extra_flags"] = extra_flags
+
+        cols = st.columns([1, 1])
+        with cols[0]:
+            if st.button("Save override", key=f"ov-{entry_id}-save"):
+                updated = dict(current_overrides)
+                updated.pop("radiance", None)
+                if new_block:
+                    updated["radiance"] = new_block
+                svc.save_overrides_for_entry(entry_id, updated)
+                ok = worker.regenerate_service_config(SERVICE_NAME)
+                if ok:
+                    st.success("Saved + regenerated.")
+                else:
+                    st.info("Saved (config already up to date).")
+                st.rerun()
+        with cols[1]:
+            if st.button("Clear override", key=f"ov-{entry_id}-clear"):
+                svc.save_overrides_for_entry(entry_id, {})
+                worker.regenerate_service_config(SERVICE_NAME)
+                st.success("Override cleared.")
+                st.rerun()
+
+
 def _render_override_form(
     svc: Any, entry_id: str, cfg: EvaluatedConfig, current_overrides: dict
 ) -> None:
+    if cfg.engine == Engine.RADIANCE:
+        _render_radiance_override_form(svc, entry_id, cfg, current_overrides)
+        return
+
     with st.expander("Override"):
         st.caption(
             "Edit a field to override the recipe value. "
@@ -441,14 +610,23 @@ if not ready:
         "No llama-server binary is available. Install a variant via the "
         "Binaries page or set the legacy fallback to a valid path."
     )
+if svc.radiance_image_ref() is None:
+    st.info(
+        "Radiance models are disabled. Enable the radiance installable on the "
+        "Binaries page to generate radiance entries."
+    )
 if st.button("↻ Regenerate config", key=regen_key, disabled=not ready):
     ok = worker.regenerate_service_config(SERVICE_NAME)
     st.success("Regenerated") if ok else st.info("Already up to date")
     st.rerun()
 
 catalog = worker.catalog()
-configs = svc.evaluate_model_config(catalog)
+report = svc.evaluate_model_config_report(catalog)
+configs = report.configs
 overrides_store = svc.list_overrides()
+
+for error in report.errors:
+    st.error(f"Skipped `{error.entry_id}` ({error.name}): invalid override — {error.message}")
 
 if not configs:
     st.error(
@@ -467,18 +645,25 @@ if last_gen is None or last_gen != catalog.generated_at:
 with st.container(border=True):
     st.subheader("Models")
     for entry_id, cfg in configs.items():
-        binary_name = Path(cfg.binary).name or "(no binary)"
+        if cfg.engine == Engine.RADIANCE:
+            target = "radiance (container)"
+        else:
+            target = Path(cfg.binary).name or "(no binary)"
         label = (
-            f"{entry_id}  →  {binary_name}"
+            f"{entry_id}  →  {target}"
             if cfg.matched_recipe is None
-            else f"{entry_id}  →  {binary_name}   (recipe: {cfg.matched_recipe})"
+            else f"{entry_id}  →  {target}   (recipe: {cfg.matched_recipe})"
         )
         with st.expander(label):
             st.subheader(cfg.name)
 
             st.markdown("**Files** _(auto-detected)_")
             if cfg.files.main:
-                st.markdown(f"- model:    `{cfg.files.main}`")
+                if cfg.engine == Engine.RADIANCE:
+                    st.markdown(f"- host model:      `{cfg.files.main}`")
+                    st.markdown(f"- container model: `{container_model_path(cfg.files.filename)}`")
+                else:
+                    st.markdown(f"- model:    `{cfg.files.main}`")
             if cfg.files.mmproj:
                 st.markdown(f"- mmproj:   `{cfg.files.mmproj}`")
             if cfg.files.draft:

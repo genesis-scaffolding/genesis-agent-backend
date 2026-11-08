@@ -9,12 +9,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
 from genesis_worker.services.llama_swap.generate_config import (
+    BuildOptions,
+    build_config,
+    emit_payload,
     make_display_name,
     short_source_label,
     write_config,
 )
-from genesis_worker.services.llama_swap.recipes import Recipe
+from genesis_worker.services.llama_swap.radiance import RadianceSettings
+from genesis_worker.services.llama_swap.recipes import Recipe, Recipes
 
 
 def test_short_source_label_known_sources() -> None:
@@ -107,3 +112,121 @@ def test_write_config_preserves_mtime_on_noop(tmp_path: Path) -> None:
     wrote = write_config(out, entries, root="", generated_at="x")
     assert wrote is False
     assert out.stat().st_mtime_ns == mtime_before
+
+
+# ---------------------------------------------------------------------------
+# Radiance entries
+# ---------------------------------------------------------------------------
+
+
+def _radiance_catalog() -> Catalog:
+    return Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            ModelEntry(
+                name="StillDeadcode/qwen3.8-27b-mxfp4",
+                source="huggingface",
+                pieces=[
+                    ModelPiece(
+                        role="main",
+                        filename="qwen3.8-27b-mxfp4.rad",
+                        path=Path("/tmp/vault/models--StillDeadcode--qwen3.8-27b-mxfp4/blobs/sha"),
+                        bytes=19_000_000_000,
+                    )
+                ],
+                total_bytes=19_000_000_000,
+                directory="/tmp/vault/models--StillDeadcode--qwen3.8-27b-mxfp4",
+                notes=[],
+                extra={},
+            )
+        ],
+    )
+
+
+def _radiance_entries(tmp_path: Path) -> list[tuple[str, dict]]:
+    options = BuildOptions(
+        repo_root=tmp_path,
+        radiance=RadianceSettings(
+            image_ref="stilldeadcode/radiance:latest",
+            group_gids=(("render", "992"), ("video", "44")),
+        ),
+    )
+    recipes = Recipes(
+        default=Recipe(name="default"),
+        matchable=[Recipe(name="radiance-qwen3-8-27b-mxfp4", match="qwen3.8-27b-mxfp4")],
+    )
+    return build_config(_radiance_catalog(), recipes, options=options)
+
+
+def test_rad_entry_emits_cmd_stop_and_check_endpoint(tmp_path: Path) -> None:
+    entries = _radiance_entries(tmp_path)
+    payload = emit_payload(entries, root="/tmp", generated_at="x")
+    model = payload["models"]["qwen3-8-27b-mxfp4"]
+    assert model["cmdStop"] == "docker stop --time 60 ${MODEL_ID}"
+    assert model["checkEndpoint"] == "/v1/models"
+    assert model["proxy"] == "http://127.0.0.1:${PORT}"
+
+
+def test_rad_entry_emits_unload_timeout_longer_than_the_stop_grace(tmp_path: Path) -> None:
+    entries = _radiance_entries(tmp_path)
+    payload = emit_payload(entries, root="/tmp", generated_at="x")
+    model = payload["models"]["qwen3-8-27b-mxfp4"]
+    assert model["unloadTimeout"] > 60
+
+
+def test_rad_entry_emits_no_env_array(tmp_path: Path) -> None:
+    entries = _radiance_entries(tmp_path)
+    payload = emit_payload(entries, root="/tmp", generated_at="x")
+    model = payload["models"]["qwen3-8-27b-mxfp4"]
+    assert "env" not in model
+
+
+def test_emitted_global_health_check_timeout_follows_the_option() -> None:
+    payload = emit_payload(
+        [],
+        root="/tmp",
+        generated_at="x",
+        health_check_timeout_s=777,
+    )
+    assert payload["healthCheckTimeout"] == 777
+
+
+def test_llama_server_entry_payload_is_unchanged(tmp_path: Path) -> None:
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            ModelEntry(
+                name="org/test",
+                source="huggingface",
+                pieces=[
+                    ModelPiece(
+                        role="main",
+                        filename="test.gguf",
+                        path=Path("/tmp/vault/test.gguf"),
+                        bytes=1,
+                    )
+                ],
+                total_bytes=1,
+                directory="/tmp/vault/test",
+                notes=[],
+                extra={},
+            )
+        ],
+    )
+    entries = build_config(
+        catalog,
+        Recipes(default=Recipe(name="default"), matchable=[]),
+        options=BuildOptions(repo_root=tmp_path),
+    )
+    payload = emit_payload(entries, root="/tmp", generated_at="x")
+    model = payload["models"]["test"]
+    assert model["proxy"] == "http://127.0.0.1:${PORT}"
+    assert model["ttl"] == 0
+    assert "cmdStop" not in model
+    assert "checkEndpoint" not in model
+    assert "unloadTimeout" not in model
+    assert "env" not in model

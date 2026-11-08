@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+import yaml
 
 from ...contracts import (
     ServiceCapabilities,
@@ -26,13 +29,39 @@ from ...contracts import (
     StartResult,
     StopResult,
 )
+from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
+from ..ports.markers import assert_no_markers, marker_name
 from ..process import DockerContainer
+from ..process.docker import ContainerPortBinding, container_port_bindings
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_stack import DockerComposeStack
-from .docker_service import DockerImageInstall
 
 _IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
+
+
+def _split_ports_entry(entry: str) -> tuple[str, int] | None:
+    """(host_port, container_port) of a compose ``ports:`` entry, or ``None``.
+
+    Docker's port spec is ``[HOST_IP:][HOST:]CONTAINER[/PROTOCOL]`` — the
+    container port is always last, the host port is the field before it. An
+    entry with only a container port publishes no host port at all, so there
+    is nothing to observe.
+    """
+    text = entry.strip()
+    if text.startswith("["):  # bracketed IPv6 host address
+        close = text.find("]")
+        if close == -1 or not text[close + 1 :].startswith(":"):
+            return None
+        text = text[close + 2 :]
+    parts = text.split(":")
+    if len(parts) < 2:
+        return None
+    host_port, container_port = parts[-2], parts[-1]
+    container_port = container_port.split("/")[0]
+    if not container_port.isdigit():
+        return None
+    return host_port, int(container_port)
 
 
 @dataclass(frozen=True)
@@ -60,7 +89,7 @@ class ComposeServiceConfig(DeclarativeServiceConfig):
     compose_template: str = ""
     compose_version: str = "3.8"
     listen_host: str = "0.0.0.0"
-    listen_port: int = 0
+    listen_port: int | str = 0
     health_probe_path: str = "/"
     extra_env: dict[str, Any] = field(default_factory=dict)
     extra_volumes: dict[str, Any] = field(default_factory=dict)
@@ -97,7 +126,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         self._compose_dir = ctx.state_dir / "compose"
         self._project_name = f"{config.name}-stack"
         self._stack = DockerComposeStack(self._compose_dir, self._project_name)
-        self._installables = [
+        self._installables: list[ServiceInstall] = [
             DockerImageInstall(
                 image_repo=img.repo,
                 image_tag=img.default_tag,
@@ -123,8 +152,74 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         return self._compose_dir
 
     @property
-    def listen_address(self) -> str:
-        return f"{self.config.listen_host}:{self.config.listen_port}"
+    def listen_address(self) -> str | None:
+        """The bind address, or ``None`` when the port is not known yet."""
+        port = self.effective_host_port()
+        if port is None:
+            return None
+        return f"{self.config.listen_host}:{port}"
+
+    def own_container_names(self) -> tuple[str, ...]:
+        # Compose labels every container of a stack with its project name.
+        return (self._project_name,)
+
+    def published_host_ports(
+        self, bindings: Sequence[ContainerPortBinding] | None = None
+    ) -> Mapping[str, int]:
+        """The host ports this stack already publishes, per use site.
+
+        The marker-to-container-port mapping lives in the template text, so
+        the template is parsed; the container port is then looked up in the
+        project's running containers (ADR-045).
+        """
+        snapshot = container_port_bindings() if bindings is None else bindings
+        own = [b for b in snapshot if b.compose_project == self._project_name and b.running]
+        if not own:
+            return {}
+        ports: dict[int, int] = {}
+        for binding in own:
+            ports.update(binding.port_map)
+        published: dict[str, int] = {}
+        for marker, container_port in self._template_marker_container_ports().items():
+            host = ports.get(container_port)
+            if host is not None:
+                published[marker] = host
+        return published
+
+    def _template_marker_container_ports(self) -> Mapping[str, int]:
+        """Marker name -> container port, read from the template's ``ports:``.
+
+        Best-effort and total: anything the parse cannot read yields no
+        observation, never a wrong one.
+        """
+        try:
+            doc = yaml.safe_load(self.config.compose_template)
+        except yaml.YAMLError:
+            return {}
+        if not isinstance(doc, dict):
+            return {}
+        services = doc.get("services")
+        if not isinstance(services, dict):
+            return {}
+        out: dict[str, int] = {}
+        for spec in services.values():
+            if not isinstance(spec, dict):
+                continue
+            entries = spec.get("ports")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, str):
+                    continue
+                parsed = _split_ports_entry(entry)
+                if parsed is None:
+                    continue
+                host_port, container_port = parsed
+                name = marker_name(host_port)
+                if name is None:
+                    continue
+                out.setdefault(name, container_port)
+        return out
 
     @property
     def data_dir(self) -> Path:
@@ -161,19 +256,23 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
             for img, installable in zip(self.config.images, self._installables, strict=True)
         }
 
-    def _rendered_template(self) -> str:
+    def _rendered_template(self, ports: Callable[[str], int] | None = None) -> str:
         """The compose template with ``$images.<name>`` at its effective ref.
 
         Same placeholder engine as the load-time pass, supplied with the
         image refs — the only thing that can't be known at load time is
         the user's recorded version selection (the installables are
         constructed in ``__init__``).
+
+        ``ports`` materialises the ``$auto_port.<name>`` markers (ADR-043).
+        It is only supplied on the start path: rendering the template to
+        read its image list must not allocate a port.
         """
         from .loader import resolve_placeholders
 
         ctx = self._ctx
         return resolve_placeholders(
-            self.config.compose_template, ctx, {}, None, images=self._image_refs()
+            self.config.compose_template, ctx, {}, None, images=self._image_refs(), ports=ports
         )
 
     def _stack_images(self) -> list[str]:
@@ -192,10 +291,13 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
     def web_ui_endpoint(self) -> str | None:
         if not self.is_running():
             return None
+        port = self.effective_host_port()
+        if port is None:
+            return None
         path = self.config.health_probe_path or "/"
         if not path.startswith("/"):
             path = "/" + path
-        return f"http://{self.public_host()}:{self.config.listen_port}{path}"
+        return f"http://{self.public_host()}:{port}{path}"
 
     def tail_log(self, n_bytes: int = 8192) -> str:
         tail_lines = max(50, n_bytes // 80)
@@ -213,17 +315,25 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
             except OSError:
                 pass
 
-    def _render_compose_file(self) -> Path:
+    def _render_compose_file(self, ports: Callable[[str], int] | None = None) -> Path:
         """Write the compose file to disk.
 
         The loader substituted every ``$placeholder`` at load time, except
         the image markers (``$images.<name>``), which are resolved here
-        with the effective ref — recorded selection wins over default_tag.
+        with the effective ref — recorded selection wins over default_tag —
+        and the auto-port markers (``$auto_port.<name>``), which are
+        resolved here with the allocator's port (ADR-043).
+
+        Mode 0600: the rendered file can carry credentials (the ingress
+        proxy's DNS token, a database password), so it is not world
+        readable.
         """
-        body = self._rendered_template()
+        body = self._rendered_template(ports)
+        assert_no_markers(body, f"{self.name} compose template")
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
         path.write_text(body)
+        path.chmod(0o600)
         return path
 
     def start(self) -> StartResult:
@@ -242,13 +352,14 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
                 ),
             )
 
-        # Render with the effective tags, then pull anything missing. A full
-        # ``docker compose pull`` makes start() self-sufficient: it fetches
-        # every declared image at its rendered tag (idempotent — present
-        # images are skipped), so a fresh install never hits a half-pulled
-        # stack. The UI install axis still records version selections;
-        # this just guarantees the whole stack exists before ``up``.
-        self._render_compose_file()
+        # Render with the effective tags and the allocated ports, then pull
+        # anything missing. A full ``docker compose pull`` makes start()
+        # self-sufficient: it fetches every declared image at its rendered
+        # tag (idempotent — present images are skipped), so a fresh install
+        # never hits a half-pulled stack. The UI install axis still records
+        # version selections; this just guarantees the whole stack exists
+        # before ``up``.
+        self._render_compose_file(ports=self.port_binder().resolver())
 
         pull = self._stack.pull()
         if not pull.ok:
@@ -261,15 +372,23 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         return self._stack.down()
 
     def status(self) -> ServiceStatus:
+        port = self.effective_host_port()
         endpoint = (
-            f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}"
-            f":{self.config.listen_port}/"
+            None
+            if port is None
+            else f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}:{port}/"
         )
         if not self._stack.is_running():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
+        if port is None:
+            return ServiceStatus(
+                state=ServiceState.STARTING,
+                endpoint=endpoint,
+                message=self.unrecorded_port_message(),
+            )
         probe = HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         )
         if probe.probe():
@@ -277,16 +396,19 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
 
     def wait_ready(self, timeout_s: float) -> bool:
+        port = self.effective_host_port()
+        if port is None:
+            return False
         return HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         ).wait_ready(timeout_s)
 
     # --- install axis -----------------------------------------------------
 
     def _installs(self) -> list[ServiceInstall]:
-        return self._installables
+        return cast("list[ServiceInstall]", self._installables)
 
 
 __all__ = [

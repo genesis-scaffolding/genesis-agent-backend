@@ -11,15 +11,13 @@ from __future__ import annotations
 
 import os
 import secrets
-import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ...contracts import (
-    AcquireSession,
     InstallState,
-    InstallVersion,
     ServiceCapabilities,
     ServiceCategory,
     ServiceContext,
@@ -30,18 +28,25 @@ from ...contracts import (
     StartResult,
     StopResult,
 )
-from ..acquire import DockerPullAcquireSession
+from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
+from ..ports.markers import assert_no_markers, marker_name
 from ..process import DockerContainer
-from ..registry_tags import (
-    list_image_tags,
-    read_tag_cache,
-    tag_cache_path,
-    write_tag_cache,
-)
+from ..process.docker import ContainerPortBinding, container_port_bindings
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 
-_RELEASE_CACHE_TTL_S = 15 * 60  # same TTL as GithubReleaseTarball.
+
+@dataclass(frozen=True)
+class ExtraPort:
+    """One extra published port of a docker container.
+
+    ``container_port`` is the port inside the container; ``host`` is the
+    port on the node — a fixed integer or a ``$auto_port.<name>`` marker
+    the framework allocates at start time (ADR-043).
+    """
+
+    container_port: int
+    host: int | str
 
 
 @dataclass(frozen=True)
@@ -76,8 +81,9 @@ class DockerServiceConfig(DeclarativeServiceConfig):
     # Container
     container_name: str = ""
     listen_host: str = "0.0.0.0"
-    listen_port: int = 0
+    listen_port: int | str = 0
     internal_port: int | None = None  # defaults to listen_port
+    extra_ports: tuple[ExtraPort, ...] = ()
     public_host: str | None = None
     web_ui_path: str = "/"  # appended to listen address for the Web UI button
     restart_policy: str = "unless-stopped"
@@ -103,123 +109,6 @@ class DockerServiceConfig(DeclarativeServiceConfig):
     pre_start_hooks: tuple[dict, ...] = ()
     # Auth
     auth: AuthConfig | None = None
-
-
-# --- image install ----------------------------------------------------------
-
-
-class DockerImageInstall(ServiceInstall):
-    """Installable for one Docker image — replaces the per-service duplicates.
-
-    Single-arch (crawl4ai, sillytavern) and arch-filtered (comfyui) use
-    cases share this class. ``arch_filter`` is an optional callable that
-    filters remote tags — ``None`` for arch-agnostic images.
-    """
-
-    def __init__(
-        self,
-        *,
-        image_repo: str,
-        image_tag: str,
-        cache_dir: Path,
-        state_dir: Path,
-        name: str,
-        source_url: str | None,
-        arch_filter=None,
-        secrets=None,
-    ) -> None:
-        self._image_repo = image_repo
-        self._image_tag = image_tag
-        self._cache_dir = cache_dir
-        self._state_dir = state_dir
-        self._selection_path = state_dir / "current"
-        self._source_url = source_url
-        self._arch_filter = arch_filter
-        self._auth_token = secrets.get("github_token") if secrets is not None else None
-        # Plugin contract: name is a class attribute; subclasses must
-        # override or pass via constructor (we do the latter).
-        self.name = name
-
-    @property
-    def image_ref(self) -> str:
-        return f"{self._image_repo}:{self._image_tag}"
-
-    def source_url(self) -> str | None:
-        return self._source_url
-
-    def state(self) -> InstallState:
-        return (
-            InstallState.INSTALLED
-            if DockerContainer.image_present(self.image_ref)
-            else InstallState.NOT_INSTALLED
-        )
-
-    def installed_version(self) -> str | None:
-        return self._selection_path.read_text().strip() if self._selection_path.is_file() else None
-
-    def available_versions(self) -> list[InstallVersion]:
-        """All tags reachable from the registry, newest-first.
-
-        15-min on-disk cache mirrors ``GithubReleaseTarball.available_versions``.
-        Optional ``arch_filter`` narrows the tag set (comfyui's arch pinning).
-        """
-        cache = tag_cache_path(self._cache_dir, self._image_repo)
-        cached = read_tag_cache(cache, _RELEASE_CACHE_TTL_S)
-        if cached is not None:
-            tags = cached
-        else:
-            tags = list_image_tags(self._image_repo, auth_token=self._auth_token)
-            if tags:
-                write_tag_cache(cache, tags)
-            else:
-                tags = read_tag_cache(cache, None) or []
-        if self._arch_filter is not None:
-            tags = [t for t in tags if self._arch_filter(t)]
-        return [
-            InstallVersion(
-                version=tag,
-                url=f"{self._image_repo}:{tag}",
-                sha256=None,
-                size_bytes=None,
-            )
-            for tag in tags
-        ]
-
-    def invalidate_versions_cache(self) -> None:
-        cache = tag_cache_path(self._cache_dir, self._image_repo)
-        if cache.exists():
-            cache.unlink()
-
-    def binary_path(self) -> Path | None:
-        return None
-
-    def install(self, *, version: str | None = None) -> AcquireSession:
-        target_tag = version or self._image_tag
-        return DockerPullAcquireSession(
-            image=f"{self._image_repo}:{target_tag}",
-            on_complete=lambda: self._record_selection(target_tag),
-        )
-
-    def _record_selection(self, tag: str) -> None:
-        self._state_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._selection_path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
-        with tmp.open("w") as f:
-            f.write(tag)
-        os.replace(tmp, self._selection_path)
-
-    def uninstall(self, *, version: str | None = None) -> None:
-        target = version or self.installed_version()
-        if target is None:
-            return
-        subprocess.run(
-            ["docker", "rmi", f"{self._image_repo}:{target}"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60.0,
-        )
-        if target == self.installed_version() and self._selection_path.is_file():
-            self._selection_path.unlink()
 
 
 # --- service ---------------------------------------------------------------
@@ -280,8 +169,44 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return self.config.container_name
 
     @property
-    def listen_address(self) -> str:
-        return f"{self.config.listen_host}:{self.config.listen_port}"
+    def listen_address(self) -> str | None:
+        """The bind address, or ``None`` when the port is not known yet."""
+        port = self.effective_host_port()
+        if port is None:
+            return None
+        return f"{self.config.listen_host}:{port}"
+
+    def own_container_names(self) -> tuple[str, ...]:
+        return (self.config.container_name,)
+
+    def published_host_ports(
+        self, bindings: Sequence[ContainerPortBinding] | None = None
+    ) -> Mapping[str, int]:
+        """The host ports this container already publishes, per use site.
+
+        The mapping is structural: the primary use site is the container's
+        internal port, each extra use site is its own container port
+        (ADR-045).
+        """
+        snapshot = container_port_bindings() if bindings is None else bindings
+        own = [b for b in snapshot if b.name == self.config.container_name and b.running]
+        if not own:
+            return {}
+        ports = dict(own[0].port_map)
+        published: dict[str, int] = {}
+        marker = marker_name(self.config.listen_port)
+        if marker is not None and self.config.internal_port is not None:
+            host = ports.get(self.config.internal_port)
+            if host is not None:
+                published[marker] = host
+        for extra in self.config.extra_ports:
+            name = marker_name(extra.host)
+            if name is None:
+                continue
+            host = ports.get(extra.container_port)
+            if host is not None:
+                published[name] = host
+        return published
 
     @property
     def data_dir(self) -> Path:
@@ -344,12 +269,15 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
     def web_ui_endpoint(self) -> str | None:
         if not self.is_running():
             return None
+        port = self.effective_host_port()
+        if port is None:
+            return None
         path = self.config.web_ui_path or "/"
         if not path.startswith("/"):
             path = "/" + path
         if not path.endswith("/"):
             path = path + "/"
-        return f"http://{self.public_host()}:{self.config.listen_port}{path}"
+        return f"http://{self.public_host()}:{port}{path}"
 
     def tail_log(self, n_bytes: int = 8192) -> str:
         # Per the ADR, ``tail_lines`` is a sensible conversion of bytes-to-lines.
@@ -406,8 +334,7 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
             )
 
         container = DockerContainer(self.config.container_name)
-        internal_port = self.config.internal_port or self.config.listen_port
-        ports = {f"{internal_port}/tcp": (self.config.listen_host, self.config.listen_port)}
+        ports = self._port_map()
 
         volumes = {
             container_path: str(host) for container_path, host in self.config.extra_volumes.items()
@@ -438,6 +365,34 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
             shm_size=self.config.shm_size,
             security_opts=self.config.security_opts,
         )
+
+    def _port_map(self) -> dict[str, tuple[str, int]]:
+        """The ``-p`` map, with every auto-port marker materialised.
+
+        The markers are resolved at start time — the point where the port
+        is actually needed — through the same substitution engine the
+        loader uses, with the allocator as the resolution source.
+        """
+        from .loader import resolve_placeholders
+
+        resolved = resolve_placeholders(
+            {
+                "primary": self.config.listen_port,
+                "extra": [
+                    {"container": extra.container_port, "host": extra.host}
+                    for extra in self.config.extra_ports
+                ],
+            },
+            self._ctx,
+            {},
+            ports=self.port_binder().resolver(),
+        )
+        assert_no_markers(resolved, f"{self.name} port map")
+        primary = int(resolved["primary"])
+        ports = {f"{self.config.internal_port or primary}/tcp": (self.config.listen_host, primary)}
+        for extra in resolved["extra"]:
+            ports[f"{extra['container']}/tcp"] = (self.config.listen_host, int(extra["host"]))
+        return ports
 
     def _resolve_or_generate_token(self) -> str:
         """Resolve the auth token to inject — file → generate.
@@ -496,15 +451,23 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return result
 
     def status(self) -> ServiceStatus:
+        port = self.effective_host_port()
         endpoint = (
-            f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}"
-            f":{self.config.listen_port}/"
+            None
+            if port is None
+            else f"http://{HealthProbe.resolve_connect_host(self.config.listen_host)}:{port}/"
         )
         if not DockerContainer(self.config.container_name).is_running():
             return ServiceStatus(state=ServiceState.STOPPED, endpoint=endpoint)
+        if port is None:
+            return ServiceStatus(
+                state=ServiceState.STARTING,
+                endpoint=endpoint,
+                message=self.unrecorded_port_message(),
+            )
         probe = HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         )
         if probe.probe():
@@ -512,9 +475,12 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         return ServiceStatus(state=ServiceState.STARTING, endpoint=endpoint)
 
     def wait_ready(self, timeout_s: float) -> bool:
+        port = self.effective_host_port()
+        if port is None:
+            return False
         return HealthProbe(
             self.config.listen_host,
-            self.config.listen_port,
+            port,
             probe_path=self.config.health_probe_path,
         ).wait_ready(timeout_s)
 
@@ -529,4 +495,5 @@ __all__ = [
     "DockerImageInstall",
     "DockerService",
     "DockerServiceConfig",
+    "ExtraPort",
 ]

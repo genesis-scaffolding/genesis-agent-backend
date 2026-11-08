@@ -26,7 +26,7 @@ import pytest
 
 from genesis_worker.contracts import ServiceState, ServiceStatus
 from genesis_worker.contracts.host import HostInfo
-from genesis_worker.services import llama_swap as _llama_swap_module
+from genesis_worker.services.llama_swap import lifecycle as _llama_swap_lifecycle
 from genesis_worker.utils.collectors import host_info as _host_info_module
 from genesis_worker.utils.collectors import metrics as _metrics_module
 from genesis_worker.utils.models import MachineMetrics
@@ -111,6 +111,20 @@ def _stub_docker_probes(request, monkeypatch: pytest.MonkeyPatch) -> None:
     # ``self`` when accessed via an instance. ``staticmethod()`` would
     # strip ``self`` and the call would raise ``TypeError``.
     monkeypatch.setattr(DockerContainer, "is_running", lambda self: False)
+
+
+@pytest.fixture(autouse=True)
+def _stub_container_port_bindings(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the registry's adoption pass off the docker daemon (ADR-045).
+
+    The pass reads every container's port bindings once per registry
+    construction; without this stub that is a real ``docker ps`` +
+    ``docker inspect`` roundtrip in the test suite. Tests that exercise
+    adoption patch their own snapshot on top of this stub.
+    """
+    if "integration" in request.keywords:
+        return
+    monkeypatch.setattr("genesis_worker.registries.container_port_bindings", list)
 
 
 @pytest.fixture(autouse=True)
@@ -204,7 +218,7 @@ def _llama_swap_lifecycle_seam(request, monkeypatch: pytest.MonkeyPatch) -> None
     if "integration" in request.keywords:
         return
 
-    lifecycle = _llama_swap_module.lifecycle
+    lifecycle = _llama_swap_lifecycle
 
     monkeypatch.setattr(
         lifecycle, "start_swap", lambda *args, **kwargs: _llama_swap_seam_error("start_swap")

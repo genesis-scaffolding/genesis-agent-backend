@@ -85,6 +85,7 @@ container:                 # docker-only
   listen_host: 0.0.0.0
   listen_port: 8080
   internal_port: 8080      # optional; defaults to listen_port
+  extra_ports: []          # optional; extra published ports (see "Auto-port placeholders")
   health_probe_path: /     # path the framework probes to confirm "RUNNING"
   web_ui_path: /           # appended to listen_address for the "Open Web UI" button
   restart_policy: unless-stopped
@@ -225,6 +226,106 @@ stores it on `AuthConfig.enabled` as `bool | None`. Runtime code reads
 `self.config.auth.enabled` directly — no `getattr` lookup, no string
 reference, no "is this the right option name" surprises.
 
+### Auto-port placeholders (`$auto_port.<name>`)
+
+A `port` option may ask the framework for a host port instead of naming one:
+
+```yaml
+options:
+  listen_port:
+    type: port
+    default: "$auto_port.listen"     # the framework allocates this one
+```
+
+The marker is a key in the existing `$` namespace — no second templating
+language. It rides the loader's substitution rounds untouched and is
+materialised into an allocated integer when the service starts (ADR-043).
+
+**How it works.**
+
+1. At load time the marker survives the substitution rounds, exactly the way
+   `$images.<name>` does. The spec loads; nothing is allocated yet.
+2. At start time — the moment the runtime command is built — the framework
+   allocates a host port for the use site and writes the integer into the
+   command. The container's port map, the rendered `docker-compose.yml`, or
+   the tmux command line never sees a marker.
+3. The allocation is persisted at `<state_dir>/port_allocations.yaml`:
+
+   ```yaml
+   allocations:
+     metube:
+       listen: 18000
+   ```
+
+   The file is the reason an allocation survives a worker restart: the
+   container keeps running, and the framework's view of its port has to
+   match.
+
+**A running container's port is adopted.** The allocation is written when
+the service starts — but a container that was already running when its spec
+adopted the marker has no record, and the framework would report `starting`
+with no endpoint forever. So the worker also *observes* the node: at startup
+it reads the port bindings of the running containers it owns and records the
+port each one publishes (ADR-045). The record is an ordinary record, so the
+sticky rule keeps the port across the next restart. A stopped container
+publishes nothing, so nothing is adopted from it, and a port another service
+already holds is refused.
+
+**The range.** `18000-18999`, outside the Linux ephemeral range, so the
+kernel never hands one of these to an outbound connection. The range is a
+constructor argument of the allocator, not a hard-coded constant.
+
+**"Free" means free in the real world.** A candidate port is skipped when it
+is allocated to another service, is the fixed port of a registered service
+or of the framework itself (worker API 20985, worker UI 8501), is declared
+by a container that is not ours, or is already bound on the host. The
+allocation is sticky: the recorded port is reused on the next start as long
+as it is still free — a service keeps its port across restarts.
+
+**One marker name, one port.** Within a service, a marker name identifies one
+port. Two *use sites* may not share a name — the loader rejects the spec and
+names both. Two *references* to the same use site are fine, which is what
+makes this work:
+
+```yaml
+options:
+  listen_port:
+    type: port
+    default: "$auto_port.listen"
+container:
+  listen_port: $options.listen_port     # a reference, not a second use site
+  internal_port: 8081                   # required: the container port can't default
+```
+
+A `port` option whose current value is a marker renders in the configure
+panel as the allocated port plus an **assign automatically** checkbox. While
+the checkbox is ticked, Apply writes nothing for that option, so the YAML
+default — the marker — survives; unticking it and applying pins an ordinary
+fixed port.
+
+**Per-kind materialisation points.**
+
+| Kind | Where the marker lives | Materialised at |
+|---|---|---|
+| `docker` | `container.listen_port`, `container.extra_ports[].host`, or the `port` option they reference | the `-p` map in `start()` |
+| `compose` | the `port` option, referenced from `compose_template` as `$options.X`, or written literally in the template | the rendered `docker-compose.yml` |
+| `uv` | the `port` option, referenced from `command`, or written literally in the command | the tmux command line |
+
+A docker service that needs a second published port declares it:
+
+```yaml
+container:
+  listen_port: $options.listen_port
+  internal_port: 8081
+  extra_ports:
+    - container: 9000
+      host: "$auto_port.api"
+```
+
+**The allocated port is observable** in three places that already exist: the
+service's own `status()` / `web_ui_endpoint()`, the node-local registry file,
+and the container's own port bindings. The HTTP API is unchanged.
+
 ### Where placeholders can appear
 
 | Field | Placeholders supported? |
@@ -236,6 +337,7 @@ reference, no "is this the right option name" surprises.
 | `pre_start_hooks[].target` | Yes (resolved before the hook fires) |
 | `image.repo`, `image.tag` | No — these are concrete image references |
 | `container.listen_host`, `listen_port`, `internal_port`, `public_host` | Yes (`$options.X` only) — user-editable since ADR-036 |
+| `container.listen_port`, `container.extra_ports[].host` | Yes — also `$auto_port.<name>` (ADR-043) |
 
 ## Options block
 
@@ -258,8 +360,9 @@ env-var-style configuration the YAML DSL is enough.
 
 Three new types landed in ADR-036:
 
-- **`port`** — `int` constrained to `(0, 65536)`. Use for `listen_port`,
-  `internal_port`, and any other service-controlled port.
+- **`port`** — `int` constrained to `(0, 65536)`, or a `$auto_port.<name>`
+  marker asking the framework to allocate the port (ADR-043). Use for
+  `listen_port`, `internal_port`, and any other service-controlled port.
 - **`env_map`** — `dict[str, str]`. A free-form map of additional env
   vars. The user populates key/value pairs through the configure panel;
   YAML-declared typed knobs in `env:` still win on collision (the typed
@@ -356,6 +459,29 @@ If `key` is set but the body doesn't carry it, the hook raises
 `ValueError` and the start fails: a stale on-disk file must never be
 picked up by accident because the new body happened to omit a key. With
 `key` unset the behaviour is unchanged (the whole body is written).
+
+**The `options` key — option values the orchestrator pushes**
+(ADR-046). A config body may carry an `options` key: the values the
+service's own options should take. The start path applies them to the
+service's per-service override sidecar (the same store the Configure
+panel writes to) and rebuilds the service, so the values the container
+is rendered from are the pushed ones. A body without an `options` key
+changes nothing.
+
+```json
+{
+  "routes": { "http": { "routers": {} } },
+  "options": {
+    "dns_provider": "godaddyv3",
+    "dns_api_token": "<the provider's personal access token>",
+    "acme_email": "admin@example.com"
+  }
+}
+```
+
+`options` is never written to a file by a hook — only file-shaped keys
+are. The service must be a YAML-declared service: the option schema and
+the rebuild path only exist there.
 
 **Adding a new hook kind** is one function in `utils/services/hooks.py`:
 
@@ -691,8 +817,6 @@ YAML can't express:
 - **Multi-process services** that need orchestration across several
   containers / processes. Declarative services are one container or one
   binary.
-- **Dynamic port discovery** — `listen_port` is a fixed integer. If the
-  service picks its own port and reports it via API, you need Python.
 - **Lifecycle that doesn't fit start/stop/status** — anything requiring a
   third state (e.g. "migrating") or a custom restart sequence.
 

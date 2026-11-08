@@ -24,6 +24,7 @@ from .context import PluginContext, ServiceContext, SourceContext
 from .host import ComputeDevice, CpuDevice, GpuDevice, Hardware, HostInfo
 from .install import InstallState, InstallVersion, ServiceInstall
 from .plugin import Plugin
+from .ports import PortAllocator
 from .secret import NoSecretsAccessor, SecretsAccessor, StaticSecretsAccessor
 from .service import (
     InferenceService,
@@ -67,6 +68,7 @@ __all__ = [
     "NoSecretsAccessor",
     "Plugin",
     "PluginContext",
+    "PortAllocator",
     "SecretsAccessor",
     "ServiceCapabilities",
     "ServiceCapabilityError",
