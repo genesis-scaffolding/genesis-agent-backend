@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -199,7 +200,13 @@ class InferenceService(Plugin):
 
     # can_export_for_agent
 
-    def export_for_agent(self, *, catalog: Catalog, base_url: str | None = None) -> dict:
+    def export_for_agent(
+        self,
+        *,
+        catalog: Catalog,
+        base_url: str | None = None,
+        provider: str | None = None,
+    ) -> dict:
         raise NotImplementedError(f"{self.name} does not export agent config")
 
     def write_agent_config(
@@ -209,6 +216,23 @@ class InferenceService(Plugin):
 
     def agent_config_target(self) -> Path:
         raise NotImplementedError(f"{self.name} does not export agent config")
+
+    # artefacts
+
+    def artefact(
+        self,
+        name: str,
+        *,
+        catalog: Catalog,
+        params: Mapping[str, str] | None = None,
+    ) -> dict | None:
+        """Serve a generated artefact by name; ``None`` when this service has none.
+
+        ADR-043. The framework passes the query parameters through
+        verbatim — it never interprets them. A service that generates
+        artefacts (llama-swap's pi ``models.json``) overrides this.
+        """
+        return None
 
     @property
     def ui_pages(self) -> list[UiPage]:
