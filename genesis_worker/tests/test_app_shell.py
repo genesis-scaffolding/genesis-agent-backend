@@ -58,7 +58,7 @@ def test_dashboard_references_services_catalog() -> None:
     """
     source = (_FRAMEWORK_UI / "dashboard.py").read_text()
     assert "services_catalog.py" in source
-    assert "switch_page" in source
+    assert "switch_to" in source
 
 
 def test_app_nav_registers_settings_page() -> None:

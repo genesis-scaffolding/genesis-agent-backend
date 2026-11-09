@@ -9,7 +9,7 @@ import streamlit as st
 from genesis_worker.contracts import InstallState
 from genesis_worker.contracts.host import ComputeDevice, CpuDevice, GpuDevice
 from genesis_worker.services.llama_swap.generate_config import DEFAULT_HARDCODED_FLAGS
-from genesis_worker.utils.ui._nav import to_relative
+from genesis_worker.utils.ui._nav import switch_to
 from genesis_worker.utils.ui._service_controls import render_service_controls
 from genesis_worker.utils.ui._tail_log import render_tail_log
 
@@ -92,7 +92,7 @@ with st.container(border=True):
     with cols[1]:
         config_editor = next(p for p in svc.ui_pages if p.label == "Config editor")
         if st.button("Manage config →", key="status-manage"):
-            st.switch_page(to_relative(config_editor.path))
+            switch_to(config_editor)
 
 
 # --- Variant ---------------------------------------------------------------
@@ -275,7 +275,7 @@ with st.container(border=True):
         with cols[2]:
             binaries_page = next(p for p in svc.ui_pages if p.label == "Binaries")
             if st.button("Manage →", key=f"status-binaries-{installable.name}"):
-                st.switch_page(to_relative(binaries_page.path))
+                switch_to(binaries_page)
 
 
 # --- Console ---------------------------------------------------------------

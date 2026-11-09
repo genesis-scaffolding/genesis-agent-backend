@@ -30,6 +30,7 @@ import streamlit as st
 
 from genesis_worker.utils.config_overrides import read_user_overrides
 from genesis_worker.utils.models import SettingSnapshot
+from genesis_worker.utils.ui._nav import switch_to
 
 worker = st.session_state["worker"]
 
@@ -236,9 +237,7 @@ with st.container(border=True):
                         key=f"settings-open-{info.name}",
                         use_container_width=True,
                     ):
-                        from genesis_worker.utils.ui._nav import to_relative
-
-                        st.switch_page(to_relative(pages[0].path))
+                        switch_to(pages[0])
 
 
 __all__ = []

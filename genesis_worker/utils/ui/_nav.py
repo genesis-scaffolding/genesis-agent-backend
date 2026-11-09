@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-import os.path
-from pathlib import Path
+import streamlit as st
 
-# st.switch_page resolves paths relative to the main app script's directory,
-# which is genesis_worker/ui/app.py. This file lives at
-# genesis_worker/utils/ui/_nav.py, so the main app's directory is two
-# levels up from here, then into the "ui" directory.
-MAIN_APP_DIR = Path(__file__).parents[2] / "ui"
+from genesis_worker.contracts import UiPage
 
 
-def to_relative(page_path: Path) -> str:
-    """Return ``page_path`` as a path string relative to the main script's dir.
+def switch_to(page: UiPage) -> None:
+    """Navigate to a page by its URL pathname.
 
-    ``st.switch_page`` requires a file path relative to the directory of the
-    main app script. ``Path.relative_to`` refuses ``..`` segments, so we
-    use ``os.path.relpath`` which handles sibling directories like
-    ``../services/llama_swap/ui/status.py``.
+    ``st.switch_page`` given a file path matches the registered pages by
+    path and takes the first match. The framework's shared status and image
+    dispatchers are one file serving many services, so a file path does not
+    identify a page. Passing the ``st.Page`` routes by URL pathname, which
+    is unique per page.
     """
-    return os.path.relpath(str(page_path), start=str(MAIN_APP_DIR))
+    st.switch_page(
+        st.Page(
+            str(page.path),
+            title=page.label,
+            icon=page.icon,
+            url_path=page.url_path,
+        )
+    )
