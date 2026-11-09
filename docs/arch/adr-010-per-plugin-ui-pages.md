@@ -131,7 +131,7 @@ The framework dashboard (`genesis_worker/ui/dashboard.py`) is the cross-service 
 ```
 
   - `[ Stop ]` / `[ Start ]` — always present, paired with the state indicator. Renders inline; no navigation.
-  - `[ Admin ]` — always present. `st.switch_page()` to the service's landing page.
+  - `[ Admin ]` — always present. `switch_to()` to the service's landing page.
   - `[ Web UI ↗ ]` — only when `has_web_ui` AND the service is running. `st.link_button()` to `status.endpoint`.
 
 - **Vault section:** tabbed catalog (one tab per source) + an Acquire widget (select source → navigate to its acquire landing page).

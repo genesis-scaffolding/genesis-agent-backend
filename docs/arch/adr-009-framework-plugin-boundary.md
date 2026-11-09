@@ -45,6 +45,14 @@ Enforced by `test_plugin_boundary.py`, which AST-walks every module under `sourc
 
 The framework's Streamlit pages and the plugin pages both call `st.switch_page`, which requires a path string relative to the main app script's directory (`genesis_worker/ui/`). A plugin page that needs to navigate to another page (e.g. `status.py` → `config_editor.py`) cannot express that in absolute terms; the relative path is the only correct form, and computing it from the plugin's own location is a fragile hand-written offset.
 
+> **Amended by t-zh9duh (2026-11-09).** The path-relative form was the defect: the
+> framework's shared dispatcher pages (`default_service_status.py`,
+> `default_service_images.py`) are one file serving many services, so
+> `st.switch_page` given a file path matched the registered pages by path and took
+> the first match — every service's Admin button landed on the same page.
+> Navigation is by URL pathname via `genesis_worker.utils.ui._nav.switch_to`, which
+> is unique per page.
+
 The natural place for that helper is in a `utils` package that both sides can import:
 
 ```
@@ -61,7 +69,7 @@ genesis_worker/
 The allowed surfaces for a plugin become:
 
 - `genesis_worker.contracts` — the ABCs and types
-- `genesis_worker.utils` — self-contained helpers (currently `utils/ui/_nav.py` for path-relative navigation; future formatting, streaming, etc. go here too)
+- `genesis_worker.utils` — self-contained helpers (currently `utils/ui/_nav.py` for URL-pathname navigation; future formatting, streaming, etc. go here too)
 - the plugin's own package
 
 The boundary test in `test_plugin_boundary.py` is updated to accept both top-level surfaces and to walk `utils/` independently to enforce the leaf invariant.

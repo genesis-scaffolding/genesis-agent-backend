@@ -178,17 +178,10 @@ def test_nav_url_paths_are_unique(tmp_path: Path) -> None:
     assert not duplicates, f"duplicate URL pathnames in the nav: {sorted(duplicates)}"
 
 
-def test_streamlit_accepts_the_nav(tmp_path: Path) -> None:
-    """Streamlit itself must accept the nav — no duplicate pathname."""
-    worker = _worker_with_every_service_enabled(tmp_path)
-    pages = _nav_pages(worker)
-
-    entries = ",\n".join(
-        f'            ("{path}", {"None" if explicit is None else repr(explicit)}),'
-        for path, explicit in pages
-    )
-    app = tmp_path / "nav_app.py"
-    app.write_text(
+def _nav_app_source(pages: list[tuple[Path, str | None]]) -> str:
+    """A runnable app that registers exactly these pages with ``st.navigation``."""
+    entries = "\n".join(f"    ({str(path)!r}, {explicit!r})," for path, explicit in pages)
+    return (
         "import streamlit as st\n"
         "\n"
         "_PAGES = [\n"
@@ -198,16 +191,54 @@ def test_streamlit_accepts_the_nav(tmp_path: Path) -> None:
         "st.navigation(\n"
         "    {\n"
         '        "Overview": [\n'
-        '            st.Page(path, title="Page", icon=":material/page:", url_path=url_path)\n'
+        '            st.Page(path, title="Page", icon=":material/dashboard:", url_path=url_path)\n'
         "            for path, url_path in _PAGES\n"
         "        ]\n"
         "    }\n"
         ")\n"
     )
 
+
+def _run_nav_app(tmp_path: Path, source: str) -> AppTest:
+    """Write the generated app, prove it parses, then run it.
+
+    A generated app that does not compile is logged by Streamlit as a
+    script compilation error and never reaches the forward-message stream,
+    so a broken generator would leave the test green. Parse it here.
+    """
+    try:
+        ast.parse(source)
+    except SyntaxError as exc:
+        pytest.fail(f"generated nav app does not parse: {exc}")
+    app = tmp_path / "nav_app.py"
+    app.write_text(source)
     at = AppTest.from_file(str(app), default_timeout=30)
     at.run()
+    return at
+
+
+def test_streamlit_accepts_the_nav(tmp_path: Path) -> None:
+    """Streamlit itself must accept the nav — no duplicate pathname."""
+    worker = _worker_with_every_service_enabled(tmp_path)
+    pages = _nav_pages(worker)
+    at = _run_nav_app(tmp_path, _nav_app_source(pages))
     assert not at.exception, f"st.navigation rejected the nav: {at.exception}"
+
+
+def test_streamlit_rejects_a_duplicate_url_pathname(tmp_path: Path) -> None:
+    """A duplicate pathname is a loud startup error, not a silent misroute.
+
+    This is what makes pathname routing safe: the collision the file-path
+    form hid — one dispatcher file serving many services — cannot be
+    registered at all.
+    """
+    worker = _worker_with_every_service_enabled(tmp_path)
+    pages: list[tuple[Path, str | None]] = [
+        (path, "shared_status") for path, _ in _nav_pages(worker)
+    ]
+    at = _run_nav_app(tmp_path, _nav_app_source(pages))
+    assert at.exception, "st.navigation accepted a nav with a duplicate URL pathname"
+    assert "shared_status" in str(at.exception)
 
 
 # --- call sites go through the helper ---------------------------------------
