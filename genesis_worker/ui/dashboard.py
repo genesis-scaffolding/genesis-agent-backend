@@ -10,9 +10,9 @@ from pathlib import Path
 
 import streamlit as st
 
-from genesis_worker.contracts import ServiceCategory
+from genesis_worker.contracts import ServiceCategory, UiPage
 from genesis_worker.ui._render import format_bytes
-from genesis_worker.utils.ui._nav import to_relative as _to_relative
+from genesis_worker.utils.ui._nav import switch_to
 from genesis_worker.utils.ui._service_controls import (
     render_action_button,
     render_service_controls,
@@ -24,7 +24,11 @@ worker = st.session_state["worker"]
 # Used by the "Manage services" button in the Services section to give
 # users a one-click path to enable/disable services (the dashboard and
 # sidebar only show enabled services — ADR-029).
-_SERVICES_CATALOG_PATH = Path(__file__).parent / "services_catalog.py"
+_SERVICES_CATALOG_PAGE = UiPage(
+    "Service Catalog",
+    ":material/apps:",
+    Path(__file__).parent / "services_catalog.py",
+)
 
 st.title("Genesis Worker")
 
@@ -198,7 +202,7 @@ def _render_service_card(col, info) -> None:
                     key=f"admin-{info.name}",
                     use_container_width=True,
                 ):
-                    st.switch_page(_to_relative(pages[0].path))
+                    switch_to(pages[0])
 
 
 with st.container(border=True):
@@ -215,7 +219,7 @@ with st.container(border=True):
             key="dash-manage-services",
             use_container_width=True,
         ):
-            st.switch_page(_to_relative(_SERVICES_CATALOG_PATH))
+            switch_to(_SERVICES_CATALOG_PAGE)
 
     services_info = worker.list_enabled_services()
     if not services_info:
@@ -307,7 +311,7 @@ with st.container(border=True):
                                     key=f"src-open-{info.name}-0",
                                     use_container_width=True,
                                 ):
-                                    st.switch_page(_to_relative(pages[0].path))
+                                    switch_to(pages[0])
                             else:
                                 st.empty()
                         with action_cols[1]:
@@ -317,7 +321,7 @@ with st.container(border=True):
                                     key=f"src-open-{info.name}-1",
                                     use_container_width=True,
                                 ):
-                                    st.switch_page(_to_relative(pages[1].path))
+                                    switch_to(pages[1])
                             else:
                                 st.empty()
         st.markdown("</div>", unsafe_allow_html=True)

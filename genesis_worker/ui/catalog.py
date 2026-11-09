@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis_worker.ui._render import format_bytes, render_entry
-from genesis_worker.utils.ui._nav import to_relative as _to_relative
+from genesis_worker.utils.ui._nav import switch_to
 
 worker = st.session_state["worker"]
 
@@ -111,7 +111,7 @@ with st.container(border=True):
                 f"Get new model with {info.display_name}",
                 key="catalog-acquire-go",
             ):
-                st.switch_page(_to_relative(worker.source(info.name).ui_pages[0].path))
+                switch_to(worker.source(info.name).ui_pages[0])
         else:
             choice_info = st.selectbox(
                 "Source",
@@ -123,7 +123,7 @@ with st.container(border=True):
                 f"Get new model with {choice_info.display_name}",
                 key="catalog-acquire-go",
             ):
-                st.switch_page(_to_relative(worker.source(choice_info.name).ui_pages[0].path))
+                switch_to(worker.source(choice_info.name).ui_pages[0])
 
     st.divider()
 
