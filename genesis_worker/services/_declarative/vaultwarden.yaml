@@ -1,0 +1,217 @@
+# Vaultwarden declarative service spec.
+#
+# Self-hosted password manager (vaultwarden/server). The image serves
+# plain HTTP on container port 80; we map host 8102 -> container 80
+# (8102 is the next free port after the 8096-8101 band the other
+# services use). The whole vault -- the SQLite database, the RSA
+# signing keys, config.json, attachments and Sends -- lives under
+# ``$data_dir/data``, bind-mounted at the upstream ``/data`` path.
+#
+# TLS belongs to Traefik: the service stays plain HTTP behind the
+# ingress, and ``DOMAIN`` carries the public HTTPS URL that clients
+# and outgoing mail link to. Do not set ``ROCKET_TLS`` or mount
+# certificates here.
+#
+# ADMIN TOKEN
+# ------------
+# The admin page is protected by ``ADMIN_TOKEN``. The declarative
+# ``auth`` block owns it: a 256-bit token is generated once into
+# ``$state_dir/admin_token`` (mode 0600) and injected into the
+# container at start time, so it survives worker restarts and image
+# updates. The ``admin_token`` option overrides it -- an Argon2id PHC
+# string is the hardened form, and the admin login then asks for the
+# ORIGINAL secret, not the PHC string. The generic ``auth_token``
+# status panel is deliberately absent: it renders an HTTP bearer
+# token, which would mislabel the admin password.
+#
+# SMTP
+# ----
+# Vaultwarden enables mail only when SMTP_HOST *and* SMTP_FROM are
+# set, and it counts an EMPTY value as "set": a container started
+# with ``SMTP_HOST=`` refuses to boot ("Both `SMTP_HOST` and
+# `SMTP_FROM` need to be set for email support without
+# `USE_SENDMAIL`"). The declarative env block cannot leave a variable
+# out, so the two variables that have to appear together are
+# configured through the ``extra_env`` map: add SMTP_HOST and
+# SMTP_FROM (both, or neither) to the Extra environment variables
+# editor. The remaining SMTP knobs are typed options.
+#
+# FIRST RUN
+# ---------
+# Public signup is on by default so the first account can be created
+# without mail. Create that account, then set ``signups_allowed`` to
+# false and Apply & restart.
+#
+# See https://github.com/dani-garcia/vaultwarden and
+# https://github.com/dani-garcia/vaultwarden/wiki/Enabling-admin-page.
+
+version: 1
+kind: docker
+name: vaultwarden
+display_name: Vaultwarden
+description: Self-hosted password manager
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: vaultwarden/server
+  tag: latest
+  install_name: vaultwarden
+  source_url: https://hub.docker.com/r/vaultwarden/server
+
+container:
+  name: vaultwarden
+  listen_host: 0.0.0.0
+  listen_port: $options.listen_port
+  internal_port: 80           # the image's EXPOSE 80
+  health_probe_path: /alive   # database-aware readiness route
+  web_ui_path: /
+  restart_policy: unless-stopped
+  # The image runs as root and writes the mounted /data itself; it
+  # does not implement PUID/PGID.
+  puid_default: false
+  pgid_default: false
+
+env:
+  DOMAIN: "$options.domain"
+  ROCKET_ADDRESS: "0.0.0.0"
+  ROCKET_PORT: "80"
+  SIGNUPS_ALLOWED: "$options.signups_allowed"
+  SIGNUPS_VERIFY: "$options.signups_verify"
+  INVITATIONS_ALLOWED: "$options.invitations_allowed"
+  # Traefik forwards the client address in X-Forwarded-For. "local"
+  # trusts the header from any non-global address (the ingress runs
+  # on the same host or container network), so a client cannot spoof
+  # its IP past Vaultwarden's login rate limits.
+  IP_HEADER: "X-Forwarded-For"
+  IP_HEADER_TRUSTED_PROXIES: "local"
+  TZ: "$options.tz"
+  LOG_LEVEL: "$options.log_level"
+  # SMTP_HOST and SMTP_FROM are configured through the extra_env map
+  # -- see the SMTP note in the header.
+  SMTP_PORT: "$options.smtp_port"
+  SMTP_SECURITY: "$options.smtp_security"
+  SMTP_USERNAME: "$options.smtp_username"
+  SMTP_PASSWORD: "$options.smtp_password"
+  SMTP_FROM_NAME: "$options.smtp_from_name"
+
+volumes:
+  /data: "$data_dir/data"
+
+pre_start_hooks:
+  - kind: ensure_persistent_token
+    target: "$state_dir/admin_token"
+    mode: "0o600"
+    generator: random_hex_32
+
+auth:
+  token_env_var: ADMIN_TOKEN
+  token_file: "$state_dir/admin_token"
+  token_file_mode: "0o600"
+  token_generator: random_hex_32
+  fallback_option: "$options.admin_token"
+
+options:
+  listen_port:
+    type: port
+    default: 8102
+    ui_label: Web UI port
+    ui_help: Host-side port Vaultwarden listens on (Traefik proxies to it)
+    ui_group: Network
+  domain:
+    type: string
+    default: "http://localhost"
+    ui_label: Public URL
+    ui_help: The externally visible HTTPS URL of the vault (e.g. https://vaultwarden-node.example.com), not the internal plain-HTTP address. Vaultwarden builds client-facing links from it, and a URL with a path moves every route under that prefix.
+    ui_group: General
+  tz:
+    type: string
+    default: "UTC"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Europe/Paris)
+    ui_group: General
+  log_level:
+    type: string
+    default: "info"
+    ui_help: Vaultwarden log verbosity (error, warn, info, debug, trace)
+    ui_group: General
+  admin_token:
+    type: string
+    optional: true
+    default: null
+    ui_label: Admin token
+    ui_help: Fixed ADMIN_TOKEN for the /admin page. Leave blank to use the generated token in the state file. An Argon2id PHC string is the hardened form -- the admin login then asks for the ORIGINAL secret, not the PHC string.
+    ui_group: Security
+  signups_allowed:
+    type: bool
+    default: true
+    ui_label: Allow public signup
+    ui_help: Lets anyone create an account. Needed for the first account when no mail server is configured -- turn it off again once that account exists.
+    ui_group: Access
+  signups_verify:
+    type: bool
+    default: false
+    ui_label: Verify signup by email
+    ui_help: Requires a working mail server (SMTP_HOST and SMTP_FROM). Enable it only after mail is configured, or new registrations stall.
+    ui_group: Access
+  invitations_allowed:
+    type: bool
+    default: false
+    ui_label: Allow invitations
+    ui_help: Allows inviting other users by mail. Needs a working mail server (SMTP_HOST and SMTP_FROM).
+    ui_group: Access
+  smtp_port:
+    type: int
+    default: 587
+    ui_label: SMTP port
+    ui_help: Mail server port. Use 465 together with the "force_tls" security setting when the relay demands implicit TLS.
+    ui_group: Mail
+  smtp_security:
+    type: string
+    default: "starttls"
+    ui_label: SMTP security
+    ui_help: "Transport security for the mail server: starttls, force_tls or off"
+    ui_group: Mail
+  smtp_username:
+    type: string
+    default: ""
+    ui_label: SMTP username
+    ui_help: Mail server user. Leave blank for an unauthenticated relay.
+    ui_group: Mail
+  smtp_password:
+    type: string
+    default: ""
+    ui_label: SMTP password
+    ui_help: Mail server password. Leave blank for an unauthenticated relay.
+    ui_group: Mail
+  smtp_from_name:
+    type: string
+    default: "Vaultwarden"
+    ui_label: SMTP sender name
+    ui_help: Display name on outgoing mail
+    ui_group: Mail
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Extra environment variables
+    ui_help: Additional Vaultwarden env vars (see https://github.com/dani-garcia/vaultwarden/wiki/Enabling-SMTP). Mail stays disabled until SMTP_HOST and SMTP_FROM are added here -- both of them, an empty value counts as set and stops the container from booting.
+    ui_group: Advanced
+  extra_mounts:
+    type: mount_map
+    default: {}
+    ui_label: Extra volume mounts
+    ui_help: Additional host->container bind mounts
+    ui_group: Advanced
