@@ -795,11 +795,16 @@ def test_vaultwarden_env_mapping(tmp_path: Path) -> None:
     assert env["LOG_LEVEL"] == "info"
     # ADMIN_TOKEN is owned by the ``auth`` block, never by the env block.
     assert "ADMIN_TOKEN" not in env
-    # SMTP_HOST and SMTP_FROM are deliberately absent: Vaultwarden counts
-    # an empty value as "set" and refuses to boot unless BOTH are set.
-    # They are configured through the ``extra_env`` map instead.
+    # The SMTP variables that must appear together are deliberately
+    # absent: Vaultwarden counts an empty value as "set" -- a lone
+    # SMTP_HOST/SMTP_FROM stops the container from booting, and an
+    # empty SMTP_USERNAME/SMTP_PASSWORD pair makes the client
+    # authenticate against a relay that needs no login. They are
+    # configured through the ``extra_env`` map instead.
     assert "SMTP_HOST" not in env
     assert "SMTP_FROM" not in env
+    assert "SMTP_USERNAME" not in env
+    assert "SMTP_PASSWORD" not in env
 
 
 def test_vaultwarden_option_defaults(tmp_path: Path) -> None:
@@ -816,8 +821,6 @@ def test_vaultwarden_option_defaults(tmp_path: Path) -> None:
     assert svc.options.invitations_allowed is False  # type: ignore[attr-defined]
     assert svc.options.smtp_port == 587  # type: ignore[attr-defined]
     assert svc.options.smtp_security == "starttls"  # type: ignore[attr-defined]
-    assert svc.options.smtp_username == ""  # type: ignore[attr-defined]
-    assert svc.options.smtp_password == ""  # type: ignore[attr-defined]
     assert svc.options.smtp_from_name == "Vaultwarden"  # type: ignore[attr-defined]
     assert svc.options.extra_env == {}  # type: ignore[attr-defined]
     assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
@@ -860,7 +863,18 @@ def test_vaultwarden_fixed_admin_token_wins_over_the_generated_file(tmp_path: Pa
     assert svc.config.auth.token_file == ctx.state_dir / "admin_token"
     assert svc.config.auth.token_file_mode == 0o600
     assert svc.config.auth.fallback == phc
-    # The fixed token is what the container gets, whatever the file holds.
+
+    # The pre-start hook writes the generated token to the state file --
+    # and the fixed option still wins over it.
+    hooks = list(svc.config.pre_start_hooks)
+    run_hooks(
+        hooks,
+        PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir),
+    )
+    token_file = ctx.state_dir / "admin_token"
+    generated = token_file.read_text().strip()
+    assert generated
+    assert generated != phc
     assert svc.auth_token() == phc
 
 

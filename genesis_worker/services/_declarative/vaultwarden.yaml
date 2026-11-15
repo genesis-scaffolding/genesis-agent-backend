@@ -30,11 +30,17 @@
 # set, and it counts an EMPTY value as "set": a container started
 # with ``SMTP_HOST=`` refuses to boot ("Both `SMTP_HOST` and
 # `SMTP_FROM` need to be set for email support without
-# `USE_SENDMAIL`"). The declarative env block cannot leave a variable
-# out, so the two variables that have to appear together are
-# configured through the ``extra_env`` map: add SMTP_HOST and
-# SMTP_FROM (both, or neither) to the Extra environment variables
-# editor. The remaining SMTP knobs are typed options.
+# `USE_SENDMAIL`"). The credentials behave the same way: a present
+# but empty ``SMTP_USERNAME``/``SMTP_PASSWORD`` pair installs empty
+# credentials and makes the client attempt a login, which breaks a
+# relay that needs none.
+#
+# The declarative env block cannot leave a variable out, so the four
+# variables that have to appear together are configured through the
+# ``extra_env`` map: add SMTP_HOST and SMTP_FROM together (both, or
+# neither), and add SMTP_USERNAME and SMTP_PASSWORD together (both,
+# or neither) when the relay needs a login. The remaining SMTP knobs
+# are typed options.
 #
 # FIRST RUN
 # ---------
@@ -100,12 +106,11 @@ env:
   IP_HEADER_TRUSTED_PROXIES: "local"
   TZ: "$options.tz"
   LOG_LEVEL: "$options.log_level"
-  # SMTP_HOST and SMTP_FROM are configured through the extra_env map
-  # -- see the SMTP note in the header.
+  # SMTP_HOST, SMTP_FROM, SMTP_USERNAME and SMTP_PASSWORD are
+  # configured through the extra_env map -- see the SMTP note in the
+  # header.
   SMTP_PORT: "$options.smtp_port"
   SMTP_SECURITY: "$options.smtp_security"
-  SMTP_USERNAME: "$options.smtp_username"
-  SMTP_PASSWORD: "$options.smtp_password"
   SMTP_FROM_NAME: "$options.smtp_from_name"
 
 volumes:
@@ -165,13 +170,13 @@ options:
     type: bool
     default: false
     ui_label: Verify signup by email
-    ui_help: Requires a working mail server (SMTP_HOST and SMTP_FROM). Enable it only after mail is configured, or new registrations stall.
+    ui_help: Requires a working mail server (SMTP_HOST and SMTP_FROM in the Extra environment variables editor). Enable it only after mail is configured, or new registrations stall.
     ui_group: Access
   invitations_allowed:
     type: bool
     default: false
     ui_label: Allow invitations
-    ui_help: Allows inviting other users by mail. Needs a working mail server (SMTP_HOST and SMTP_FROM).
+    ui_help: Allows inviting other users by mail. Needs a working mail server (SMTP_HOST and SMTP_FROM in the Extra environment variables editor).
     ui_group: Access
   smtp_port:
     type: int
@@ -185,18 +190,6 @@ options:
     ui_label: SMTP security
     ui_help: "Transport security for the mail server: starttls, force_tls or off"
     ui_group: Mail
-  smtp_username:
-    type: string
-    default: ""
-    ui_label: SMTP username
-    ui_help: Mail server user. Leave blank for an unauthenticated relay.
-    ui_group: Mail
-  smtp_password:
-    type: string
-    default: ""
-    ui_label: SMTP password
-    ui_help: Mail server password. Leave blank for an unauthenticated relay.
-    ui_group: Mail
   smtp_from_name:
     type: string
     default: "Vaultwarden"
@@ -207,7 +200,7 @@ options:
     type: env_map
     default: {}
     ui_label: Extra environment variables
-    ui_help: Additional Vaultwarden env vars (see https://github.com/dani-garcia/vaultwarden/wiki/Enabling-SMTP). Mail stays disabled until SMTP_HOST and SMTP_FROM are added here -- both of them, an empty value counts as set and stops the container from booting.
+    ui_help: "Additional Vaultwarden env vars (see https://github.com/dani-garcia/vaultwarden/wiki/Enabling-SMTP). Mail stays disabled until SMTP_HOST and SMTP_FROM are added here -- both of them, an empty value counts as set and stops the container from booting. Add SMTP_USERNAME and SMTP_PASSWORD together as well when the relay needs a login; an empty pair still makes the client authenticate."
     ui_group: Advanced
   extra_mounts:
     type: mount_map
