@@ -87,7 +87,7 @@ options:
     type: path
     default: "$vault_path/huggingface/hub"
     ui_label: Model cache directory
-    ui_help: The HuggingFace cache speaches reads and writes. Keep it on the model vault's HF cache (<vault>/huggingface/hub) so models are shared with the rest of the fleet. If you moved the HF cache with GENESIS_SOURCES__HUGGINGFACE__LOCAL_PATH, point this at the same directory. It must be writable by uid 1000 (the image's fixed user).
+    ui_help: "The HuggingFace cache speaches reads and writes. Keep it on the model vault's HF cache (<vault>/huggingface/hub) so models are shared with the rest of the fleet. If you moved the HF cache with GENESIS_SOURCES__HUGGINGFACE__LOCAL_PATH, point this at the same directory. It must be writable by uid 1000 (the image's fixed user); on a node whose worker uid differs, chown it once: sudo chown -R 1000:1000 <hf_cache_dir>."
     ui_group: Storage
   enable_ui:
     type: bool

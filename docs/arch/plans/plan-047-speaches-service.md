@@ -11,21 +11,31 @@ Branch: `se/t-q5ip1l-speaches`.
 ADRs: `docs/arch/adr-047-vault-backed-model-stores.md`,
 `docs/arch/adr-048-speech-models-in-the-acquire-flow.md`.
 
-## Amendments (review round 1)
+## Amendments (review rounds 1 and 2)
 
-Two amendments to the plan text below, both applied during the code review of the
-implementation (the plan text itself is left as approved):
+Four amendments to the plan text below, applied during the code reviews of the
+implementation (rounds 1 and 2); the plan text itself is left as approved:
 
-1. **The bundle label carries its directory** (§4.2, the `label = ...` line): the
-   label is the key the acquire UI resolves a selection back to, and two
-   directories can hold the same layout — without the directory, both bundles
-   carry the same label and the UI would silently select the first of them. The
-   label is now `speaches: <layout> (<n> files) - <dir>`.
+1. **The bundle label carries its directory and pluralises its file count**
+   (§4.2, the `label = ...` line): the label is the key the acquire UI resolves
+   a selection back to, and two directories can hold the same layout — without
+   the directory, both bundles carry the same label and the UI would silently
+   select the first of them. The label is now
+   `speaches: <layout> (<n> file[s]) - <dir>`, with the repo root rendered
+   without a suffix and `1 file` / `n files`.
 2. **The progress accounting was reworked to per-file bytes** (§4.2, `_run_inner`):
    the old code added a group's whole size once per file — a three-shard GGUF
    triple-counted the bytes — and printed the byte count as the file index. The
    rework is what makes "the card's bytes are not added to the progress
    counters" hold for a multi-file bundle.
+3. **The parakeet row mirrors upstream's ONNX export** (§4.2, `SPEECH_LAYOUTS`):
+   `SpeechLayout("parakeet", ("encoder-model*.onnx", "decoder_joint-model*.onnx",
+   "vocab.txt"), ("config.json",))`. The `*.nemo` row was the older NeMo export;
+   speaches' own parakeet filter rejects those repos, and the repos it can serve
+   (`istupakov/parakeet-tdt`) match no row of the old table.
+4. **The bundle size counts the weight files only** (§4.2, the `size = ...`
+   line): the model card is metadata, not weights, and its bytes stay out of
+   `bytes_total`.
 
 ---
 
@@ -83,7 +93,9 @@ is extended so the model types speaches needs are acquirable through the Genesis
    to `model.onnx`), so the selectable unit must be the bundle, not the file. New layout table:
    `kokoro` (`model.onnx` + `voices.bin`), `piper` (`model.onnx` + `config.json`),
    `ctranslate2` (`model.bin` + `config.json` + `tokenizer.json` + `vocabulary.*`,
-   optional `preprocessor_config.json`), `parakeet` (`*.nemo`). The names mirror speaches' own
+   optional `preprocessor_config.json`), `parakeet` (`encoder-model*.onnx` +
+   `decoder_joint-model*.onnx` + `vocab.txt`, optional `config.json`). The names
+   mirror speaches' own
    `download_model_files` allow-patterns (upstream `src/speaches/executors/{kokoro,piper,whisper,parakeet}.py`).
    Gen's required minimum (Kokoro + CT2 + README) is covered; Piper and Parakeet are one table row
    each in the same mechanism.
@@ -480,7 +492,7 @@ SPEECH_LAYOUTS: tuple[SpeechLayout, ...] = (
         ("model.bin", "config.json", "tokenizer.json", "vocabulary.*"),
         ("preprocessor_config.json",),
     ),
-    SpeechLayout("parakeet", ("*.nemo",)),
+    SpeechLayout("parakeet", ("encoder-model*.onnx", "decoder_joint-model*.onnx", "vocab.txt"), ("config.json",)),
 )
 
 MODEL_CARD_FILENAME = "README.md"
@@ -510,8 +522,9 @@ Behaviour:
 * within a directory, test each layout: every `required` pattern must match ≥ 1 file;
 * the bundle's `paths` = the matched weight files (layout order) + the matched optional files +
   **`README.md`** (the card is mandatory — a directory without it yields no bundle);
-* `role="speech"`, `is_sharded=False`, `size` = the sum of the files,
-  `label = f"speaches: {layout.name} ({n} files)"`.
+* `role="speech"`, `is_sharded=False`, `size` = the sum of the weight files (the model card
+  is metadata, not weights), `label = f"speaches: {layout.name} ({n} file[s]) - {dir}"` —
+  the repo root carries no directory suffix.
 
 3. **`_inspect()`** — keep the GGUF / safetensors / rad handling exactly as-is and append the
    speech groups:

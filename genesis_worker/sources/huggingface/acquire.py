@@ -82,8 +82,24 @@ SPEECH_LAYOUTS: tuple[SpeechLayout, ...] = (
         ("model.bin", "config.json", "tokenizer.json", "vocabulary.*"),
         ("preprocessor_config.json",),
     ),
-    SpeechLayout("parakeet", ("*.nemo",)),
+    SpeechLayout(
+        "parakeet",
+        ("encoder-model*.onnx", "decoder_joint-model*.onnx", "vocab.txt"),
+        ("config.json",),
+    ),
 )
+
+
+def bundle_label(layout_name: str, count: int, directory: str) -> str:
+    """Label of one speech bundle: its layout, its file count, its directory.
+
+    The directory is part of the label because the label is the key the
+    acquire UI resolves a selection back to, and two directories can hold
+    the same layout. The repo root carries no directory suffix.
+    """
+    files = "file" if count == 1 else "files"
+    where = "" if directory == "." else f" - {directory}"
+    return f"speaches: {layout_name} ({count} {files}){where}"
 
 
 @dataclass(frozen=True)
@@ -246,7 +262,7 @@ def speech_groups(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
                     paths=paths,
                     size=size,
                     role="speech",
-                    label=f"speaches: {layout.name} ({len(weights)} files) - {directory}",
+                    label=bundle_label(layout.name, len(weights), directory),
                     is_sharded=False,
                 )
             )
@@ -657,6 +673,7 @@ __all__ = [
     "HfAcquireState",
     "HfAcquireView",
     "SpeechLayout",
+    "bundle_label",
     "classify_path",
     "group_files",
     "speech_groups",

@@ -27,6 +27,17 @@ So the vault could not hold a model that speaches can serve: the flow never surf
 
 The layout table is a copy of speaches' own `download_model_files` allow-patterns (`src/speaches/executors/{kokoro,piper,whisper,parakeet}.py`), so it has to track upstream — a new upstream layout is not acquirable until the table gains a row. The fallback is always the service's own `POST /v1/models/{id}`, which still lands in the vault (ADR-047).
 
+The table's rows are:
+
+| layout | required | optional |
+|---|---|---|
+| `kokoro` | `model.onnx`, `voices.bin` | — |
+| `piper` | `model.onnx`, `config.json` | — |
+| `ctranslate2` | `model.bin`, `config.json`, `tokenizer.json`, `vocabulary.*` | `preprocessor_config.json` |
+| `parakeet` | `encoder-model*.onnx`, `decoder_joint-model*.onnx`, `vocab.txt` | `config.json` |
+
+The parakeet row mirrors upstream's current ONNX export (`onnx_asr`'s `NemoConformerTdt`, whose files speaches looks up as `encoder-model.onnx`, `decoder_joint-model.onnx`, `vocab.txt` and `config.json`). The older `*.nemo` NeMo export is not a row: speaches' own parakeet filter rejects those repos, so no layout could serve them.
+
 ## Decision
 
 We will extend the HuggingFace acquire flow with **layout-aware bundles**: a speech model is surfaced and downloaded as one group whose file set is derived from a small table of known layouts (kokoro, piper, ctranslate2, parakeet). The files of a bundle must live in the same directory in the repo, because that is where they must land together in the cache.
@@ -53,6 +64,7 @@ The role vocabulary grows by one value, `speech`. The acquire contract itself do
 - The acquire contract gains a second shape — a bundle — next to the single-file group. The source's own group dataclass carries the role string, but the code that consumes groups (the selection UI, the validation) now has to know about the `speech` role.
 - The layout table must track upstream's allow-patterns. A repo whose layout is unknown is not acquirable through the UI.
 - One extra request per acquire for the card (a few KB); for non-speech acquires it is best-effort, for a speech bundle it is mandatory.
+- A bundle in a sub-directory is not visible to the service: its card lands at `snapshots/<sha>/<dir>/README.md`, while speaches reads the card from the snapshot root. The same-directory constraint is intentional — a bundle's files must land together in the cache (plan risk 8).
 - The catalogue gains cosmetic noise: `voices.bin` / `model.bin` classify as role *main*, and a Piper/Parakeet entry carries the note "no model weights on disk" because every one of its pieces classifies as *config*. Neither affects the LLM config — the llama-swap filter is extension-based, so TTS/STT entries never reach it.
 
 **Neutral**

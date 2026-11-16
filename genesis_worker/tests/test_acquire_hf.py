@@ -22,6 +22,7 @@ from genesis_worker.sources.huggingface import (
     HfAcquireSession,
     HfAcquireState,
     HfAcquireView,
+    bundle_label,
 )
 
 # ---------------------------------------------------------------------------
@@ -480,7 +481,7 @@ def test_kokoro_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
     assert group.paths == ["model.onnx", "voices.bin", "README.md"]
     # The model card is metadata, not weights: it is not part of the size.
     assert group.size == 300_500_000
-    assert group.label == "speaches: kokoro (2 files) - ."
+    assert group.label == "speaches: kokoro (2 files)"
 
 
 def test_ctranslate2_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
@@ -509,7 +510,7 @@ def test_ctranslate2_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
         "vocabulary.txt",
         "README.md",
     ]
-    assert group.label == "speaches: ctranslate2 (4 files) - ."
+    assert group.label == "speaches: ctranslate2 (4 files)"
 
 
 def test_speech_bundle_without_the_model_card_is_not_offered(tmp_path: Path) -> None:
@@ -527,6 +528,46 @@ def test_speech_bundle_without_the_model_card_is_not_offered(tmp_path: Path) -> 
     assert view.kind == AcquireStateKind.FAILED
     assert view.error is not None
     assert "speech-model" in view.error
+
+
+def test_parakeet_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
+    """A Parakeet repo is the ONNX export speaches serves.
+
+    Upstream's parakeet executor looks up ``encoder-model.onnx``,
+    ``decoder_joint-model.onnx``, ``vocab.txt`` and ``config.json``; the
+    older ``*.nemo`` export is rejected by speaches' own model filter.
+    """
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("encoder-model.onnx", 120_000_000),
+            ("decoder_joint-model.onnx", 40_000_000),
+            ("vocab.txt", 20_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="istupakov/parakeet-tdt")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    assert len(view.targets) == 1
+    group = view.targets[0]
+    assert group.role == "speech"
+    assert group.paths == [
+        "encoder-model.onnx",
+        "decoder_joint-model.onnx",
+        "vocab.txt",
+        "README.md",
+    ]
+    assert group.label == "speaches: parakeet (3 files)"
+
+
+def test_bundle_label_counts_the_files_it_carries() -> None:
+    """One file reads '1 file', more than one reads 'n files'."""
+    assert bundle_label("kokoro", 1, ".") == "speaches: kokoro (1 file)"
+    assert bundle_label("kokoro", 2, ".") == "speaches: kokoro (2 files)"
+    # A bundle outside the repo root carries its directory.
+    assert bundle_label("kokoro", 2, "voices") == "speaches: kokoro (2 files) - voices"
 
 
 def test_speech_bundles_in_two_directories_get_distinct_labels(tmp_path: Path) -> None:
@@ -553,7 +594,7 @@ def test_speech_bundles_in_two_directories_get_distinct_labels(tmp_path: Path) -
     labels = [g.label for g in view.targets]
     assert len(labels) == 2
     assert len(set(labels)) == 2
-    assert "speaches: kokoro (2 files) - ." in labels
+    assert "speaches: kokoro (2 files)" in labels
     assert "speaches: kokoro (2 files) - voices" in labels
 
 
