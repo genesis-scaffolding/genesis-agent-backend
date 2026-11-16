@@ -250,7 +250,7 @@ def test_inspect_no_weights_fails(tmp_path: Path) -> None:
     assert session._state.kind == AcquireStateKind.FAILED
     assert (
         session._state.failure is not None
-        and "no .gguf, .safetensors, or .rad files" in session._state.failure
+        and "no .gguf, .safetensors, .rad, or complete speech-model files" in session._state.failure
     )
 
 

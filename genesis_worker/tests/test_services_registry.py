@@ -63,6 +63,7 @@ def test_registry_all_returns_every_service() -> None:
         "prometheus",
         "romm",
         "sillytavern",
+        "speaches",
         "llama_swap",
         "metube",
         "tidarr",

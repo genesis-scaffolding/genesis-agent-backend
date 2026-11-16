@@ -14,6 +14,7 @@ from typing import Literal
 import pytest
 
 from genesis_worker.contracts.catalog import Catalog, ModelEntry, ModelPiece
+from genesis_worker.contracts.classify import classify
 from genesis_worker.contracts.host import GpuDevice
 from genesis_worker.services.llama_swap.engines import Engine
 from genesis_worker.services.llama_swap.generate_config import (
@@ -371,6 +372,29 @@ def test_evaluate_all_filters_out_image_models(tmp_path: Path) -> None:
     assert set(out) == {"llm-gguf"}
 
 
+def test_evaluate_all_filters_out_speech_models(tmp_path: Path) -> None:
+    """Speech models in the vault never reach the LLM config.
+
+    A Kokoro model (``model.onnx`` + ``voices.bin``) and a CT2 model
+    (``model.bin`` + tokenizer files) are catalogue entries like any
+    other; the walker filters them out because they carry no GGUF or
+    radiance weights.
+    """
+    catalog = Catalog(
+        root="/tmp/vault",
+        generated_at="2026-01-01T00:00:00+00:00",
+        content_hash="x",
+        entries=[
+            _gguf_entry("foo/llm-gguf"),
+            _speech_entry("speaches-ai/Kokoro", ["model.onnx", "voices.bin"]),
+            _speech_entry("Systran/faster-whisper-tiny", ["model.bin", "tokenizer.json"]),
+        ],
+    )
+    recipes = Recipes(default=_recipe(parallel=1), matchable=[])
+    out = evaluate_all(catalog, recipes, overrides={}, options=BuildOptions(repo_root=tmp_path))
+    assert set(out) == {"llm-gguf"}
+
+
 def test_evaluate_all_returns_empty_when_no_match(tmp_path: Path) -> None:
     catalog = Catalog(
         root="/tmp/vault",
@@ -520,6 +544,31 @@ def _image_entry(name: str) -> ModelEntry:
                 path=Path(f"/tmp/vault/{name}/{bare}.safetensors"),
                 bytes=1,
             )
+        ],
+        total_bytes=1,
+        directory=f"/tmp/vault/{name}",
+        notes=[],
+        extra={},
+    )
+
+
+def _speech_entry(name: str, filenames: list[str]) -> ModelEntry:
+    """A speech-model HF entry (Kokoro / CT2 shape) — no .gguf or .rad pieces.
+
+    The roles come from the shared classifier, so the entry looks exactly
+    like one the HuggingFace walker would produce.
+    """
+    return ModelEntry(
+        name=name,
+        source="huggingface",
+        pieces=[
+            ModelPiece(
+                role=classify(Path(filename)),
+                filename=filename,
+                path=Path(f"/tmp/vault/{name}/{filename}"),
+                bytes=1,
+            )
+            for filename in filenames
         ],
         total_bytes=1,
         directory=f"/tmp/vault/{name}",

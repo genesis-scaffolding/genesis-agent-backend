@@ -42,7 +42,7 @@ elif view.kind == AcquireStateKind.SELECTING and isinstance(view, HfAcquireView)
     main_groups = [
         (i, g)
         for i, g in enumerate(groups, start=1)
-        if g.role in ("main", "safetensor", "radiance")
+        if g.role in ("main", "safetensor", "radiance", "speech")
     ]
     aux_groups = [(i, g) for i, g in enumerate(groups, start=1) if g.role in ("mmproj", "mtp")]
 

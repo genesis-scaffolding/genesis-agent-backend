@@ -455,6 +455,228 @@ def test_progress_lines_visible_in_view(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Speech bundles (TTS / STT layouts)
+# ---------------------------------------------------------------------------
+
+
+def test_kokoro_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
+    """A Kokoro repo is one selectable bundle: the model plus its voices."""
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("model.onnx", 300_000_000),
+            ("voices.bin", 500_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="speaches-ai/Kokoro")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    assert len(view.targets) == 1
+    group = view.targets[0]
+    assert group.role == "speech"
+    assert group.paths == ["model.onnx", "voices.bin", "README.md"]
+    # The model card is metadata, not weights: it is not part of the size.
+    assert group.size == 300_500_000
+    assert group.label == "speaches: kokoro (2 files)"
+
+
+def test_ctranslate2_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
+    """A faster-whisper / CT2 repo is one bundle: weights, tokenizer, card."""
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("config.json", 1_000),
+            ("model.bin", 40_000_000),
+            ("tokenizer.json", 3_000),
+            ("vocabulary.txt", 5_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="Systran/faster-whisper-tiny")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    assert len(view.targets) == 1
+    group = view.targets[0]
+    assert group.role == "speech"
+    assert group.paths == [
+        "model.bin",
+        "config.json",
+        "tokenizer.json",
+        "vocabulary.txt",
+        "README.md",
+    ]
+    assert group.label == "speaches: ctranslate2 (4 files)"
+
+
+def test_speech_bundle_without_the_model_card_is_not_offered(tmp_path: Path) -> None:
+    """Without the model card the repo is not a model — nothing to offer."""
+    api = _make_api(
+        [
+            ("model.onnx", 300_000_000),
+            ("voices.bin", 500_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="speaches-ai/Kokoro")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.FAILED
+    assert view.error is not None
+    assert "speech-model" in view.error
+
+
+def test_speech_bundle_downloads_every_file_including_the_card(tmp_path: Path) -> None:
+    """The bundle's files are downloaded one by one — the card included."""
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("model.onnx", 300_000_000),
+            ("voices.bin", 500_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="speaches-ai/Kokoro")
+    recorded: list[dict[str, Any]] = []
+
+    def fake_download(**kwargs: Any) -> str:
+        recorded.append(kwargs)
+        return "/tmp/fake-blob"
+
+    session = HfAcquireSession(
+        api=api,
+        hf_state=state,
+        cache_dir=tmp_path,
+        hf_hub_download=fake_download,
+    )
+    session.view()
+    session.submit(HfAcquireChoice(main_indexes=[1]))
+    assert session.view().kind == AcquireStateKind.CONFIRMING
+    session.submit(HfAcquireChoice(confirm=True))
+    _wait_for_terminal(session)
+
+    assert session.view().kind == AcquireStateKind.COMPLETE
+    paths = [c["filename"] for c in recorded]
+    assert paths == ["model.onnx", "voices.bin", "README.md"]
+    assert all(c["cache_dir"] == str(tmp_path) for c in recorded)
+
+
+def test_speech_bundle_cannot_be_mixed_with_another_primary(tmp_path: Path) -> None:
+    """A speech bundle is a primary of its own — it is not combined with a GGUF."""
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("model.onnx", 300_000_000),
+            ("voices.bin", 500_000),
+            ("model-Q4_K_M.gguf", 4_000_000_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="speaches-ai/Kokoro")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    assert {g.role for g in view.targets} == {"main", "speech"}
+    session.submit(HfAcquireChoice(main_indexes=[1, 2]))
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    assert view.error is not None
+    assert "speech" in view.error
+
+
+def test_speech_bundle_rejects_auxiliary_files(tmp_path: Path) -> None:
+    """An mmproj beside a speech bundle is meaningless — the bundle takes no aux."""
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("model.onnx", 300_000_000),
+            ("voices.bin", 500_000),
+            ("mmproj-Q8.gguf", 1_000_000_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="speaches-ai/Kokoro")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    roles = [g.role for g in view.targets]
+    speech_index = roles.index("speech") + 1
+    aux_index = roles.index("mmproj") + 1
+    session.submit(HfAcquireChoice(main_indexes=[speech_index], aux_indexes=[aux_index]))
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    assert view.error is not None
+    assert "auxiliary" in view.error
+
+
+def test_model_card_is_fetched_for_a_gguf_acquire(tmp_path: Path) -> None:
+    """A GGUF acquire also fetches the model card — best effort, after the weights."""
+    api = _make_api([("model-Q4_K_M.gguf", 4_000_000_000)])
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="acme/demo")
+    recorded: list[dict[str, Any]] = []
+
+    def fake_download(**kwargs: Any) -> str:
+        recorded.append(kwargs)
+        return "/tmp/fake-blob"
+
+    session = HfAcquireSession(
+        api=api,
+        hf_state=state,
+        cache_dir=tmp_path,
+        hf_hub_download=fake_download,
+    )
+    session.view()
+    session.submit(HfAcquireChoice(main_indexes=[1]))
+    session.submit(HfAcquireChoice(confirm=True))
+    _wait_for_terminal(session)
+
+    assert session.view().kind == AcquireStateKind.COMPLETE
+    paths = [c["filename"] for c in recorded]
+    assert paths == ["model-Q4_K_M.gguf", "README.md"]
+
+
+def test_model_card_failure_does_not_fail_the_acquire(tmp_path: Path) -> None:
+    """The weights are already on disk — a missing card is a warning, not a failure."""
+    api = _make_api([("model-Q4_K_M.gguf", 4_000_000_000)])
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="acme/demo")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "README.md":
+            raise RuntimeError("no card in this repo")
+        return "/tmp/fake-blob"
+
+    session = HfAcquireSession(
+        api=api,
+        hf_state=state,
+        cache_dir=tmp_path,
+        hf_hub_download=fake_download,
+    )
+    session.view()
+    session.submit(HfAcquireChoice(main_indexes=[1]))
+    session.submit(HfAcquireChoice(confirm=True))
+    _wait_for_terminal(session)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.COMPLETE
+    assert view.log_tail is not None
+    assert "Model card not fetched" in "\n".join(view.log_tail)
+
+
+def test_repo_without_supported_files_reports_the_new_formats(tmp_path: Path) -> None:
+    """The failure message names the speech layouts too."""
+    api = _make_api([("notes.txt", 100)])
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="acme/demo")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.FAILED
+    assert view.error is not None
+    assert ".onnx" in view.error
+    assert "README.md" in view.error
+
+
+# ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
 
