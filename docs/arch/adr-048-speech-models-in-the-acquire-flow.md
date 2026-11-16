@@ -35,6 +35,8 @@ The model card (`README.md`) is **part of a speech bundle** — a bundle without
 
 We will not let the user assemble a speech model from individually selectable files.
 
+A bundle's label carries the directory it was found in (`speaches: kokoro (2 files) - voices`). The label is the key the acquire UI resolves a selection back to, and two directories can hold the same layout — without the directory, both bundles would carry the same label and the UI would resolve the selection to the first of them.
+
 The role vocabulary grows by one value, `speech`. The acquire contract itself does not change: `contracts/acquire.py` is role-agnostic, and the role is a plain string on the source's own `AcquireFileGroup`. `contracts/classify.py` is deliberately untouched — the LLM filter is extension-based, and the shared classifier also feeds ComfyUI's role dropdown.
 
 ## Consequences
@@ -44,7 +46,7 @@ The role vocabulary grows by one value, `speech`. The acquire contract itself do
 - TTS/STT models become acquirable through the Genesis UI, and they land in the vault **complete** — weights *and* card — which is what makes ADR-047's "the vault is the store" true for speech as well.
 - The user cannot assemble a broken model: the bundle is the unit of selection and of download.
 - The model card becomes available to any future card-based consumer, not just speaches.
-- The GGUF / safetensors / radiance paths are untouched; the existing tests still hold.
+- The GGUF / safetensors / radiance selection rules are untouched, but the progress accounting was reworked to **per-file bytes**: the old code added a group's whole size once per file (a three-shard GGUF triple-counted the bytes) and printed the byte count as the file index. The model card's bytes stay out of `bytes_total`. The existing tests still hold after that rework.
 
 **Negative**
 

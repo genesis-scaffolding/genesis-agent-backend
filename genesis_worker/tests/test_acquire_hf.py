@@ -40,8 +40,9 @@ class _MockRepoFile:
 def _make_api(files: list[tuple[str, int]]) -> MagicMock:
     """Build a MagicMock HfApi whose list_repo_tree returns ``files``.
 
-    Each tuple is (path, size). The mock auto-classifies by the GGUF
-    filter in the source code; non-GGUF entries are dropped.
+    Each tuple is (path, size). The whole tree is handed to the
+    inspection: the GGUF / safetensors / rad filter and the
+    speech-layout matcher decide what becomes a selectable group.
     """
     api = MagicMock()
     api.list_repo_tree.return_value = [_MockRepoFile(p, s) for p, s in files]
@@ -479,7 +480,7 @@ def test_kokoro_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
     assert group.paths == ["model.onnx", "voices.bin", "README.md"]
     # The model card is metadata, not weights: it is not part of the size.
     assert group.size == 300_500_000
-    assert group.label == "speaches: kokoro (2 files)"
+    assert group.label == "speaches: kokoro (2 files) - ."
 
 
 def test_ctranslate2_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
@@ -508,7 +509,7 @@ def test_ctranslate2_repo_surfaces_one_speech_bundle(tmp_path: Path) -> None:
         "vocabulary.txt",
         "README.md",
     ]
-    assert group.label == "speaches: ctranslate2 (4 files)"
+    assert group.label == "speaches: ctranslate2 (4 files) - ."
 
 
 def test_speech_bundle_without_the_model_card_is_not_offered(tmp_path: Path) -> None:
@@ -526,6 +527,34 @@ def test_speech_bundle_without_the_model_card_is_not_offered(tmp_path: Path) -> 
     assert view.kind == AcquireStateKind.FAILED
     assert view.error is not None
     assert "speech-model" in view.error
+
+
+def test_speech_bundles_in_two_directories_get_distinct_labels(tmp_path: Path) -> None:
+    """Two directories holding the same layout must not share a label.
+
+    The acquire UI resolves a chosen label back to a group by position;
+    identical labels would silently select the first of the two.
+    """
+    api = _make_api(
+        [
+            ("README.md", 2_000),
+            ("model.onnx", 300_000_000),
+            ("voices.bin", 500_000),
+            ("voices/README.md", 2_000),
+            ("voices/model.onnx", 300_000_000),
+            ("voices/voices.bin", 500_000),
+        ]
+    )
+    state = HfAcquireState(kind=AcquireStateKind.INSPECTING, repo_id="speaches-ai/Kokoro")
+    session = HfAcquireSession(api=api, hf_state=state, cache_dir=tmp_path)
+
+    view = session.view()
+    assert view.kind == AcquireStateKind.SELECTING
+    labels = [g.label for g in view.targets]
+    assert len(labels) == 2
+    assert len(set(labels)) == 2
+    assert "speaches: kokoro (2 files) - ." in labels
+    assert "speaches: kokoro (2 files) - voices" in labels
 
 
 def test_speech_bundle_downloads_every_file_including_the_card(tmp_path: Path) -> None:

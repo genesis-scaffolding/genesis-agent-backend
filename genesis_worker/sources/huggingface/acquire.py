@@ -206,6 +206,9 @@ def speech_groups(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
     directory first: a bundle's files must live in the same directory.
     The model card is part of the bundle — a speech server cannot list a
     repo without it — so a directory without a card yields no bundle.
+
+    The label carries the directory: it is the key the acquire UI resolves
+    a selection back to, and two directories can hold the same layout.
     """
     by_dir: dict[str, list[_RemoteFile]] = {}
     for item in files:
@@ -243,7 +246,7 @@ def speech_groups(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
                     paths=paths,
                     size=size,
                     role="speech",
-                    label=f"speaches: {layout.name} ({len(weights)} files)",
+                    label=f"speaches: {layout.name} ({len(weights)} files) - {directory}",
                     is_sharded=False,
                 )
             )

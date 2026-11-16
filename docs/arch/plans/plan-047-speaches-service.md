@@ -11,6 +11,22 @@ Branch: `se/t-q5ip1l-speaches`.
 ADRs: `docs/arch/adr-047-vault-backed-model-stores.md`,
 `docs/arch/adr-048-speech-models-in-the-acquire-flow.md`.
 
+## Amendments (review round 1)
+
+Two amendments to the plan text below, both applied during the code review of the
+implementation (the plan text itself is left as approved):
+
+1. **The bundle label carries its directory** (§4.2, the `label = ...` line): the
+   label is the key the acquire UI resolves a selection back to, and two
+   directories can hold the same layout — without the directory, both bundles
+   carry the same label and the UI would silently select the first of them. The
+   label is now `speaches: <layout> (<n> files) - <dir>`.
+2. **The progress accounting was reworked to per-file bytes** (§4.2, `_run_inner`):
+   the old code added a group's whole size once per file — a three-shard GGUF
+   triple-counted the bytes — and printed the byte count as the file index. The
+   rework is what makes "the card's bytes are not added to the progress
+   counters" hold for a multi-file bundle.
+
 ---
 
 # Plan (round 2) — speaches (TTS + STT) service for genesis-agent-backend, with model-vault support
