@@ -14,21 +14,31 @@ acquire session — the facade constructs the session on demand when
 """
 
 from .acquire import (
+    MODEL_CARD_FILENAME,
+    SPEECH_LAYOUTS,
     HfAcquireChoice,
     HfAcquireSession,
     HfAcquireState,
     HfAcquireView,
+    SpeechLayout,
+    bundle_label,
     classify_path,
     group_files,
+    speech_groups,
 )
 from .source import HuggingFaceSource
 
 __all__ = [
+    "MODEL_CARD_FILENAME",
+    "SPEECH_LAYOUTS",
     "HfAcquireChoice",
     "HfAcquireSession",
     "HfAcquireState",
     "HfAcquireView",
     "HuggingFaceSource",
+    "SpeechLayout",
+    "bundle_label",
     "classify_path",
     "group_files",
+    "speech_groups",
 ]

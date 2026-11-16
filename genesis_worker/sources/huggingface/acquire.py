@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from io import StringIO
 from pathlib import Path
 
@@ -43,7 +44,62 @@ AUX_MARKERS = (
     "draft",
 )
 
-_ROLE_ORDER = {"main": 0, "mmproj": 1, "mtp": 2, "safetensor": 0, "radiance": 0, "unsupported": 3}
+_ROLE_ORDER = {
+    "main": 0,
+    "mmproj": 1,
+    "mtp": 2,
+    "safetensor": 0,
+    "radiance": 0,
+    "speech": 0,
+    "unsupported": 3,
+}
+
+# The model card is the metadata a speech model is listed by: speaches
+# skips a cache repo without it (ADR-048).
+MODEL_CARD_FILENAME = "README.md"
+
+
+@dataclass(frozen=True)
+class SpeechLayout:
+    """One file layout of a speech model a TTS/STT server can serve.
+
+    ``required`` patterns must ALL be present for the layout to match;
+    ``optional`` patterns are fetched when present. The names mirror
+    speaches' own ``download_model_files`` allow-patterns (upstream
+    ``src/speaches/executors/{kokoro,piper,whisper,parakeet}.py``).
+    """
+
+    name: str
+    required: tuple[str, ...]
+    optional: tuple[str, ...] = ()
+
+
+SPEECH_LAYOUTS: tuple[SpeechLayout, ...] = (
+    SpeechLayout("kokoro", ("model.onnx", "voices.bin")),
+    SpeechLayout("piper", ("model.onnx", "config.json")),
+    SpeechLayout(
+        "ctranslate2",
+        ("model.bin", "config.json", "tokenizer.json", "vocabulary.*"),
+        ("preprocessor_config.json",),
+    ),
+    SpeechLayout(
+        "parakeet",
+        ("encoder-model*.onnx", "decoder_joint-model*.onnx", "vocab.txt"),
+        ("config.json",),
+    ),
+)
+
+
+def bundle_label(layout_name: str, count: int, directory: str) -> str:
+    """Label of one speech bundle: its layout, its file count, its directory.
+
+    The directory is part of the label because the label is the key the
+    acquire UI resolves a selection back to, and two directories can hold
+    the same layout. The repo root carries no directory suffix.
+    """
+    files = "file" if count == 1 else "files"
+    where = "" if directory == "." else f" - {directory}"
+    return f"speaches: {layout_name} ({count} {files}){where}"
 
 
 @dataclass(frozen=True)
@@ -62,11 +118,11 @@ class _RemoteFile:
 
 @dataclass(frozen=True)
 class AcquireFileGroup:
-    """HF-local: one selectable file, or a group of shards for one selectable model."""
+    """HF-local: one selectable file, a group of shards, or a speech bundle."""
 
     paths: list[str]
     size: int | None  # total across the group; None if any shard's size is unknown
-    role: str  # "main", "mmproj", "mtp", "unsupported", "safetensor"
+    role: str  # "main", "mmproj", "mtp", "unsupported", "safetensor", "radiance", "speech"
     label: str
     is_sharded: bool
 
@@ -157,6 +213,64 @@ def group_files(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
     return sorted(groups, key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
 
+def speech_groups(files: list[_RemoteFile]) -> list[AcquireFileGroup]:
+    """One group per complete speech-model layout found in the repo.
+
+    A speech model is only loadable when its files land in the cache
+    together (Kokoro needs ``voices.bin`` next to ``model.onnx``), so the
+    selectable unit is the bundle, not the file. Files are grouped by
+    directory first: a bundle's files must live in the same directory.
+    The model card is part of the bundle — a speech server cannot list a
+    repo without it — so a directory without a card yields no bundle.
+
+    The label carries the directory: it is the key the acquire UI resolves
+    a selection back to, and two directories can hold the same layout.
+    """
+    by_dir: dict[str, list[_RemoteFile]] = {}
+    for item in files:
+        by_dir.setdefault(str(Path(item.path).parent), []).append(item)
+
+    groups: list[AcquireFileGroup] = []
+    for directory in sorted(by_dir):
+        members = by_dir[directory]
+        card = sorted(f.path for f in members if Path(f.path).name == MODEL_CARD_FILENAME)
+        if not card:
+            continue
+        for layout in SPEECH_LAYOUTS:
+            weights: list[str] = []
+            for pattern in layout.required:
+                hits = sorted(f.path for f in members if fnmatch(Path(f.path).name, pattern))
+                if not hits:
+                    weights = []
+                    break
+                weights.extend(hits)
+            if not weights:
+                continue
+            for pattern in layout.optional:
+                weights.extend(
+                    sorted(f.path for f in members if fnmatch(Path(f.path).name, pattern))
+                )
+            paths = [*weights, *card]
+            weight_sizes = [f.size for f in members if f.path in weights]
+            size = (
+                sum(s for s in weight_sizes if s is not None)
+                if all(s is not None for s in weight_sizes)
+                else None
+            )
+            groups.append(
+                AcquireFileGroup(
+                    paths=paths,
+                    size=size,
+                    role="speech",
+                    label=bundle_label(layout.name, len(weights), directory),
+                    is_sharded=False,
+                )
+            )
+            break
+
+    return sorted(groups, key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
+
+
 @contextmanager
 def _capture_stderr():
     """Capture stderr for the duration of the block. HF-specific."""
@@ -201,6 +315,9 @@ class HfAcquireSession(BackgroundSession):
         # Inspection results, populated by _inspect().
         self._groups: list[AcquireFileGroup] = []
         self._files: list[_RemoteFile] = []
+        # Size of every inspected file, keyed by repo path — the progress
+        # counter needs the per-file size, the group carries only the sum.
+        self._file_sizes: dict[str, int | None] = {}
         # Transient selection error; surfaced via view() while in SELECTING.
         self._last_select_error: str | None = None
         # NOTE: inspection is lazy — runs synchronously on the first
@@ -319,9 +436,7 @@ class HfAcquireSession(BackgroundSession):
             self._state.failure = f"inspect failed: {exc}"
             return
 
-        gguf_files: list[_RemoteFile] = []
-        st_files: list[_RemoteFile] = []
-        rad_files: list[_RemoteFile] = []
+        all_files: list[_RemoteFile] = []
         for item in tree:
             path = getattr(item, "path", None)
             if not path:
@@ -329,14 +444,14 @@ class HfAcquireSession(BackgroundSession):
             if not hasattr(item, "size"):
                 continue
             size = getattr(item, "size", None)
-            if path.lower().endswith(GGUF_EXT):
-                gguf_files.append(_RemoteFile(path=path, size=size))
-            elif path.lower().endswith(".safetensors"):
-                st_files.append(_RemoteFile(path=path, size=size))
-            elif path.lower().endswith(RAD_EXT):
-                rad_files.append(_RemoteFile(path=path, size=size))
+            all_files.append(_RemoteFile(path=path, size=size))
+
+        gguf_files = [f for f in all_files if f.path.lower().endswith(GGUF_EXT)]
+        st_files = [f for f in all_files if f.path.lower().endswith(".safetensors")]
+        rad_files = [f for f in all_files if f.path.lower().endswith(RAD_EXT)]
 
         self._files = sorted(gguf_files, key=lambda f: f.path.lower())
+        self._file_sizes = {f.path: f.size for f in all_files}
         self._groups = group_files(self._files)
         # Each safetensor file is its own unsplittable group.
         for f in st_files:
@@ -360,11 +475,16 @@ class HfAcquireSession(BackgroundSession):
                     is_sharded=False,
                 )
             )
+        # A speech model is one bundle: its files plus its model card.
+        self._groups += speech_groups(all_files)
         self._groups.sort(key=lambda g: (_ROLE_ORDER.get(g.role, 9), g.label.lower()))
 
         if not self._groups:
             self._state.kind = AcquireStateKind.FAILED
-            self._state.failure = "repository has no .gguf, .safetensors, or .rad files"
+            self._state.failure = (
+                "repository has no .gguf, .safetensors, .rad, or complete speech-model "
+                "files (a speech model needs its .onnx / .bin files together plus README.md)"
+            )
             return
 
         self._state.kind = AcquireStateKind.SELECTING
@@ -386,19 +506,24 @@ class HfAcquireSession(BackgroundSession):
             selected_groups.append(self._groups[idx - 1])
 
         main_roles = {g.role for g in selected_groups}
+        roles_seen = "/".join(sorted(main_roles)) or "(none)"
         if "radiance" in main_roles and len(main_roles) > 1:
-            roles_seen = "/".join(sorted(main_roles)) or "(none)"
             self._last_select_error = (
                 f"selected roles [{roles_seen}]; radiance must be selected alone"
+            )
+            return
+        if "speech" in main_roles and (len(main_roles) > 1 or len(selected_groups) > 1):
+            self._last_select_error = (
+                f"selected roles [{roles_seen}]; a speech model must be selected alone"
             )
             return
         if not (
             "safetensor" in main_roles
             or (main_roles == {"main"} and len(selected_groups) == 1)
             or (main_roles == {"radiance"} and len(selected_groups) == 1)
+            or (main_roles == {"speech"} and len(selected_groups) == 1)
         ):
-            roles_seen = "/".join(sorted(main_roles)) or "(none)"
-            self._last_select_error = f"selected roles [{roles_seen}]; need exactly one 'main', 'safetensor', or 'radiance' group"
+            self._last_select_error = f"selected roles [{roles_seen}]; need exactly one 'main', 'safetensor', 'radiance', or 'speech' group"
             return
 
         aux: list[AcquireFileGroup] = []
@@ -407,6 +532,10 @@ class HfAcquireSession(BackgroundSession):
                 self._last_select_error = f"aux index {idx} out of range"
                 return
             aux.append(self._groups[idx - 1])
+
+        if "speech" in main_roles and aux:
+            self._last_select_error = "a speech model takes no auxiliary files"
+            return
 
         if "safetensor" not in main_roles:
             if sum(g.role == "mmproj" for g in aux) > 1:
@@ -454,10 +583,12 @@ class HfAcquireSession(BackgroundSession):
             raise RuntimeError("internal: no selected_main when downloading")
         total_files = sum(len(g.paths) for g in selected)
         done = 0
+        files_done = 0
         total = sum(s.size for s in selected if s.size is not None)
         for group in selected:
             if self._cancel_event.is_set():
                 raise _Canceled
+            group_done = 0
             for path in group.paths:
                 if self._cancel_event.is_set():
                     raise _Canceled
@@ -479,22 +610,71 @@ class HfAcquireSession(BackgroundSession):
                     raise RuntimeError(f"download failed for {path}: {exc}") from exc
                 if self._cancel_event.is_set():
                     raise _Canceled
-                done += group.size or 0
-                file_index = min(done, total_files)
-                self._append_log(
-                    f"Progress: {done}/{total} bytes ({file_index}/{total_files} files)"
-                )
-                self._state.bytes_done = done
+                files_done += 1
+                group_done += self._file_bytes(path)
+                self._state.bytes_done = done + group_done
                 self._state.bytes_total = total
+                self._append_log(
+                    f"Progress: {done + group_done}/{total} bytes ({files_done}/{total_files} files)"
+                )
+            done += group.size or 0
+            self._state.bytes_done = done
+            self._state.bytes_total = total
+        self._fetch_model_card(download, selected)
         self._state.kind = AcquireStateKind.COMPLETE
+
+    def _file_bytes(self, path: str) -> int:
+        """Bytes one downloaded file adds to the progress counter.
+
+        The model card is excluded: it is metadata, not weights, and it is
+        not part of the group's size — counting it would overshoot
+        ``bytes_total``.
+        """
+        if Path(path).name == MODEL_CARD_FILENAME:
+            return 0
+        return self._file_sizes.get(path) or 0
+
+    def _fetch_model_card(
+        self,
+        download: Callable[..., str],
+        selected: list[AcquireFileGroup],
+    ) -> None:
+        """Fetch the model card for an acquire that did not carry one.
+
+        The card is the metadata a speech server lists a model by, so it is
+        worth having for every repo. The fetch is best-effort here: the
+        weights are already on disk, so a missing card is a warning in the
+        log, not a failed acquire. A speech bundle carries its card in its
+        own paths, and a failure there fails the acquire loudly.
+        """
+        if any(Path(p).name == MODEL_CARD_FILENAME for g in selected for p in g.paths):
+            return
+        try:
+            with _capture_stderr():
+                download(
+                    repo_id=self._state.repo_id,
+                    filename=MODEL_CARD_FILENAME,
+                    cache_dir=str(self._cache_dir),
+                    revision=self._revision,
+                )
+            self._append_log(f"Fetched model card ({MODEL_CARD_FILENAME})")
+        except _Canceled:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the weights are already on disk
+            self._append_log(f"Model card not fetched: {exc}")
 
 
 __all__ = [
+    "MODEL_CARD_FILENAME",
+    "SPEECH_LAYOUTS",
     "AcquireFileGroup",
     "HfAcquireChoice",
     "HfAcquireSession",
     "HfAcquireState",
     "HfAcquireView",
+    "SpeechLayout",
+    "bundle_label",
     "classify_path",
     "group_files",
+    "speech_groups",
 ]

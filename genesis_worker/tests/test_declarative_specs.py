@@ -31,7 +31,8 @@ from genesis_worker.contracts import (
     ServiceResourceEstimate,
 )
 from genesis_worker.registries import ServiceRegistry
-from genesis_worker.tests._factories import service_ctx
+from genesis_worker.sources.huggingface import HuggingFaceSource
+from genesis_worker.tests._factories import service_ctx, source_ctx
 from genesis_worker.utils.services import (
     ComposeService,
     DockerService,
@@ -91,6 +92,7 @@ _BUILT_IN_SPECS = (
     "prometheus.yaml",
     "romm.yaml",
     "sillytavern.yaml",
+    "speaches.yaml",
     "tidarr.yaml",
     "traefik.yaml",
     "vaultwarden.yaml",
@@ -151,9 +153,14 @@ def test_built_in_spec_capabilities_and_resource(spec_name: str, tmp_path: Path)
         assert caps.can_serve_llm is False
     resource = svc.resource_estimate()
     assert isinstance(resource, ServiceResourceEstimate)
-    # Both built-ins have no GPU requirement.
-    assert resource.vram_bytes_typical == 0
-    assert resource.vram_bytes_min == 0
+    # Most built-ins have no GPU requirement; speaches runs the speech
+    # models on it.
+    if spec_name == "speaches.yaml":
+        assert resource.vram_bytes_typical == 4_000_000_000
+        assert resource.vram_bytes_min == 1_000_000_000
+    else:
+        assert resource.vram_bytes_typical == 0
+        assert resource.vram_bytes_min == 0
 
 
 @pytest.mark.parametrize("spec_name", _DOCKER_SPECS)
@@ -876,6 +883,99 @@ def test_vaultwarden_fixed_admin_token_wins_over_the_generated_file(tmp_path: Pa
     assert generated
     assert generated != phc
     assert svc.auth_token() == phc
+
+
+# --- speaches-specific ----------------------------------------------------
+
+
+def test_speaches_identity(tmp_path: Path) -> None:
+    """Speaches' identity / ports / probe match the spec's surface."""
+    svc = _load_spec("speaches.yaml", tmp_path)
+    assert svc.name == "speaches"
+    assert svc.display_name == "Speaches"
+    assert svc.category.value == "media"
+    assert svc.description == "OpenAI-compatible TTS and STT server"
+    assert svc.image_ref == "ghcr.io/speaches-ai/speaches:latest-cuda"
+    # Host port 8001; uvicorn listens on 8000 inside the image.
+    assert svc.config.listen_port == 8001
+    assert svc.config.internal_port == 8000
+    assert svc.listen_address == "0.0.0.0:8001"
+    # ``/health`` is the public, unauthenticated probe route.
+    assert svc.config.health_probe_path == "/health"
+    # The Gradio playground sits at the root of the container.
+    assert svc.config.web_ui_path == "/"
+    # The CUDA image serves the speech models on the GPU.
+    assert svc.config.gpu_flags == ["all"]
+    # The image runs as a fixed ``ubuntu`` (uid 1000) and ignores PUID/PGID.
+    assert svc.config.puid_default is False
+    assert svc.config.pgid_default is False
+
+
+def test_speaches_binds_the_vault_hf_cache(tmp_path: Path) -> None:
+    """The service reads the vault's HuggingFace cache — the same dir the source writes.
+
+    speaches has no model store of its own: it reads ``HF_HUB_CACHE``. The
+    Genesis HuggingFace source writes its models into the very same
+    layout, so "what is in the vault is what speaches sees".
+    """
+    ctx = service_ctx(tmp_path, name="speaches")
+    svc = load_service_spec(_DECLARATIVE_DIR / "speaches.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    hub_cache = ctx.vault_path / "huggingface" / "hub"
+    assert svc.config.extra_volumes["/home/ubuntu/.cache/huggingface/hub"] == str(hub_cache)
+    assert svc.config.extra_env["HF_HUB_CACHE"] == "/home/ubuntu/.cache/huggingface/hub"
+
+    # A model acquired into the vault's cache is visible to both sides.
+    snapshot = hub_cache / "models--speaches-ai--Kokoro-82M-v1.0-ONNX" / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    (snapshot / "README.md").write_text("---\nlibrary_name: onnx\n---\n")
+    (snapshot / "model.onnx").write_bytes(b"onnx-weights")
+    (snapshot / "voices.bin").write_bytes(b"voices")
+
+    source = HuggingFaceSource(source_ctx(tmp_path, name="huggingface", local_path=hub_cache))
+    discovered = source.walk()
+    assert [entry.native_id for entry in discovered] == ["speaches-ai/Kokoro-82M-v1.0-ONNX"]
+    # The volume the container gets points at that very directory.
+    assert svc.config.extra_volumes["/home/ubuntu/.cache/huggingface/hub"] == str(hub_cache)
+
+
+def test_speaches_declares_no_pre_start_hooks(tmp_path: Path) -> None:
+    """The service does not touch the vault's permissions.
+
+    The mount target is shared vault state: the worker neither chowns nor
+    chmods it. The image runs as uid 1000, and the operator fixes a
+    mismatched uid once (see the spec's header).
+    """
+    svc = _load_spec("speaches.yaml", tmp_path)
+    assert svc.config.pre_start_hooks == ()
+
+
+def test_speaches_hf_cache_dir_option_overrides_the_vault(tmp_path: Path) -> None:
+    """The cache directory is user-overridable — e.g. to a relocated HF cache."""
+    elsewhere = tmp_path / "elsewhere"
+    ctx = service_ctx(tmp_path, name="speaches", options={"hf_cache_dir": str(elsewhere)})
+    svc = load_service_spec(_DECLARATIVE_DIR / "speaches.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.extra_volumes["/home/ubuntu/.cache/huggingface/hub"] == str(elsewhere)
+
+
+def test_speaches_options_have_configure_panel(tmp_path: Path) -> None:
+    """Speaches declares an ``options:`` block so ``configure`` auto-includes (ADR-036)."""
+    ctx = service_ctx(tmp_path, name="speaches")
+    svc = load_service_spec(_DECLARATIVE_DIR / "speaches.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.options.listen_port == 8001  # type: ignore[attr-defined]
+    assert svc.options.enable_ui is True  # type: ignore[attr-defined]
+    assert svc.options.log_level == "info"  # type: ignore[attr-defined]
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+    assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
+    # The default cache directory is the vault's HuggingFace cache. The
+    # option carries the ``$vault_path`` marker; the loader resolves it
+    # into the volume it feeds.
+    assert svc.config.extra_volumes["/home/ubuntu/.cache/huggingface/hub"] == str(
+        ctx.vault_path / "huggingface" / "hub"
+    )
+    assert "configure" in svc.ui_panels
 
 
 # --- registry discovers YAMLs ---------------------------------------------
