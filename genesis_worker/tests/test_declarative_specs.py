@@ -93,6 +93,7 @@ _BUILT_IN_SPECS = (
     "sillytavern.yaml",
     "tidarr.yaml",
     "traefik.yaml",
+    "vaultwarden.yaml",
 )
 
 # Compose-kind specs (they publish several ports and are tested separately)
@@ -733,6 +734,148 @@ def test_freshrss_options_have_configure_panel(tmp_path: Path) -> None:
     assert svc.options.extra_env == {}  # type: ignore[attr-defined]
     assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
     assert "configure" in svc.ui_panels
+
+
+# --- vaultwarden-specific -------------------------------------------------
+
+
+def test_vaultwarden_identity(tmp_path: Path) -> None:
+    """Vaultwarden's identity / category / description match the spec's surface."""
+    svc = _load_spec("vaultwarden.yaml", tmp_path)
+    assert svc.name == "vaultwarden"
+    assert svc.display_name == "Vaultwarden"
+    assert svc.category == ServiceCategory.UTILITY
+    assert svc.description == "Self-hosted password manager"
+
+
+def test_vaultwarden_image_and_container(tmp_path: Path) -> None:
+    """Image ref + container name + port mapping + health probe match upstream."""
+    svc = _load_spec("vaultwarden.yaml", tmp_path)
+    assert svc.image_ref == "vaultwarden/server:latest"
+    assert svc.container_name == "vaultwarden"
+    # Host port resolves from ``$options.listen_port`` (default 8102);
+    # the image listens on 80 inside the container.
+    assert svc.config.listen_port == 8102
+    assert svc.config.internal_port == 80
+    assert svc.listen_address == "0.0.0.0:8102"
+    # ``/alive`` is Vaultwarden's database-aware readiness route --
+    # the same one the image's own HEALTHCHECK uses.
+    assert svc.config.health_probe_path == "/alive"
+    assert svc.config.web_ui_path == "/"
+    # The image runs as root and writes the mounted /data itself; it
+    # does not implement PUID/PGID.
+    assert svc.config.puid_default is False
+    assert svc.config.pgid_default is False
+
+
+def test_vaultwarden_persists_the_vault_under_the_data_dir(tmp_path: Path) -> None:
+    """``/data`` maps to ``$data_dir/data`` -- database, keys, attachments."""
+    ctx = service_ctx(tmp_path, name="vaultwarden")
+    svc = load_service_spec(_DECLARATIVE_DIR / "vaultwarden.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.extra_volumes["/data"] == str(ctx.data_dir / "data")
+
+
+def test_vaultwarden_env_mapping(tmp_path: Path) -> None:
+    """The env block carries the public URL, the signup flags and the client IP header."""
+    svc = _load_spec("vaultwarden.yaml", tmp_path)
+    env = svc.config.extra_env
+    assert env["DOMAIN"] == "http://localhost"
+    assert env["ROCKET_ADDRESS"] == "0.0.0.0"
+    assert env["ROCKET_PORT"] == "80"
+    # Bool options become the lowercase strings docker expects.
+    assert env["SIGNUPS_ALLOWED"] == "true"
+    assert env["SIGNUPS_VERIFY"] == "false"
+    assert env["INVITATIONS_ALLOWED"] == "false"
+    # Traefik forwards the client address in X-Forwarded-For; "local"
+    # trusts it from the ingress network only.
+    assert env["IP_HEADER"] == "X-Forwarded-For"
+    assert env["IP_HEADER_TRUSTED_PROXIES"] == "local"
+    assert env["TZ"] == "UTC"
+    assert env["LOG_LEVEL"] == "info"
+    # ADMIN_TOKEN is owned by the ``auth`` block, never by the env block.
+    assert "ADMIN_TOKEN" not in env
+    # The SMTP variables that must appear together are deliberately
+    # absent: Vaultwarden counts an empty value as "set" -- a lone
+    # SMTP_HOST/SMTP_FROM stops the container from booting, and an
+    # empty SMTP_USERNAME/SMTP_PASSWORD pair makes the client
+    # authenticate against a relay that needs no login. They are
+    # configured through the ``extra_env`` map instead.
+    assert "SMTP_HOST" not in env
+    assert "SMTP_FROM" not in env
+    assert "SMTP_USERNAME" not in env
+    assert "SMTP_PASSWORD" not in env
+
+
+def test_vaultwarden_option_defaults(tmp_path: Path) -> None:
+    """The typed options carry the documented defaults."""
+    svc = _load_spec("vaultwarden.yaml", tmp_path)
+    assert svc.options.listen_port == 8102  # type: ignore[attr-defined]
+    assert svc.options.domain == "http://localhost"  # type: ignore[attr-defined]
+    assert svc.options.tz == "UTC"  # type: ignore[attr-defined]
+    assert svc.options.log_level == "info"  # type: ignore[attr-defined]
+    assert svc.options.admin_token is None  # type: ignore[attr-defined]
+    # Signup is open for the first account, mail-dependent features are off.
+    assert svc.options.signups_allowed is True  # type: ignore[attr-defined]
+    assert svc.options.signups_verify is False  # type: ignore[attr-defined]
+    assert svc.options.invitations_allowed is False  # type: ignore[attr-defined]
+    assert svc.options.smtp_port == 587  # type: ignore[attr-defined]
+    assert svc.options.smtp_security == "starttls"  # type: ignore[attr-defined]
+    assert svc.options.smtp_from_name == "Vaultwarden"  # type: ignore[attr-defined]
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+    assert svc.options.extra_mounts == {}  # type: ignore[attr-defined]
+    # ``configure`` auto-includes for any service with options (ADR-036).
+    assert "configure" in svc.ui_panels
+
+
+def test_vaultwarden_admin_token_is_persistent_and_private(tmp_path: Path) -> None:
+    """The admin token is generated once, kept at 0600, and reused on the next start."""
+    ctx = service_ctx(tmp_path, name="vaultwarden")
+    svc = load_service_spec(_DECLARATIVE_DIR / "vaultwarden.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    hooks = list(svc.config.pre_start_hooks)
+    assert len(hooks) == 1
+    assert hooks[0]["kind"] == "ensure_persistent_token"
+    assert hooks[0]["target"] == str(ctx.state_dir / "admin_token")
+    assert hooks[0]["mode"] == "0o600"
+
+    hook_ctx = PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir)
+    run_hooks(hooks, hook_ctx)
+    token_file = ctx.state_dir / "admin_token"
+    generated = token_file.read_text()
+    assert generated
+    assert token_file.stat().st_mode & 0o777 == 0o600
+    assert svc.auth_token() == generated
+
+    # A restart reuses the same token.
+    run_hooks(hooks, hook_ctx)
+    assert token_file.read_text() == generated
+
+
+def test_vaultwarden_fixed_admin_token_wins_over_the_generated_file(tmp_path: Path) -> None:
+    """A user-typed admin_token (e.g. an Argon2id PHC string) beats the state file."""
+    phc = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"
+    ctx = service_ctx(tmp_path, name="vaultwarden", options={"admin_token": phc})
+    svc = load_service_spec(_DECLARATIVE_DIR / "vaultwarden.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.auth is not None
+    assert svc.config.auth.token_env_var == "ADMIN_TOKEN"
+    assert svc.config.auth.token_file == ctx.state_dir / "admin_token"
+    assert svc.config.auth.token_file_mode == 0o600
+    assert svc.config.auth.fallback == phc
+
+    # The pre-start hook writes the generated token to the state file --
+    # and the fixed option still wins over it.
+    hooks = list(svc.config.pre_start_hooks)
+    run_hooks(
+        hooks,
+        PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir),
+    )
+    token_file = ctx.state_dir / "admin_token"
+    generated = token_file.read_text().strip()
+    assert generated
+    assert generated != phc
+    assert svc.auth_token() == phc
 
 
 # --- registry discovers YAMLs ---------------------------------------------
