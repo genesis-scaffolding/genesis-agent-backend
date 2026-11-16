@@ -50,6 +50,8 @@ from .uv_service import UvService, UvServiceConfig
 
 _PLACEHOLDER_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)*)")
 _AUTO_PORT_IN_TEXT_RE = re.compile(r"\$auto_port\.([a-zA-Z0-9_-]+)")
+_IMAGE_MARKER_RE = re.compile(r"\$images\.([a-zA-Z0-9_-]+)")
+_COMPOSE_IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,57 @@ def _assert_compose_runtime_port_published(
             "compose template does not publish it — the health probe would watch a port "
             "the stack never binds"
         )
+
+
+def _compose_template_images(template: str) -> list[str]:
+    """The image refs of a compose template's services, in declaration order.
+
+    A template that does not parse falls back to a text scan: the guard
+    must not reject a spec over a YAML quirk, and the text scan is what
+    the availability check reads anyway.
+    """
+    try:
+        doc = yaml.safe_load(template)
+    except yaml.YAMLError:
+        return _COMPOSE_IMAGE_RE.findall(template)
+    if not isinstance(doc, dict):
+        return []
+    services = doc.get("services")
+    if not isinstance(services, dict):
+        return []
+    refs: list[str] = []
+    for spec in services.values():
+        if not isinstance(spec, dict):
+            continue
+        image = spec.get("image")
+        if isinstance(image, str):
+            refs.append(image)
+    return refs
+
+
+def _assert_compose_images_declared(template: str, declared: set[str], path: Path) -> None:
+    """Every image a compose template runs must be declared in ``images:``.
+
+    The availability check reads the *template's* images, the install axis
+    is built from the *declared* ones. An image in the template that nobody
+    declared is therefore required by the service and fetchable by no
+    install button — the service could never become available from the UI.
+    Reject the spec at load time instead.
+    """
+    for ref in _compose_template_images(template):
+        match = _IMAGE_MARKER_RE.fullmatch(ref)
+        if match is None:
+            raise ValueError(
+                f"{path}: the compose template runs the image {ref!r}, which is not a "
+                "$images.<name> marker — declare it in the images: block "
+                "(if it's in the template, it's declared here)"
+            )
+        name = match.group(1)
+        if name not in declared:
+            raise ValueError(
+                f"{path}: the compose template runs $images.{name}, which is not declared "
+                "in the images: block — if it's in the template, it's declared here"
+            )
 
 
 def _resolve_string(
@@ -612,6 +665,11 @@ def load_service_spec(
     port_markers = tuple(site.marker for site in use_sites)
     if isinstance(spec, ComposeServiceSpec):
         _assert_compose_runtime_port_published(resolved, options_resolved, path)
+        _assert_compose_images_declared(
+            str(resolved.get("compose_template") or ""),
+            {str(image["name"]) for image in resolved.get("images") or ()},
+            path,
+        )
 
     # Map options (``extra_env`` / ``extra_mounts``) merge additively
     # into the resolved spec, with user additions winning on key

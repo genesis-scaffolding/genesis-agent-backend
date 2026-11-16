@@ -99,10 +99,41 @@ That is what makes "the user picks `rommapp/romm:2.9.1` in the configure
 panel" a first-class operation instead of a template edit.
 
 **Rule: if an image appears in the template, it must be declared here.**
-A template `image:` line that isn't `$images.<declared name>` (or a
-`build:` target you're choosing not to version) will not be pulled by
-`start()`'s self-sufficient `docker compose pull` and will not show a version
-picker.
+The loader enforces it: a template `image:` line that is not
+`$images.<declared name>` is rejected at load time, with the offending
+line named. (A `build:` target is unaffected — there is no image to pull
+and no version to pick.) The rule exists because the two halves of the
+service read different lists: the **availability check** reads the
+images of the rendered template, while the **install axis** is built from
+the *declared* ones. An undeclared image would therefore be required by
+the service and fetchable by no install button — the service could never
+become available from the UI, silently, forever.
+
+Note that `start()`'s `docker compose pull` *does* fetch every image in
+the file, declared or not — that is why the stack can be brought up by
+hand. What an undeclared image breaks is the install axis: the UI cannot
+fetch it, so the service never reaches the "available" state the Start
+button depends on.
+
+### Installing a multi-image stack
+
+The Status page's **Install** button installs *the service* — every image
+the stack needs, not just the first one (ADR-049). For a two-image stack
+like ROMM that means two pulls; for paperless-ngx, three. Before the
+install the page names what is missing:
+
+> Still needed: postgres:18-alpine, valkey/valkey:9-alpine — Install
+> fetches all of them.
+
+The install is a single session: the images are pulled in order, each
+one at its recorded version when the operator has pinned one on the
+Images page, and the ones already on disk are skipped (so a partial
+install resumes). The outcome — success or failure — stays on the page
+until it is dismissed, and a failure names the image that failed and the
+reason.
+
+The **Images page** keeps its own job: one section per image, where the
+operator picks a tag, installs, updates or uninstalls a single image.
 
 ### The template
 
@@ -361,6 +392,10 @@ assert "$state_dir" not in rendered
 assert "image: rommapp/romm:latest" in rendered
 assert "image: postgres:16-alpine" in rendered
 assert "/tmp/media-vault/roms:/romm/library" in rendered  # vault is the store
+
+# The install axis covers the whole stack (ADR-049) — the Status page's
+# Install button fetches every one of them.
+assert [i.name for i in svc.installs()] == ["romm:romm", "romm:romm-db"]
 
 # Port override flows through to both the template and the runtime config.
 ctx2 = service_ctx(Path("/tmp"), name="romm", options={"listen_port": 9090})

@@ -54,6 +54,15 @@ class ServiceInstall(ABC):
         """Return the upstream source/tracking URL for this binary, or None if unknown."""
         return None
 
+    def is_present(self) -> bool:
+        """True iff the artifact this installable provides is present locally.
+
+        Default: the installable's own state. An installable that knows
+        which artifact it actually provides — a docker image, which runs
+        at its *effective* ref — overrides this.
+        """
+        return self.state() == InstallState.INSTALLED
+
 
 __all__ = [
     "InstallState",
