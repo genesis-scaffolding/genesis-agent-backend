@@ -160,34 +160,64 @@ def _assert_compose_runtime_port_published(
         )
 
 
+def _published_host_port(entry: Any) -> int | None:
+    """The host port one published-port entry binds, or ``None``.
+
+    The short syntax is a string (``"0.0.0.0:3000:3000"`` — host, host
+    port, container port); the long syntax is a mapping with a
+    ``published`` field. An entry in neither shape is not counted.
+    """
+    if isinstance(entry, str):
+        parts = entry.split(":")
+        if len(parts) != 3:
+            return None
+        try:
+            return int(parts[1])
+        except ValueError:
+            return None
+    if isinstance(entry, dict):
+        published = entry.get("published")
+        if isinstance(published, bool):
+            return None
+        if isinstance(published, int):
+            return published
+        if isinstance(published, str):
+            try:
+                return int(published)
+            except ValueError:
+                return None
+    return None
+
+
 def _template_published_ports(template: str) -> set[int] | None:
     """The host ports a compose template publishes, or ``None``.
 
-    Best effort: a template whose ``ports:`` block cannot be read yields
-    ``None``, and the caller skips the check rather than failing a spec it
-    cannot understand.
+    The template is parsed as YAML and every service's ``ports:`` block is
+    read, so a multi-service stack is checked as a whole. ``None`` means
+    the template could not be read at all (the check is best effort); an
+    empty set means the template parses and publishes no port.
     """
+    try:
+        document = yaml.safe_load(template)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    services = document.get("services")
+    if not isinstance(services, dict):
+        return None
     published: set[int] = set()
-    in_ports = False
-    for line in template.splitlines():
-        stripped = line.strip()
-        if not in_ports:
-            if stripped.startswith("ports:"):
-                in_ports = True
+    for service in services.values():
+        if not isinstance(service, dict):
             continue
-        if not stripped or stripped.startswith("#"):
+        ports = service.get("ports")
+        if not isinstance(ports, list):
             continue
-        if not stripped.startswith("-"):
-            break
-        entry = stripped[1:].strip().strip('"').strip("'")
-        parts = entry.split(":")
-        if len(parts) != 3:
-            continue
-        try:
-            published.add(int(parts[1]))
-        except ValueError:
-            continue
-    return published or None
+        for entry in ports:
+            host_port = _published_host_port(entry)
+            if host_port is not None:
+                published.add(host_port)
+    return published
 
 
 def _declared_ports(spec: Any) -> tuple[DeclaredPort, ...] | None:

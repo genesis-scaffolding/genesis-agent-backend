@@ -485,3 +485,56 @@ def test_a_canonical_name_that_is_a_dns_label_is_accepted() -> None:
     assert is_dns_label("g0") is True
     assert is_dns_label("a" * 63) is True
     assert is_dns_label("a" * 64) is False
+
+
+# --- the compose template check reads every ports block ---------------------
+
+
+MULTI_BLOCK_TEMPLATE = """version: "3.8"
+services:
+  app:
+    image: example/app
+    ports:
+      - "0.0.0.0:3000:3000"
+  api:
+    image: example/api
+    ports:
+      - "0.0.0.0:8765:8765"
+"""
+
+
+def test_the_compose_check_reads_every_ports_block(tmp_path: Path) -> None:
+    """A second service's published port counts towards the comparison."""
+    path = _write_yaml(
+        tmp_path,
+        "stack.yaml",
+        _compose(
+            compose_template=MULTI_BLOCK_TEMPLATE,
+            ports=[
+                {"label": "ui", "primary": True, "host": "$options.listen_port", "container": 3000},
+                {"label": "api", "primary": False, "host": "$options.api_port", "container": 8765},
+            ],
+        ),
+    )
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name="stack"))
+    assert isinstance(svc, ComposeService)
+
+
+def test_the_compose_check_catches_an_undeclared_port_in_a_second_block(
+    tmp_path: Path,
+) -> None:
+    """The second block's published ports are part of the comparison."""
+    template = MULTI_BLOCK_TEMPLATE.replace('"0.0.0.0:8765:8765"', '"0.0.0.0:9999:9999"')
+    path = _write_yaml(
+        tmp_path,
+        "stack.yaml",
+        _compose(
+            compose_template=template,
+            ports=[
+                {"label": "ui", "primary": True, "host": "$options.listen_port", "container": 3000},
+                {"label": "api", "primary": False, "host": "$options.api_port", "container": 8765},
+            ],
+        ),
+    )
+    with pytest.raises(ValueError, match="compose template"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name="stack"))
