@@ -265,6 +265,7 @@ def test_service_summary_carries_the_canonical_name_and_ports(client: TestClient
     assert by_name["ntfy"]["ports"][0]["primary"] is True
     # A service that declares no canonical name reports none.
     assert by_name["llama_swap"]["canonical_name"] is None
+    assert by_name["llama_swap"]["ports"] == []
 
 
 def test_service_summary_reports_the_declared_ports(client: TestClient) -> None:
