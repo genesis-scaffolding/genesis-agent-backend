@@ -50,8 +50,12 @@ _DNS_LABEL_RE = re.compile(DNS_LABEL_PATTERN)
 
 
 def is_dns_label(value: str) -> bool:
-    """True iff ``value`` is a DNS label usable as one hostname label."""
-    return bool(value) and len(value) <= 63 and _DNS_LABEL_RE.match(value) is not None
+    """True iff ``value`` is a DNS label usable as one hostname label.
+
+    ``fullmatch`` on purpose: ``$`` also matches just before a trailing
+    newline, so ``"genesis\n"`` must not pass as a label.
+    """
+    return bool(value) and len(value) <= 63 and _DNS_LABEL_RE.fullmatch(value) is not None
 
 
 class OptionSpec(BaseModel):

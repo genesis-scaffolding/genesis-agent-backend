@@ -453,3 +453,35 @@ def test_a_uv_spec_without_any_port_is_rejected() -> None:
     payload.pop("listen_port")
     with pytest.raises(ValueError, match="no listen_port"):
         UvServiceSpec.model_validate(payload)
+
+
+# --- the DNS-label contract (ADR-049) ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["genesis\n", " genesis ", "genesis ", "\ngenesis", "Genesis", "-genesis", "genesis-"],
+)
+def test_a_canonical_name_must_be_an_exact_dns_label(value: str) -> None:
+    """A label ends up in a hostname: it must match the label grammar exactly.
+
+    ``$`` also matches just before a trailing newline, so the check uses
+    ``fullmatch`` — ``"genesis\\n"`` is not a label.
+    """
+    from genesis_worker.utils.services.spec import is_dns_label
+
+    assert is_dns_label(value) is False
+    with pytest.raises(ValueError, match="not a DNS label"):
+        DockerServiceSpec.model_validate(
+            _docker(container={"name": "demo", "listen_port": 8080}, canonical_name=value)
+        )
+
+
+def test_a_canonical_name_that_is_a_dns_label_is_accepted() -> None:
+    from genesis_worker.utils.services.spec import is_dns_label
+
+    assert is_dns_label("genesis") is True
+    assert is_dns_label("api-genesis") is True
+    assert is_dns_label("g0") is True
+    assert is_dns_label("a" * 63) is True
+    assert is_dns_label("a" * 64) is False
