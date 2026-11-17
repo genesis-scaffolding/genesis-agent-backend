@@ -95,6 +95,8 @@ container:                 # docker-only
 
 env: {}                    # environment variables (see "The $variable substitution")
 volumes: {}                # bind mounts (host -> container)
+canonical_name: null       # optional; the cluster-wide label (see "Declared ports")
+ports: null                # optional; the routable ports (see "Declared ports")
 pre_start_hooks: []        # optional; see "Pre-start hooks"
 auth: null                 # optional; see "Auth (API tokens)"
 ui:
@@ -104,6 +106,61 @@ options: {}                # optional user-editable settings (see "Options")
 
 `version`, `kind`, `name`, `display_name`, `capabilities`, `resource_estimate`
 are required. Everything else has sensible defaults.
+
+## Declared ports and the canonical name (ADR-049)
+
+A spec describes **one** port by default: `container.listen_port` (docker),
+the top-level `listen_port` (uv), or the `listen_port` option the compose
+template publishes (compose). That is enough for a single-port service, and
+all twenty shipped specs use it.
+
+A service that publishes **more than one** port declares them in a top-level
+`ports:` list:
+
+```yaml
+canonical_name: genesis        # the cluster-wide label (see below)
+
+ports:
+  - label: ui                  # the port's role
+    primary: true              # exactly one primary per service
+    host: $options.listen_port # the host port a client connects to
+    container: 3000            # the port inside the container (defaults to host)
+  - label: api
+    host: $options.api_port
+    container: 8765
+```
+
+`ports:` is the single source of truth when it is present — the legacy port
+fields must then be absent (`container.listen_port`,
+`container.internal_port`, `container.extra_ports` for docker; the top-level
+`listen_port` for uv and compose). The loader derives the runtime fields from
+the block: the primary becomes the listen / internal port, the others become
+extra ports (docker). The loader enforces:
+
+1. exactly one `primary: true` per service;
+2. distinct port labels;
+3. every port of a multi-port service is labelled (the labels keep the
+   per-port hostnames apart);
+4. labels are DNS labels (lowercase, digits and dashes);
+5. distinct host ports;
+6. the uv kind declares at most one port (its runner publishes one);
+7. `canonical_name` is a DNS label;
+8. the compose template publishes the declared ports (the template is the
+   mechanism; the block declares what it publishes).
+
+A spec **without** a `ports:` block keeps today's shape: one implicit port
+(the existing listen port) with no role label. The twenty shipped specs need
+no edit and their derived hostnames do not change.
+
+`canonical_name:` is the cluster-wide, node-independent label the service
+answers to — `genesis` for `genesis-productivity`, `ntfy` for `ntfy`.
+Declaring it **asserts that the service is cluster-wide and single-instance**:
+the orchestrator grants that name only while exactly one live instance of the
+service exists, and withholds it from every instance when a second one
+appears. The worker never composes a hostname (the base domain belongs to
+the orchestrator) — it declares a label, and the orchestrator turns it into
+`<label>.<domain>` for the primary port and `<portlabel>-<label>.<domain>`
+for the others.
 
 ## Two backends: `kind: docker` vs `kind: uv`
 
