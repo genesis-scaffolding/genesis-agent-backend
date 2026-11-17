@@ -14,6 +14,12 @@ display_name: Crawl4AI
 description: Web crawler + dashboard
 category: crawler
 
+# The cluster-wide canonical label this service answers to (ADR-049).
+# Declaring it asserts that the service is cluster-wide and
+# single-instance; the orchestrator grants that name only while one
+# live instance exists.
+canonical_name: crawl4ai
+
 capabilities:
   can_generate_config: false
   can_export_for_agent: false
