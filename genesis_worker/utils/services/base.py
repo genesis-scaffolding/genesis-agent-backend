@@ -29,6 +29,7 @@ from ...contracts import (
     ServiceCapabilities,
     ServiceContext,
     ServiceInstall,
+    ServicePort,
     ServiceResourceEstimate,
     ServiceStatus,
     StartResult,
@@ -41,6 +42,22 @@ from ..process.docker import ContainerPortBinding
 from .spec import OptionSpec
 
 ConfigT = TypeVar("ConfigT")
+
+
+@dataclass(frozen=True)
+class DeclaredPort:
+    """One declared port of a declarative service (ADR-049).
+
+    ``host`` is the host port a client connects to — an int, or the
+    ``$auto_port.<name>`` marker the allocator resolves at start time.
+    ``container`` is the port inside the container (``None`` when it is the
+    same as the host port).
+    """
+
+    label: str | None = None
+    primary: bool = False
+    host: int | str = 0
+    container: int | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +76,10 @@ class DeclarativeServiceConfig:
     ``port_markers`` names the auto-port use sites the spec declared
     (ADR-043) — the framework uses it to release stale allocations when
     a rebuilt spec stops asking for a port.
+
+    ``canonical_name`` is the cluster-wide label the service declares
+    (ADR-049); ``ports`` are its routable ports; ``fixed_host_ports``
+    are the host ports it owns, so the allocator keeps off all of them.
     """
 
     name: str
@@ -72,6 +93,9 @@ class DeclarativeServiceConfig:
     ui_pages: Sequence[str] = ()
     option_specs: Mapping[str, OptionSpec] = field(default_factory=dict)
     port_markers: tuple[str, ...] = ()
+    canonical_name: str | None = None
+    ports: tuple[DeclaredPort, ...] = ()
+    fixed_host_ports: tuple[int, ...] = ()
 
 
 class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
@@ -235,6 +259,46 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
             return None
         return port
 
+    def declared_host_ports(self) -> tuple[int, ...]:
+        """Every fixed host port this service owns (ADR-049).
+
+        A service that publishes more than one fixed port owns all of
+        them; the allocator keeps off every one.
+        """
+        cfg: DeclarativeServiceConfig = self.config  # type: ignore[assignment]
+        return cfg.fixed_host_ports
+
+    def canonical_name(self) -> str | None:
+        """The cluster-wide canonical label this service declares, or ``None``."""
+        cfg: DeclarativeServiceConfig = self.config  # type: ignore[assignment]
+        return cfg.canonical_name
+
+    def service_ports(self) -> tuple[ServicePort, ...]:
+        """The service's routable ports: role label, primary flag, endpoint.
+
+        A spec without a ``ports:`` block declares one implicit port — the
+        existing listen port, with no role label (ADR-049).
+        """
+        cfg: DeclarativeServiceConfig = self.config  # type: ignore[assignment]
+        if not cfg.ports:
+            return (
+                ServicePort(
+                    label=None,
+                    primary=True,
+                    endpoint=self.runtime_endpoint() or self.web_ui_endpoint(),
+                ),
+            )
+        running = self.is_running()
+        ports: list[ServicePort] = []
+        for port in cfg.ports:
+            endpoint: str | None = None
+            if running:
+                host_port = self.port_binder().resolve(port.host)
+                if host_port is not None:
+                    endpoint = f"http://{self.public_host()}:{host_port}/"
+            ports.append(ServicePort(label=port.label, primary=port.primary, endpoint=endpoint))
+        return tuple(ports)
+
     def effective_host_port(self) -> int | None:
         """The host port this service actually uses.
 
@@ -334,4 +398,5 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
 __all__ = [
     "DeclarativeServiceBase",
     "DeclarativeServiceConfig",
+    "DeclaredPort",
 ]

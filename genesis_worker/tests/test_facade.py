@@ -92,6 +92,22 @@ def test_service_info_carries_category_and_description(tmp_path: Path) -> None:
     assert llama.description == "OpenAI-compatible LLM server"
 
 
+def test_facade_service_rows_carry_the_canonical_name_and_ports(tmp_path: Path) -> None:
+    """The declared canonical name and the routable ports ride the row."""
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    w = GenesisWorker(settings=settings)
+
+    ntfy = next(s for s in w.list_services() if s.name == "ntfy")
+    assert ntfy.canonical_name == "ntfy"
+    assert len(ntfy.ports) == 1
+    assert ntfy.ports[0].label is None
+
+    llama = next(s for s in w.list_services() if s.name == "llama_swap")
+    assert llama.canonical_name is None
+
+
 def test_facade_returns_service_instance(tmp_path: Path) -> None:
     """Hermetic: isolated state_dir."""
     from genesis_worker.settings import PathsSettings, Settings

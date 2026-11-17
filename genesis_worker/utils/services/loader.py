@@ -36,7 +36,7 @@ from ...contracts import (
 )
 from ..ports.markers import AUTO_PORT_KEY_PREFIX, is_marker, marker_name
 from . import spec as _spec_module
-from .base import DeclarativeServiceBase
+from .base import DeclarativeServiceBase, DeclaredPort
 from .compose_service import ComposeImage, ComposeService, ComposeServiceConfig
 from .docker_service import AuthConfig, DockerService, DockerServiceConfig, ExtraPort
 from .spec import (
@@ -108,6 +108,12 @@ def _collect_port_use_sites(raw: dict, options_resolved: Mapping[str, Any]) -> l
                         )
                     )
 
+    ports = raw.get("ports")
+    if isinstance(ports, list):
+        for index, port in enumerate(ports):
+            if isinstance(port, dict) and is_marker(port.get("host")):
+                sites.append(PortUseSite(marker_name(port["host"]) or "", f"ports[{index}].host"))
+
     template = raw.get("compose_template")
     if isinstance(template, str):
         declared = {site.marker for site in sites}
@@ -151,6 +157,109 @@ def _assert_compose_runtime_port_published(
             f"{path}: the runtime port option 'listen_port' is the marker {port!r} but the "
             "compose template does not publish it — the health probe would watch a port "
             "the stack never binds"
+        )
+
+
+def _template_published_ports(template: str) -> set[int] | None:
+    """The host ports a compose template publishes, or ``None``.
+
+    Best effort: a template whose ``ports:`` block cannot be read yields
+    ``None``, and the caller skips the check rather than failing a spec it
+    cannot understand.
+    """
+    published: set[int] = set()
+    in_ports = False
+    for line in template.splitlines():
+        stripped = line.strip()
+        if not in_ports:
+            if stripped.startswith("ports:"):
+                in_ports = True
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not stripped.startswith("-"):
+            break
+        entry = stripped[1:].strip().strip('"').strip("'")
+        parts = entry.split(":")
+        if len(parts) != 3:
+            continue
+        try:
+            published.add(int(parts[1]))
+        except ValueError:
+            continue
+    return published or None
+
+
+def _declared_ports(spec: Any) -> tuple[DeclaredPort, ...] | None:
+    """The ``ports:`` block of a validated spec, as runtime port records.
+
+    ``None`` for the legacy single-port form — the per-kind port fields
+    stay the source of truth there (ADR-049).
+    """
+    raw_ports = getattr(spec, "ports", None)
+    if raw_ports is None:
+        return None
+    ports: list[DeclaredPort] = []
+    for port in raw_ports:
+        container = port.container
+        if container is None and isinstance(port.host, int) and not isinstance(port.host, bool):
+            container = port.host
+        ports.append(
+            DeclaredPort(
+                label=port.label,
+                primary=port.primary,
+                host=port.host,
+                container=container,
+            )
+        )
+    return tuple(ports)
+
+
+def _fixed_host_ports(declared: tuple[DeclaredPort, ...] | None, legacy: Any) -> tuple[int, ...]:
+    """The host ports the service owns, so the allocator keeps off them."""
+    if declared:
+        return tuple(
+            port.host
+            for port in declared
+            if isinstance(port.host, int) and not isinstance(port.host, bool)
+        )
+    if isinstance(legacy, int) and not isinstance(legacy, bool):
+        return (legacy,)
+    return ()
+
+
+def _assert_compose_ports_published(
+    resolved: dict,
+    declared: tuple[DeclaredPort, ...] | None,
+    path: Path,
+) -> None:
+    """The compose template must publish the ports the service declares.
+
+    For the compose kind the template is the mechanism that publishes and
+    the ``ports:`` block declares what it publishes — the same relationship
+    the compose spec already has with ``images:``. A template that cannot
+    be parsed is not checked (best effort).
+    """
+    if not declared:
+        return
+    template = resolved.get("compose_template") or ""
+    if not isinstance(template, str):
+        return
+    published = _template_published_ports(template)
+    if published is None:
+        return
+    declared_ports = {
+        port.host
+        for port in declared
+        if isinstance(port.host, int) and not isinstance(port.host, bool)
+    }
+    if len(declared_ports) != len(declared):
+        # A marker port has no number yet — nothing to compare.
+        return
+    if published != declared_ports:
+        raise ValueError(
+            f"{path}: the service publishes ports {sorted(published)} in its compose template "
+            f"but declares {sorted(declared_ports)}"
         )
 
 
@@ -331,6 +440,7 @@ def _build_docker_config(
     options_model: type[BaseModel],
     option_specs: Mapping[str, _spec_module.OptionSpec],
     port_markers: tuple[str, ...] = (),
+    declared: tuple[DeclaredPort, ...] | None = None,
 ) -> DockerServiceConfig:
     """Translate an already-resolved docker spec dict into ``DockerServiceConfig``.
 
@@ -364,6 +474,25 @@ def _build_docker_config(
     capabilities = ServiceCapabilities(**resolved["capabilities"])
     resource_estimate = ServiceResourceEstimate(**resolved["resource_estimate"])
 
+    if declared:
+        # The ``ports:`` block is the source of truth: the primary becomes
+        # the listen / internal port, the others become extra ports.
+        primary = next(port for port in declared if port.primary)
+        listen_port: int | str = primary.host
+        internal_port: int | None = primary.container
+        extra_ports = tuple(
+            ExtraPort(container_port=port.container, host=port.host)
+            for port in declared
+            if not port.primary and port.container is not None
+        )
+    else:
+        listen_port = container["listen_port"] or 0
+        internal_port = container.get("internal_port")
+        extra_ports = tuple(
+            ExtraPort(container_port=extra["container"], host=extra["host"])
+            for extra in container.get("extra_ports") or []
+        )
+
     return DockerServiceConfig(
         name=resolved["name"],
         display_name=resolved["display_name"],
@@ -382,13 +511,13 @@ def _build_docker_config(
         source_url=image.get("source_url"),
         container_name=container["name"],
         listen_host=container["listen_host"],
-        listen_port=container["listen_port"],
-        internal_port=container.get("internal_port"),
-        extra_ports=tuple(
-            ExtraPort(container_port=extra["container"], host=extra["host"])
-            for extra in container.get("extra_ports") or []
-        ),
+        listen_port=listen_port,
+        internal_port=internal_port,
+        extra_ports=extra_ports,
         port_markers=port_markers,
+        canonical_name=resolved.get("canonical_name"),
+        ports=declared or (),
+        fixed_host_ports=_fixed_host_ports(declared, listen_port),
         public_host=container.get("public_host"),
         web_ui_path=container["web_ui_path"],
         restart_policy=container["restart_policy"],
@@ -414,6 +543,7 @@ def _build_compose_config(
     option_specs: Mapping[str, _spec_module.OptionSpec],
     options_resolved: Mapping[str, Any],
     port_markers: tuple[str, ...] = (),
+    declared: tuple[DeclaredPort, ...] | None = None,
 ) -> ComposeServiceConfig:
     """Translate an already-resolved compose spec dict into ``ComposeServiceConfig``.
 
@@ -438,6 +568,13 @@ def _build_compose_config(
     # desync. Top-level ``listen_port`` is a fallback for specs without it.
     option_port = options_resolved.get("listen_port")
     option_host = options_resolved.get("listen_host")
+    if declared:
+        # The ``ports:`` block names the runtime port: the primary is the
+        # health-probe / web-UI port.
+        primary = next(port for port in declared if port.primary)
+        runtime_port: int | str = primary.host
+    else:
+        runtime_port = option_port if option_port is not None else (resolved["listen_port"] or 0)
     return ComposeServiceConfig(
         name=resolved["name"],
         display_name=resolved["display_name"],
@@ -456,8 +593,11 @@ def _build_compose_config(
         # same value the compose template binds to — so the probe and the
         # container can never desync. A marker is carried through as a
         # marker; the allocation materialises it at start time.
-        listen_port=option_port if option_port is not None else resolved["listen_port"],
+        listen_port=runtime_port,
         port_markers=port_markers,
+        canonical_name=resolved.get("canonical_name"),
+        ports=declared or (),
+        fixed_host_ports=_fixed_host_ports(declared, runtime_port),
         health_probe_path=resolved.get("health_probe_path", "/"),
         extra_env=merged_env,
         extra_volumes=merged_volumes,
@@ -479,6 +619,7 @@ def _build_uv_config(
     options_model: type[BaseModel],
     option_specs: Mapping[str, _spec_module.OptionSpec],
     port_markers: tuple[str, ...] = (),
+    declared: tuple[DeclaredPort, ...] | None = None,
 ) -> UvServiceConfig:
     """Translate an already-resolved uv spec dict into ``UvServiceConfig``.
 
@@ -489,6 +630,11 @@ def _build_uv_config(
     category = ServiceCategory(resolved["category"])
     capabilities = ServiceCapabilities(**resolved["capabilities"])
     resource_estimate = ServiceResourceEstimate(**resolved["resource_estimate"])
+    if declared:
+        primary = next(port for port in declared if port.primary)
+        runtime_port: int | str = primary.host
+    else:
+        runtime_port = resolved["listen_port"] or 0
     return UvServiceConfig(
         name=resolved["name"],
         display_name=resolved["display_name"],
@@ -507,8 +653,11 @@ def _build_uv_config(
         install_env=dict(resolved.get("install_env") or {}),
         command_env=dict(resolved.get("command_env") or {}),
         listen_host=resolved["listen_host"],
-        listen_port=resolved["listen_port"],
+        listen_port=runtime_port,
         port_markers=port_markers,
+        canonical_name=resolved.get("canonical_name"),
+        ports=declared or (),
+        fixed_host_ports=_fixed_host_ports(declared, runtime_port),
         public_host=resolved.get("public_host"),
         health_probe_path=resolved["health_probe_path"],
         health_timeout_s=resolved["health_timeout_s"],
@@ -613,6 +762,12 @@ def load_service_spec(
     if isinstance(spec, ComposeServiceSpec):
         _assert_compose_runtime_port_published(resolved, options_resolved, path)
 
+    # The declared ``ports:`` block (ADR-049). Absent = the legacy
+    # single-port form, where the per-kind fields stay the source of truth.
+    declared = _declared_ports(spec)
+    if isinstance(spec, ComposeServiceSpec):
+        _assert_compose_ports_published(resolved, declared, path)
+
     # Map options (``extra_env`` / ``extra_mounts``) merge additively
     # into the resolved spec, with user additions winning on key
     # collisions. The YAML ``env:`` / ``volumes:`` blocks declare the
@@ -637,16 +792,16 @@ def load_service_spec(
         resolved["volumes"] = {**(resolved.get("volumes") or {}), **extra_mounts}
 
     if isinstance(spec, DockerServiceSpec):
-        config = _build_docker_config(resolved, options_model, spec.options, port_markers)
+        config = _build_docker_config(resolved, options_model, spec.options, port_markers, declared)
         return DockerService(ctx, config=config)
 
     if isinstance(spec, ComposeServiceSpec):
         config = _build_compose_config(
-            resolved, options_model, spec.options, options_resolved, port_markers
+            resolved, options_model, spec.options, options_resolved, port_markers, declared
         )
         return ComposeService(ctx, config=config)
 
-    config = _build_uv_config(resolved, options_model, spec.options, port_markers)
+    config = _build_uv_config(resolved, options_model, spec.options, port_markers, declared)
     return UvService(ctx, config=config)
 
 

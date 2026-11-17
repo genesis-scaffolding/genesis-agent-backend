@@ -247,8 +247,37 @@ def test_service_summary_keeps_existing_fields(client: TestClient) -> None:
             "runtime_endpoint",
             "web_ui_endpoint",
             "can_install",
+            "canonical_name",
+            "ports",
         }
         assert isinstance(entry["can_install"], bool)
+
+
+def test_service_summary_carries_the_canonical_name_and_ports(client: TestClient) -> None:
+    """The declared canonical name and the routable ports ride the list row."""
+    r = client.get("/v1/services")
+    assert r.status_code == 200
+    by_name = {entry["name"]: entry for entry in r.json()}
+    assert by_name["ntfy"]["canonical_name"] == "ntfy"
+    # The legacy single-port form reports one unlabelled port.
+    assert len(by_name["ntfy"]["ports"]) == 1
+    assert by_name["ntfy"]["ports"][0]["label"] is None
+    assert by_name["ntfy"]["ports"][0]["primary"] is True
+    # A service that declares no canonical name reports none.
+    assert by_name["llama_swap"]["canonical_name"] is None
+
+
+def test_service_summary_reports_the_declared_ports(client: TestClient) -> None:
+    """A multi-port service reports one row per declared port."""
+    r = client.get("/v1/services")
+    assert r.status_code == 200
+    by_name = {entry["name"]: entry for entry in r.json()}
+    genesis = by_name.get("genesis-productivity")
+    if genesis is None:
+        pytest.skip("genesis-productivity is not registered in this worker")
+    assert genesis["canonical_name"] == "genesis"
+    assert [port["label"] for port in genesis["ports"]] == ["ui", "api"]
+    assert [port["primary"] for port in genesis["ports"]] == [True, False]
 
 
 # --- /v1/services POST endpoints (ADR-038) ---------------------------------

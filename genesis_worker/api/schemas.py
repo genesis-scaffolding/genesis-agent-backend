@@ -21,6 +21,7 @@ from ..contracts import (
     ModelEntry,
     ModelPiece,
     ServiceCapabilities,
+    ServicePort,
     ServiceStatus,
 )
 from ..utils.models import MachineMetrics, ServiceInfo
@@ -159,6 +160,18 @@ class ServiceStatusSchema(BaseModel):
         )
 
 
+class ServicePortSchema(BaseModel):
+    """One routable port of a service (ADR-049)."""
+
+    label: str | None = None
+    primary: bool = True
+    endpoint: str | None = None
+
+    @classmethod
+    def from_dataclass(cls, port: ServicePort) -> ServicePortSchema:
+        return cls(label=port.label, primary=port.primary, endpoint=port.endpoint)
+
+
 class ServiceSummarySchema(BaseModel):
     """List-row shape — small enough for tables, but already includes
     the runtime/web URLs so a downstream consumer can build a "what's
@@ -167,6 +180,10 @@ class ServiceSummarySchema(BaseModel):
     Both URL fields are ``None`` when the service is not running; the
     methods themselves guard on ``is_running()`` so this is the
     natural shape.
+
+    ``canonical_name`` and ``ports`` are additive (ADR-049): an older
+    worker sends neither, and the orchestrator degrades to one route per
+    service.
     """
 
     name: str
@@ -179,6 +196,8 @@ class ServiceSummarySchema(BaseModel):
     runtime_endpoint: str | None
     web_ui_endpoint: str | None
     can_install: bool
+    canonical_name: str | None = None
+    ports: list[ServicePortSchema] = []
 
     @classmethod
     def from_facade(
@@ -203,6 +222,8 @@ class ServiceSummarySchema(BaseModel):
             runtime_endpoint=runtime_endpoint,
             web_ui_endpoint=web_ui_endpoint,
             can_install=can_install,
+            canonical_name=info.canonical_name,
+            ports=[ServicePortSchema.from_dataclass(port) for port in info.ports],
         )
 
 
@@ -464,6 +485,7 @@ __all__ = [
     "PathsSchema",
     "ServiceCapabilitiesSchema",
     "ServiceDetailSchema",
+    "ServicePortSchema",
     "ServiceStatusSchema",
     "ServiceSummarySchema",
     "SessionSummarySchema",

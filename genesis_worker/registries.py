@@ -249,15 +249,14 @@ class ServiceRegistry(_Registry):
         """The ports the allocator must stay off.
 
         The framework's own ports plus every registered service's fixed
-        host port — a service that is not running still owns its port,
-        so the bind test alone would not catch it.
+        host ports — a service that is not running still owns its port,
+        so the bind test alone would not catch it. A service that declares
+        several ports owns all of them (ADR-049).
         """
         ports = set(framework_ports())
         services = cast("dict[str, InferenceService]", self._instances)
         for svc in services.values():
-            port = svc.declared_host_port()
-            if port is not None:
-                ports.add(port)
+            ports.update(svc.declared_host_ports())
         return ports
 
     def _context(self, cls: type[InferenceService]) -> ServiceContext:

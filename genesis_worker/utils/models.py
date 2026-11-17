@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..contracts.service import ServiceCapabilities, ServiceCategory
+from ..contracts.service import ServiceCapabilities, ServiceCategory, ServicePort
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,8 @@ class ServiceInfo:
     capabilities: ServiceCapabilities
     category: ServiceCategory = ServiceCategory.OTHER
     description: str = ""
+    canonical_name: str | None = None
+    ports: tuple[ServicePort, ...] = ()
 
 
 @dataclass(frozen=True)

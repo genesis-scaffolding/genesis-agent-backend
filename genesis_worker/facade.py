@@ -409,6 +409,8 @@ class GenesisWorker:
                 capabilities=svc.capabilities(),
                 category=svc.category,
                 description=svc.description,
+                canonical_name=svc.canonical_name(),
+                ports=svc.service_ports(),
             )
             for svc in self._service_registry.all()
         ]
@@ -428,6 +430,8 @@ class GenesisWorker:
                 capabilities=svc.capabilities(),
                 category=svc.category,
                 description=svc.description,
+                canonical_name=svc.canonical_name(),
+                ports=svc.service_ports(),
             )
             for svc in self._service_registry.all()
             if svc.name in enabled

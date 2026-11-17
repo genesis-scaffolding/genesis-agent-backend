@@ -71,6 +71,22 @@ class ServiceStatus:
 
 
 @dataclass(frozen=True)
+class ServicePort:
+    """One routable port of a service (ADR-049).
+
+    ``label`` is the port's role (``ui``, ``api``, ...); ``None`` for the
+    implicit single port of a service that declares no ``ports:`` block.
+    ``primary`` marks the port that carries the service's bare name.
+    ``endpoint`` is the service's own URL for that port — ``None`` when the
+    service is not running or the port is not allocated yet.
+    """
+
+    label: str | None = None
+    primary: bool = True
+    endpoint: str | None = None
+
+
+@dataclass(frozen=True)
 class StartResult:
     ok: bool
     message: str = ""
@@ -252,11 +268,35 @@ class InferenceService(Plugin):
         """
         return None
 
+    def declared_host_ports(self) -> tuple[int, ...]:
+        """Every fixed host port this service binds (ADR-049).
+
+        The allocator reserves all of them, so a service's second fixed
+        port cannot be handed to another service. A service that binds
+        one port declares that one.
+        """
+        port = self.declared_host_port()
+        return (port,) if port is not None else ()
+
+    def canonical_name(self) -> str | None:
+        """The cluster-wide canonical label this service declares, or ``None``.
+
+        Declaring a label asserts that the service is cluster-wide and
+        single-instance; the orchestrator grants that name only while one
+        live instance exists (ADR-049).
+        """
+        return None
+
+    def service_ports(self) -> tuple[ServicePort, ...]:
+        """The service's routable ports: role label, primary flag, endpoint."""
+        return ()
+
 
 __all__ = [
     "InferenceService",
     "ServiceCapabilities",
     "ServiceCategory",
+    "ServicePort",
     "ServiceResourceEstimate",
     "ServiceState",
     "ServiceStatus",
