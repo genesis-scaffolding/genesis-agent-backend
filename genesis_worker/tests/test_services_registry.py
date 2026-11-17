@@ -59,6 +59,7 @@ def test_registry_all_returns_every_service() -> None:
         "kavita",
         "llama_swap",
         "ntfy",
+        "paperless",
         "photoprism",
         "prometheus",
         "romm",

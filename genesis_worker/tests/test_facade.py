@@ -729,6 +729,70 @@ def test_install_service_raises_runtime_when_acquire_cancelled(
         w.install_service("llama_swap")
 
 
+def test_install_service_installs_every_image_of_a_compose_stack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compose service's install endpoint fetches the whole stack.
+
+    The API path used to install only the primary installable — one image of
+    paperless-ngx's three-image stack (ADR-049).
+    """
+    from genesis_worker.utils.process import DockerContainer
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
+    class _DoneSession:
+        def view(self) -> AcquireView:
+            return AcquireView(kind=AcquireStateKind.COMPLETE, title="done", can_cancel=False)
+
+        def cancel(self) -> None:
+            return None
+
+        def wait(self) -> AcquireView:
+            return self.view()
+
+    calls: list[tuple[str, str | None]] = []
+
+    def _install(self, *, version: str | None = None):
+        calls.append((self.name, version))
+        return _DoneSession()
+
+    monkeypatch.setattr(DockerImageInstall, "install", _install)
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda ref: False))
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    result = w.install_service("paperless")
+    assert result["installed"] is True
+    assert [name for name, _ in calls] == [
+        "paperless:paperless",
+        "paperless:paperless-db",
+        "paperless:paperless-broker",
+    ]
+
+
+def test_install_service_short_circuits_when_every_image_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is pulled when the stack is already on disk."""
+    from genesis_worker.utils.process import DockerContainer
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
+    calls: list[str] = []
+
+    def _install(self, *, version: str | None = None):
+        calls.append(self.name)
+        raise AssertionError("nothing should be installed when the stack is present")
+
+    monkeypatch.setattr(DockerImageInstall, "install", _install)
+    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda ref: True))
+
+    settings = _hermetic_settings(tmp_path)
+    w = GenesisWorker(settings=settings)
+    result = w.install_service("paperless")
+    assert result["installed"] is True
+    assert calls == []
+
+
 def test_start_service_with_config_sets_pending_attribute(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

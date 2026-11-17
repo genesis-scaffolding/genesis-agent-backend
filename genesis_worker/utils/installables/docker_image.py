@@ -51,6 +51,20 @@ class DockerImageInstall(ServiceInstall):
     def image_ref(self) -> str:
         return f"{self._image_repo}:{self._image_tag}"
 
+    @property
+    def effective_ref(self) -> str:
+        """The ref the service runs with: the recorded selection, else the default tag."""
+        tag = self.installed_version()
+        return f"{self._image_repo}:{tag or self._image_tag}"
+
+    def is_present(self) -> bool:
+        """True iff the *effective* ref is on disk.
+
+        ``state()`` also reports INSTALLED when the default tag happens
+        to be present, which is not the ref the stack will run.
+        """
+        return DockerContainer.image_present(self.effective_ref)
+
     def source_url(self) -> str | None:
         return self._source_url
 

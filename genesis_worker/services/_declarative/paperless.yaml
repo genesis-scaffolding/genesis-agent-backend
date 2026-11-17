@@ -1,0 +1,242 @@
+# paperless.yaml — paperless-ngx as a declarative compose service.
+#
+# WHY kind: compose (not kind: docker)
+# ------------------------------------
+# Upstream ships a three-container stack (docker/compose/docker-compose.postgres.yml):
+#   webserver  ghcr.io/paperless-ngx/paperless-ngx — Django + the Angular UI.
+#              s6 supervises the consumer / worker / scheduler inside this one
+#              container; there is no separate "consumer" container upstream.
+#   db         postgres — the document index.
+#   broker     valkey (Redis protocol) — the Celery broker.
+#
+# The broker is NOT optional: the image's s6 init step
+# docker/rootfs/etc/s6-overlay/s6-rc.d/init-wait-for-redis/run pings
+# PAPERLESS_REDIS and EXITS THE CONTAINER when the broker is unreachable
+# (5 retries x 5s, then exit EX_UNAVAILABLE). The database is equally
+# mandatory in the postgres variant (init-wait-for-db polls pg_isready).
+#
+# The framework's single-container template cannot express this: there is no
+# way to declare a second container, a service network, or depends_on.
+#
+# MOUNTS: every bind mount is declared ONCE, in the compose template below.
+# A compose-kind spec has no top-level `volumes:` block — for this kind the
+# block is not rendered into docker-compose.yml at all; it would only feed
+# the framework's host-dir pre-creation (ComposeService._ensure_volume_dirs).
+# The containers create/chown their own mount points (the paperless image's
+# init-folders step chowns them to the paperless user), so a second
+# declaration would be duplication without effect.
+#
+# See https://github.com/paperless-ngx/paperless-ngx and
+# https://docs.paperless-ngx.com/setup/
+
+version: 1
+kind: compose
+name: paperless
+display_name: Paperless-ngx
+description: Document and receipt management
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 2      # OCR is CPU-bound
+
+compose_version: "3.8"
+# The image's own HEALTHCHECK curls http://localhost:8000 — the frontend
+# answers 302 -> /accounts/login/ -> 200, so "/" is the probe path.
+health_probe_path: /
+
+# Every image the stack uses. Each becomes a real DockerImageInstall, so all
+# three get a registry version picker on the Images page (the recorded
+# selection wins over default_tag at render time).
+# The Status page's Install button pulls all three (ADR-049) — a compose
+# stack is only runnable when every one of them is on disk.
+images:
+  - name: paperless
+    repo: ghcr.io/paperless-ngx/paperless-ngx
+    default_tag: latest
+  - name: paperless-db
+    repo: postgres
+    default_tag: 18-alpine
+  - name: paperless-broker
+    repo: valkey/valkey
+    default_tag: 9-alpine
+
+# The signing secret. paperless REFUSES TO START without a valid
+# PAPERLESS_SECRET_KEY (and rejects the literal "change-me"), and the key
+# must not change between restarts or every session/token is invalidated.
+# The hook creates the file once and never rewrites it; paperless reads it
+# through its own PAPERLESS_*_FILE mechanism (documented upstream, wired by
+# the image's init-env-file step).
+pre_start_hooks:
+  - kind: ensure_persistent_token
+    target: "$options.secret_key_file"
+    mode: "0o600"
+    generator: random_hex_32
+
+compose_template: |
+  version: "3.8"
+  services:
+    paperless:
+      image: $images.paperless
+      container_name: paperless-ngx
+      restart: unless-stopped
+      depends_on:
+        paperless-db:
+          condition: service_healthy
+        paperless-broker:
+          condition: service_healthy
+      ports:
+        # Host 8103 -> container 8000 (the image's EXPOSE).
+        - "$options.listen_host:$options.listen_port:8000"
+      environment:
+        PAPERLESS_REDIS: "redis://paperless-broker:6379"
+        PAPERLESS_DBENGINE: "postgresql"
+        PAPERLESS_DBHOST: "paperless-db"
+        PAPERLESS_DBPORT: "5432"
+        PAPERLESS_DBNAME: "$options.db_name"
+        PAPERLESS_DBUSER: "$options.db_user"
+        PAPERLESS_DBPASS: "$options.db_password"
+        # The secret lives in the host file the pre-start hook created.
+        PAPERLESS_SECRET_KEY_FILE: "/usr/src/paperless/secret_key"
+        PAPERLESS_TIME_ZONE: "$options.tz"
+        PAPERLESS_OCR_LANGUAGE: "$options.ocr_language"
+        PAPERLESS_URL: "$options.paperless_url"
+        PAPERLESS_ADMIN_USER: "$options.admin_user"
+        PAPERLESS_ADMIN_PASSWORD: "$options.admin_password"
+        USERMAP_UID: "$options.puid"
+        USERMAP_GID: "$options.pgid"
+      volumes:
+        - $data_dir/data:/usr/src/paperless/data
+        - $data_dir/media:/usr/src/paperless/media
+        - $data_dir/export:/usr/src/paperless/export
+        - $options.consume_dir:/usr/src/paperless/consume
+        - $options.secret_key_file:/usr/src/paperless/secret_key:ro
+      healthcheck:
+        test: ["CMD", "curl", "-fs", "-S", "-L", "--max-time", "2", "http://localhost:8000"]
+        interval: 30s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+
+    paperless-db:
+      image: $images.paperless-db
+      container_name: paperless-db
+      restart: unless-stopped
+      environment:
+        POSTGRES_DB: "$options.db_name"
+        POSTGRES_USER: "$options.db_user"
+        POSTGRES_PASSWORD: "$options.db_password"
+      volumes:
+        # postgres 18 moved PGDATA to /var/lib/postgresql/18/docker — the
+        # volume must be the PARENT dir, not .../data (upstream does the same).
+        - $data_dir/db:/var/lib/postgresql
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U $options.db_user -d $options.db_name"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+    paperless-broker:
+      image: $images.paperless-broker
+      container_name: paperless-broker
+      restart: unless-stopped
+      volumes:
+        - $data_dir/redis:/data
+      healthcheck:
+        test: ["CMD", "valkey-cli", "ping"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
+    ui_label: Listen host
+    ui_group: Network
+  listen_port:
+    type: port
+    default: 8103
+    ui_label: Web UI port
+    ui_help: Host-side port the Paperless-ngx web UI is published on. The container always listens on 8000.
+    ui_group: Network
+  consume_dir:
+    type: path
+    default: "$media_vault_path/paperless/consume"
+    ui_label: Consumption directory
+    ui_help: Host directory Paperless-ngx watches for new documents. Files dropped here are consumed (OCR'd, tagged, filed) and removed. Defaults to <media vault>/paperless/consume.
+    ui_group: Storage
+  secret_key_file:
+    type: path
+    default: "$state_dir/secret_key"
+    ui_label: Secret key file
+    ui_help: Host file holding Paperless-ngx's session-signing secret. The worker generates one once and never rewrites it; point this at a file you manage to supply your own secret.
+    ui_group: Security
+  admin_user:
+    type: string
+    default: ""
+    ui_label: Admin user
+    ui_help: Superuser created at first start. Leave empty (with the admin password empty) to skip the automatic superuser and use the web UI's first-run wizard instead. A user name without a password creates a superuser with an EMPTY password.
+    ui_group: Security
+  admin_password:
+    type: string
+    default: ""
+    ui_label: Admin password
+    ui_help: Password for the auto-created superuser. Only used when the admin user is also set, and only at first start - it never changes an existing account's password.
+    ui_group: Security
+  db_name:
+    type: string
+    default: "paperless"
+    ui_label: Database name
+    ui_group: Database
+  db_user:
+    type: string
+    default: "paperless"
+    ui_label: Database user
+    ui_group: Database
+  db_password:
+    type: string
+    default: "changeme"
+    ui_label: Database password
+    ui_help: Password for the PostgreSQL role. Change it before the first start - the database only applies it when the cluster is initialised.
+    ui_group: Database
+  tz:
+    type: string
+    default: "Australia/Adelaide"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Australia/Adelaide)
+    ui_group: General
+  ocr_language:
+    type: string
+    default: "eng"
+    ui_label: OCR language
+    ui_help: Tesseract language used for text recognition (ISO 639-2 code, e.g. eng or deu)
+    ui_group: General
+  paperless_url:
+    type: string
+    default: ""
+    ui_label: Public URL
+    ui_help: Public URL of the instance (e.g. https://paperless-ngx-p3.example.com). Set it once the ingress hostname exists - it seeds the allowed hosts, CORS and CSRF trusted origins.
+    ui_group: General
+  puid:
+    type: int
+    default: 1000
+    ui_label: User ID (PUID)
+    ui_help: UID the Paperless-ngx process runs as inside the container; set it to your host UID so the consumption directory stays host-owned.
+    ui_group: Permissions
+  pgid:
+    type: int
+    default: 1000
+    ui_label: Group ID (PGID)
+    ui_help: GID the Paperless-ngx process runs as inside the container.
+    ui_group: Permissions

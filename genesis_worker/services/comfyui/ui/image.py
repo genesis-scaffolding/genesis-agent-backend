@@ -27,7 +27,6 @@ st.caption(
 
 _SESSION_KEY_PREFIX = "image/sessions"
 _VERSIONS_KEY_PREFIX = "image/available_versions"
-_DROP_PENDING_PREFIX = "image/drop_pending"
 _PENDING_TAG_PREFIX = "image/pending_tag"
 
 _OPTION_KEYS = {"cuda": "image_tag", "rocm": "rocm_image_tag"}
@@ -39,10 +38,6 @@ def _session_key(name: str) -> str:
 
 def _versions_key(name: str) -> str:
     return f"{_VERSIONS_KEY_PREFIX}/{name}"
-
-
-def _drop_pending_key(name: str) -> str:
-    return f"{_DROP_PENDING_PREFIX}/{name}"
 
 
 def _pending_tag_key(name: str) -> str:
@@ -79,7 +74,6 @@ for installable in svc.installs():
     name = installable.name
     variant = installable.variant
     sess_key = _session_key(name)
-    drop_key = _drop_pending_key(name)
 
     with st.expander(name, expanded=False):
         resolved = svc.image_tag(variant)
@@ -194,28 +188,20 @@ for installable in svc.installs():
                     pending = st.session_state.pop(_pending_tag_key(name), None)
                     if pending:
                         _persist_image_tag(variant, pending)
-                if st.session_state.get(drop_key):
+                if st.button("Dismiss", key=f"dismiss-{name}"):
                     st.session_state.pop(sess_key, None)
-                    st.session_state.pop(drop_key, None)
                     st.rerun()
-                else:
-                    st.session_state[drop_key] = True
-                    if st.button("Dismiss", key=f"dismiss-{name}"):
-                        st.session_state.pop(sess_key, None)
-                        st.session_state.pop(drop_key, None)
-                        st.rerun()
             else:
 
                 @st.fragment(run_every="2s")
-                def _progress(session=session, drop_key=drop_key) -> None:
+                def _progress(session=session) -> None:
                     step = session.view()
                     _render_step(step)
                     if step.kind in (
                         AcquireStateKind.COMPLETE,
                         AcquireStateKind.FAILED,
                         AcquireStateKind.CANCELLED,
-                    ) and not st.session_state.get(drop_key):
-                        st.session_state[drop_key] = True
+                    ):
                         st.rerun(scope="app")
 
                 _progress()

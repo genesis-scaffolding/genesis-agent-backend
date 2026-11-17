@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from .acquire import AcquireSession
 from .catalog import Catalog
 from .context import ServiceContext
 from .install import ServiceInstall
@@ -183,6 +184,28 @@ class InferenceService(Plugin):
         unavailable.
         """
         return None
+
+    def service_install(self) -> AcquireSession | None:
+        """A session that installs everything this service needs to run.
+
+        ADR-049. The default is the primary installable's session — one
+        artifact, today's behaviour. A service that needs several artifacts
+        (a compose stack: app + database + broker) overrides this to
+        return a session that covers all of them.
+        """
+        primary = self.primary_installable()
+        return primary.install() if primary is not None else None
+
+    def missing_installables(self) -> list[ServiceInstall]:
+        """The installables whose artifact is still absent.
+
+        ADR-049. The default is the primary installable, when it is not
+        present — today's behaviour.
+        """
+        primary = self.primary_installable()
+        if primary is None:
+            return []
+        return [] if primary.is_present() else [primary]
 
     # can_generate_config
 

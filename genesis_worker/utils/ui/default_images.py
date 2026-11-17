@@ -28,7 +28,6 @@ from genesis_worker.contracts import (
 from genesis_worker.utils.process import DockerContainer
 
 _SESSION_KEY_PREFIX = "default-images/sessions"
-_DROP_PENDING_PREFIX = "default-images/drop-pending"
 
 
 @dataclass(frozen=True)
@@ -83,10 +82,6 @@ def _session_key(svc: InferenceService, name: str) -> str:
     return f"{_SESSION_KEY_PREFIX}/{svc.name}/{name}"
 
 
-def _drop_pending_key(svc: InferenceService, name: str) -> str:
-    return f"{_DROP_PENDING_PREFIX}/{svc.name}/{name}"
-
-
 def _render_step(step: AcquireView) -> None:
     if step.kind == "complete":
         st.success(step.title or "complete")
@@ -107,7 +102,6 @@ def _render_step(step: AcquireView) -> None:
 def _render_one(svc: InferenceService, row: ImageRow) -> None:
     inst = row.installable
     sess_key = _session_key(svc, inst.name)
-    drop_key = _drop_pending_key(svc, inst.name)
     in_flight = sess_key in st.session_state
 
     with st.expander(inst.name, expanded=False):
@@ -232,28 +226,20 @@ def _render_one(svc: InferenceService, row: ImageRow) -> None:
                 AcquireStateKind.CANCELLED,
             ):
                 _render_step(current_step)
-                if st.session_state.get(drop_key):
+                if st.button("Dismiss", key=f"dismiss-{svc.name}-{inst.name}"):
                     st.session_state.pop(sess_key, None)
-                    st.session_state.pop(drop_key, None)
                     st.rerun()
-                else:
-                    st.session_state[drop_key] = True
-                    if st.button("Dismiss", key=f"dismiss-{svc.name}-{inst.name}"):
-                        st.session_state.pop(sess_key, None)
-                        st.session_state.pop(drop_key, None)
-                        st.rerun()
             else:
 
                 @st.fragment(run_every="2s")
-                def _progress(session=session, drop_key=drop_key) -> None:
+                def _progress(session=session) -> None:
                     step = session.view()
                     _render_step(step)
                     if step.kind in (
                         AcquireStateKind.COMPLETE,
                         AcquireStateKind.FAILED,
                         AcquireStateKind.CANCELLED,
-                    ) and not st.session_state.get(drop_key):
-                        st.session_state[drop_key] = True
+                    ):
                         st.rerun(scope="app")
 
                 _progress()

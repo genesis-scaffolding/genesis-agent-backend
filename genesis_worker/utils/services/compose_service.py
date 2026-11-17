@@ -19,6 +19,7 @@ from typing import Any, cast
 import yaml
 
 from ...contracts import (
+    AcquireSession,
     ServiceCapabilities,
     ServiceCategory,
     ServiceContext,
@@ -29,6 +30,7 @@ from ...contracts import (
     StartResult,
     StopResult,
 )
+from ..acquire import MultiInstallSession
 from ..installables.docker_image import DockerImageInstall
 from ..net import HealthProbe
 from ..ports.markers import assert_no_markers, marker_name
@@ -409,6 +411,23 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
 
     def _installs(self) -> list[ServiceInstall]:
         return cast("list[ServiceInstall]", self._installables)
+
+    def service_install(self) -> AcquireSession | None:
+        """Install every image the stack needs (ADR-049).
+
+        The composite session skips the images already present, so a
+        partial install resumes instead of starting over.
+        """
+        return MultiInstallSession(self._installables, label=self.display_name)
+
+    def missing_installables(self) -> list[ServiceInstall]:
+        """The images whose effective ref is absent locally.
+
+        Derived from the same refs ``is_available()`` checks, so the
+        status page's "still needed" list and the availability check
+        never disagree.
+        """
+        return [installable for installable in self._installables if not installable.is_present()]
 
 
 __all__ = [

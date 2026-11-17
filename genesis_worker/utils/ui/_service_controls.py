@@ -5,7 +5,12 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis_worker.contracts import InferenceService, ServiceState, ServiceStatus
-from genesis_worker.utils.ui._install_flow import render_inline_install
+from genesis_worker.utils.refs import installable_ref
+from genesis_worker.utils.ui._install_flow import (
+    install_session_key,
+    render_inline_install,
+    render_install_session,
+)
 
 
 def _render_badge(state: ServiceState) -> None:
@@ -147,17 +152,36 @@ def render_action_button(
         return
 
     # STOPPED or UNAVAILABLE.
+    install_prefix = f"{key_prefix}-install"
+    sess_key = install_session_key(install_prefix)
+
     if not is_available:
-        installable = worker.service(name).primary_installable()
-        if installable is not None:
-            render_inline_install(
-                installable,
-                key_prefix=f"{key_prefix}-install",
-                use_container_width=use_container_width,
+        svc = worker.service(name)
+        missing = svc.missing_installables()
+        if missing:
+            st.caption(
+                f"Still needed: {', '.join(installable_ref(item) for item in missing)} — "
+                "Install fetches all of them."
             )
-        else:
+        if svc.primary_installable() is None:
             st.caption("Not installed")
+            return
+        render_inline_install(
+            lambda: svc.service_install(),
+            key_prefix=install_prefix,
+            use_container_width=use_container_width,
+        )
         return
+
+    # The service is available. An install that just finished keeps its
+    # outcome on screen next to the Start button (ADR-049) — the message
+    # is the only thing that tells the operator what happened.
+    if sess_key in st.session_state:
+        render_install_session(
+            sess_key=sess_key,
+            key_prefix=install_prefix,
+            use_container_width=use_container_width,
+        )
 
     if st.button("Start", key=f"{key_prefix}-start", use_container_width=use_container_width):
         result = worker.start_service(name)
