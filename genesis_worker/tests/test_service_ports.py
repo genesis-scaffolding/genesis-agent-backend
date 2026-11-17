@@ -439,3 +439,17 @@ def test_a_compose_template_that_does_not_publish_a_declared_port_is_rejected(
     )
     with pytest.raises(ValueError, match="compose template"):
         load_service_spec(path, ctx=service_ctx(tmp_path, name="stack"))
+
+
+def test_a_docker_spec_without_any_port_is_rejected() -> None:
+    """The legacy form still needs its port — the field only became optional."""
+    with pytest.raises(ValueError, match="no container.listen_port"):
+        DockerServiceSpec.model_validate(_docker(container={"name": "demo"}))
+
+
+def test_a_uv_spec_without_any_port_is_rejected() -> None:
+    """The same for the uv kind."""
+    payload = _uv()
+    payload.pop("listen_port")
+    with pytest.raises(ValueError, match="no listen_port"):
+        UvServiceSpec.model_validate(payload)

@@ -132,6 +132,7 @@ def _validate_declared_ports(
     kind: str,
     ports: list[PortSpec] | None,
     legacy_present: Sequence[str],
+    legacy_required: str = "",
 ) -> None:
     """The cross-field rules of the ``ports:`` block (ADR-049).
 
@@ -139,9 +140,15 @@ def _validate_declared_ports(
     legacy per-kind port fields must be absent; exactly one port is the
     primary; a multi-port service labels every port (the labels keep the
     per-port hostnames apart); labels are DNS labels; and the host ports
-    are distinct.
+    are distinct. Without a ``ports:`` block the legacy field is still
+    required — the port must be declared somewhere.
     """
     if ports is None:
+        if legacy_required and legacy_required not in legacy_present:
+            raise ValueError(
+                f"service {service!r} declares no `ports:` block and no {legacy_required} — "
+                "declare the port in one place"
+            )
         return
     if not ports:
         raise ValueError(f"service {service!r} declares an empty `ports:` block")
@@ -337,6 +344,7 @@ class DockerServiceSpec(BaseModel):
             kind="docker",
             ports=self.ports,
             legacy_present=legacy,
+            legacy_required="container.listen_port",
         )
         _validate_canonical_name(self.name, self.canonical_name)
         return self
@@ -393,6 +401,7 @@ class UvServiceSpec(BaseModel):
             kind="uv",
             ports=self.ports,
             legacy_present=["listen_port"] if self.listen_port is not None else [],
+            legacy_required="listen_port",
         )
         _validate_canonical_name(self.name, self.canonical_name)
         return self
