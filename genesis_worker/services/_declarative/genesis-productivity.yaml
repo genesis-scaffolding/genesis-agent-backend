@@ -32,6 +32,25 @@ display_name: Genesis Productivity
 description: Tasks, projects, journals, calendar, contacts, XP
 category: utility
 
+# The cluster-wide canonical label this service answers to (ADR-049).
+# Declaring it asserts that the service is cluster-wide and
+# single-instance; the orchestrator grants that name only while one live
+# instance exists. The API port gets its own canonical name
+# (``api-genesis.<domain>``) — the label prefix is the port's role.
+canonical_name: genesis
+
+# The service's routable ports (ADR-049). The UI port is the primary one
+# (it carries the health probe and the web UI endpoint); the API port is
+# the second. The compose template publishes both.
+ports:
+  - label: ui
+    primary: true
+    host: $options.listen_port
+    container: 3000
+  - label: api
+    host: $options.api_port
+    container: 8765
+
 capabilities:
   can_generate_config: false
   can_export_for_agent: false

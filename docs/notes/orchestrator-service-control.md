@@ -268,6 +268,44 @@ instead of discovering the refusal as a deploy failure.
 The field is additive: every pre-existing field of the summary row is
 unchanged.
 
+## Read-side: the canonical name and the routable ports (ADR-051)
+
+`GET /v1/services` carries two more additive fields:
+
+- **`canonical_name`** (string or null) — the cluster-wide, node-independent
+  label the service declares in its spec. Declaring it asserts that the
+  service is cluster-wide and single-instance; the orchestrator grants the
+  name only while exactly one live instance of the service exists, and
+  withholds it (every instance keeping its per-node name) when a second
+  instance appears. `null` for a service that declares no label.
+- **`ports`** (list) — the service's routable ports, in declaration order.
+  Each entry is `{"label": string|null, "primary": bool, "endpoint":
+  string|null}`:
+  - `label` — the port's role (`ui`, `api`, …). `null` for the implicit
+    single port of a service that declares no `ports:` block.
+  - `primary` — the port that carries the service's bare name.
+  - `endpoint` — the service's own URL for that port. `null` when the
+    service is not running or the port is not allocated yet.
+
+```json
+{
+  "name": "genesis-productivity",
+  "canonical_name": "genesis",
+  "ports": [
+    {"label": "ui",  "primary": true,  "endpoint": "http://p3:3000/"},
+    {"label": "api", "primary": false, "endpoint": "http://p3:8765/"}
+  ]
+}
+```
+
+The worker never composes a hostname: the base domain belongs to the
+orchestrator. The worker declares a *label*; the orchestrator turns it into
+`<label>.<domain>` (the primary port) and `<portlabel>-<label>.<domain>`
+(the other ports).
+
+The fields are additive: an older worker sends neither, and the orchestrator
+degrades to one route per service under its per-node derived hostname.
+
 ## What the orchestrator does NOT need
 
 - No `GET /v1/agent_config` endpoint. The orchestrator derives each

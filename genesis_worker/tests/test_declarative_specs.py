@@ -1586,3 +1586,62 @@ def test_the_adopters_adopt_their_published_ports(tmp_path: Path, monkeypatch) -
     ServiceRegistry(settings)
     data = yaml.safe_load((tmp_path / "state" / "port_allocations.yaml").read_text())
     assert data == {"allocations": {"metube": {"listen": 8098}}}
+
+
+# --- declared ports and canonical names (ADR-051) ---------------------------
+
+
+_CANONICAL_SINGLE_PORT_SPECS = {
+    "ntfy.yaml": "ntfy",
+    "bifrost.yaml": "bifrost",
+    "prometheus.yaml": "prometheus",
+    "freshrss.yaml": "freshrss",
+    "crawl4ai.yaml": "crawl4ai",
+}
+
+
+@pytest.mark.parametrize("spec_name,label", sorted(_CANONICAL_SINGLE_PORT_SPECS.items()))
+def test_single_port_specs_declare_their_canonical_name(
+    spec_name: str, label: str, tmp_path: Path
+) -> None:
+    """The cluster-wide services declare their canonical label.
+
+    They stay on the legacy single-port form: no ``ports:`` block, so
+    their derived hostnames do not change.
+    """
+    svc = _load_spec(spec_name, tmp_path)
+    assert svc.canonical_name() == label
+    assert svc.config.ports == ()
+    assert len(svc.service_ports()) == 1
+    assert svc.service_ports()[0].label is None
+
+
+def test_genesis_productivity_declares_its_ports_and_canonical_name(tmp_path: Path) -> None:
+    """The productivity stack declares both of its ports (ADR-051)."""
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-productivity.yaml",
+        ctx=service_ctx(tmp_path, name="genesis-productivity"),
+    )
+    assert isinstance(svc, ComposeService)
+    assert svc.canonical_name() == "genesis"
+    assert [(port.label, port.primary, port.host) for port in svc.config.ports] == [
+        ("ui", True, 3000),
+        ("api", False, 8765),
+    ]
+    # The allocator keeps off both fixed ports.
+    assert svc.declared_host_ports() == (3000, 8765)
+
+
+def test_genesis_agent_context_declares_its_ports_and_canonical_name(tmp_path: Path) -> None:
+    """The agent-context stack declares both of its ports (ADR-051)."""
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-agent-context.yaml",
+        ctx=service_ctx(tmp_path, name="genesis-agent-context"),
+    )
+    assert isinstance(svc, ComposeService)
+    assert svc.canonical_name() == "gac"
+    assert [(port.label, port.primary, port.host) for port in svc.config.ports] == [
+        ("ui", True, 3001),
+        ("api", False, 8766),
+    ]
+    assert svc.declared_host_ports() == (3001, 8766)

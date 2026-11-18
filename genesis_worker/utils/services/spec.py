@@ -14,7 +14,8 @@ is a registry change (``hooks.py`` / ``panels.py``), not a spec change.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -40,6 +41,21 @@ PortValue = (
     Annotated[int, Field(gt=0, lt=65536)]
     | Annotated[str, StringConstraints(pattern=AUTO_PORT_MARKER_PATTERN)]
 )
+
+# A DNS label: lowercase letters, digits and dashes; no leading or
+# trailing dash; at most 63 characters. A canonical name and a port's
+# role label both end up in a hostname, so both are constrained by it.
+DNS_LABEL_PATTERN = r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+_DNS_LABEL_RE = re.compile(DNS_LABEL_PATTERN)
+
+
+def is_dns_label(value: str) -> bool:
+    """True iff ``value`` is a DNS label usable as one hostname label.
+
+    ``fullmatch`` on purpose: ``$`` also matches just before a trailing
+    newline, so ``"genesis\n"`` must not pass as a label.
+    """
+    return bool(value) and len(value) <= 63 and _DNS_LABEL_RE.fullmatch(value) is not None
 
 
 class OptionSpec(BaseModel):
@@ -89,12 +105,107 @@ class ExtraPortSpec(BaseModel):
     host: PortValue
 
 
+class PortSpec(BaseModel):
+    """One routable port of a service (ADR-051).
+
+    The top-level ``ports:`` list replaces the per-kind port fields. Each
+    entry names the port's role (``label``), marks at most one of them
+    ``primary``, and says which host port a client connects to (``host``)
+    and which port the container itself listens on (``container``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = None
+    primary: bool = False
+    host: PortValue
+    container: int | None = None
+
+
+def _validate_canonical_name(service: str, canonical_name: str | None) -> None:
+    """The declared canonical name must be a DNS label (ADR-051)."""
+    if canonical_name is None:
+        return
+    if not is_dns_label(canonical_name):
+        raise ValueError(f"canonical_name {canonical_name!r} is not a DNS label")
+
+
+def _validate_declared_ports(
+    *,
+    service: str,
+    kind: str,
+    ports: list[PortSpec] | None,
+    legacy_present: Sequence[str],
+    legacy_required: str = "",
+) -> None:
+    """The cross-field rules of the ``ports:`` block (ADR-051).
+
+    ``ports:`` is the single source of truth when it is present, so the
+    legacy per-kind port fields must be absent; exactly one port is the
+    primary; a multi-port service labels every port (the labels keep the
+    per-port hostnames apart); labels are DNS labels; and the host ports
+    are distinct. Without a ``ports:`` block the legacy field is still
+    required — the port must be declared somewhere.
+    """
+    if ports is None:
+        if legacy_required and legacy_required not in legacy_present:
+            raise ValueError(
+                f"service {service!r} declares no `ports:` block and no {legacy_required} — "
+                "declare the port in one place"
+            )
+        return
+    if not ports:
+        raise ValueError(f"service {service!r} declares an empty `ports:` block")
+    if legacy_present:
+        raise ValueError(
+            f"service {service!r} declares `ports:` and {', '.join(legacy_present)} — "
+            "declare the ports in one place"
+        )
+    primaries = [port for port in ports if port.primary]
+    if len(primaries) != 1:
+        raise ValueError(
+            f"service {service!r} declares {len(primaries)} primary ports; exactly one is required"
+        )
+    labels: set[str] = set()
+    for port in ports:
+        if port.label is None:
+            if len(ports) > 1:
+                raise ValueError(
+                    f"service {service!r} declares {len(ports)} ports; each needs a label"
+                )
+            continue
+        if not is_dns_label(port.label):
+            raise ValueError(f"port label {port.label!r} is not a DNS label")
+        if port.label in labels:
+            raise ValueError(f"service {service!r} declares the port label {port.label!r} twice")
+        labels.add(port.label)
+    hosts: set[int] = set()
+    for port in ports:
+        if isinstance(port.host, bool) or not isinstance(port.host, int):
+            continue
+        if port.host in hosts:
+            raise ValueError(f"service {service!r} declares the host port {port.host} twice")
+        hosts.add(port.host)
+    if kind == "uv" and len(ports) > 1:
+        raise ValueError(
+            f"the uv kind publishes one port; service {service!r} declares {len(ports)}"
+        )
+    if kind == "docker":
+        for index, port in enumerate(ports):
+            if is_marker(port.host) and port.container is None:
+                raise ValueError(
+                    f"service {service!r} declares a marker host port without a container port "
+                    f"(ports[{index}].container) — the container port cannot default to an "
+                    "allocated host port"
+                )
+
+
 class ContainerSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     listen_host: str = "0.0.0.0"
-    listen_port: PortValue
+    listen_port: PortValue | None = None
     internal_port: int | None = None
     extra_ports: list[ExtraPortSpec] = Field(default_factory=list)
     public_host: str | None = None
@@ -190,6 +301,15 @@ class DockerServiceSpec(BaseModel):
     image: ImageSpec
     container: ContainerSpec
 
+    # The cluster-wide canonical label this service answers to (ADR-051).
+    # Declaring it asserts that the service is cluster-wide and
+    # single-instance.
+    canonical_name: str | None = None
+
+    # The service's routable ports (ADR-051). Absent = the legacy
+    # single-port form.
+    ports: list[PortSpec] | None = None
+
     env: dict[str, Any] = Field(default_factory=dict)
     volumes: dict[str, Any] = Field(default_factory=dict)
     # ``extra_args`` is appended to the image's argv as ``command`` in
@@ -210,6 +330,27 @@ class DockerServiceSpec(BaseModel):
         # Build the options model early so unknown type strings fail at
         # ``model_validate`` rather than later in ``load_service_spec``.
         spec_to_options_model(self.options, model_name=f"{self.name.title()}Options")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ports(self) -> DockerServiceSpec:
+        legacy = [
+            field
+            for field, present in (
+                ("container.listen_port", self.container.listen_port is not None),
+                ("container.internal_port", self.container.internal_port is not None),
+                ("container.extra_ports", bool(self.container.extra_ports)),
+            )
+            if present
+        ]
+        _validate_declared_ports(
+            service=self.name,
+            kind="docker",
+            ports=self.ports,
+            legacy_present=legacy,
+            legacy_required="container.listen_port",
+        )
+        _validate_canonical_name(self.name, self.canonical_name)
         return self
 
 
@@ -234,12 +375,19 @@ class UvServiceSpec(BaseModel):
     command_env: dict[str, Any] = Field(default_factory=dict)
 
     listen_host: str = "0.0.0.0"
-    listen_port: PortValue
+    listen_port: PortValue | None = None
     public_host: str | None = None
     health_probe_path: str = "/"
     health_timeout_s: float = 60.0
     session_name: str | None = None
     graceful_stop_timeout_s: float = 10.0
+
+    # The cluster-wide canonical label this service answers to (ADR-051).
+    canonical_name: str | None = None
+
+    # The service's routable ports (ADR-051). Absent = the legacy
+    # single-port form.
+    ports: list[PortSpec] | None = None
 
     log_filename: str | None = None
     ui: UiSpec = Field(default_factory=UiSpec)
@@ -248,6 +396,18 @@ class UvServiceSpec(BaseModel):
     @model_validator(mode="after")
     def _validate_option_types(self) -> UvServiceSpec:
         spec_to_options_model(self.options, model_name=f"{self.name.title()}Options")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ports(self) -> UvServiceSpec:
+        _validate_declared_ports(
+            service=self.name,
+            kind="uv",
+            ports=self.ports,
+            legacy_present=["listen_port"] if self.listen_port is not None else [],
+            legacy_required="listen_port",
+        )
+        _validate_canonical_name(self.name, self.canonical_name)
         return self
 
 
@@ -303,8 +463,15 @@ class ComposeServiceSpec(BaseModel):
     # ``listen_port`` option (the norm), the loader derives the runtime
     # port from the resolved option so there is a single source of truth.
     listen_host: str = "0.0.0.0"
-    listen_port: PortValue = 0
+    listen_port: PortValue | None = None
     health_probe_path: str = "/"
+
+    # The cluster-wide canonical label this service answers to (ADR-051).
+    canonical_name: str | None = None
+
+    # The service's routable ports (ADR-051). Absent = the legacy
+    # single-port form.
+    ports: list[PortSpec] | None = None
 
     # Top-level compose env / volumes (project-wide, not per-service)
     env: dict[str, Any] = Field(default_factory=dict)
@@ -320,6 +487,17 @@ class ComposeServiceSpec(BaseModel):
     @model_validator(mode="after")
     def _validate_option_types(self) -> ComposeServiceSpec:
         spec_to_options_model(self.options, model_name=f"{self.name.title()}Options")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ports(self) -> ComposeServiceSpec:
+        _validate_declared_ports(
+            service=self.name,
+            kind="compose",
+            ports=self.ports,
+            legacy_present=["listen_port"] if self.listen_port is not None else [],
+        )
+        _validate_canonical_name(self.name, self.canonical_name)
         return self
 
 
@@ -484,10 +662,12 @@ __all__ = [
     "HookSpec",
     "ImageSpec",
     "OptionSpec",
+    "PortSpec",
     "PortValue",
     "ServiceSpecUnion",
     "UiSpec",
     "UvServiceSpec",
     "_parse_mode",
+    "is_dns_label",
     "spec_to_options_model",
 ]

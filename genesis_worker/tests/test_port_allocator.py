@@ -253,3 +253,26 @@ def test_adopt_does_not_run_the_bind_probe(tmp_path: Path) -> None:
     )
     assert alloc.adopt("metube", "listen", 8098) is True
     assert probed == []
+
+
+def test_a_services_second_fixed_port_is_reserved(tmp_path: Path) -> None:
+    """A declared second port must not be handed to another service (ADR-051).
+
+    The productivity stack publishes 3000 (the UI) and 8765 (the API);
+    both belong to it, so the allocator walks past 8765.
+    """
+    from genesis_worker.registries import ServiceRegistry
+    from genesis_worker.settings import PathsSettings, Settings
+
+    settings = Settings(paths=PathsSettings(state_dir=tmp_path / "state"))
+    registry = ServiceRegistry(settings)
+    allocator = NodePortAllocator(
+        tmp_path / "alloc",
+        fixed_ports=registry._reserved_ports,
+        bind_probe=lambda port: True,
+        port_range=(8765, 8767),
+    )
+    assert 8765 in registry._reserved_ports()
+    # 8766 belongs to the agent-context stack's API port.
+    assert 8766 in registry._reserved_ports()
+    assert allocator.allocate("other", "listen") == 8767

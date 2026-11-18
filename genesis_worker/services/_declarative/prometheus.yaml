@@ -84,6 +84,12 @@ display_name: Prometheus
 description: Metrics collection and time-series database
 category: utility
 
+# The cluster-wide canonical label this service answers to (ADR-049).
+# Declaring it asserts that the service is cluster-wide and
+# single-instance; the orchestrator grants that name only while one
+# live instance exists.
+canonical_name: prometheus
+
 capabilities:
   can_generate_config: false
   can_export_for_agent: false
