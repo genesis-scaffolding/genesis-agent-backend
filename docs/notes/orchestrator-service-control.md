@@ -268,7 +268,7 @@ instead of discovering the refusal as a deploy failure.
 The field is additive: every pre-existing field of the summary row is
 unchanged.
 
-## Read-side: the canonical name and the routable ports (ADR-049)
+## Read-side: the canonical name and the routable ports (ADR-051)
 
 `GET /v1/services` carries two more additive fields:
 

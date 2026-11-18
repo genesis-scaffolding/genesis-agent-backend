@@ -1588,7 +1588,7 @@ def test_the_adopters_adopt_their_published_ports(tmp_path: Path, monkeypatch) -
     assert data == {"allocations": {"metube": {"listen": 8098}}}
 
 
-# --- declared ports and canonical names (ADR-049) ---------------------------
+# --- declared ports and canonical names (ADR-051) ---------------------------
 
 
 _CANONICAL_SINGLE_PORT_SPECS = {
@@ -1617,7 +1617,7 @@ def test_single_port_specs_declare_their_canonical_name(
 
 
 def test_genesis_productivity_declares_its_ports_and_canonical_name(tmp_path: Path) -> None:
-    """The productivity stack declares both of its ports (ADR-049)."""
+    """The productivity stack declares both of its ports (ADR-051)."""
     svc = load_service_spec(
         _DECLARATIVE_DIR / "genesis-productivity.yaml",
         ctx=service_ctx(tmp_path, name="genesis-productivity"),
@@ -1633,7 +1633,7 @@ def test_genesis_productivity_declares_its_ports_and_canonical_name(tmp_path: Pa
 
 
 def test_genesis_agent_context_declares_its_ports_and_canonical_name(tmp_path: Path) -> None:
-    """The agent-context stack declares both of its ports (ADR-049)."""
+    """The agent-context stack declares both of its ports (ADR-051)."""
     svc = load_service_spec(
         _DECLARATIVE_DIR / "genesis-agent-context.yaml",
         ctx=service_ctx(tmp_path, name="genesis-agent-context"),

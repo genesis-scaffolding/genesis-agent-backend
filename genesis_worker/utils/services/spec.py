@@ -106,7 +106,7 @@ class ExtraPortSpec(BaseModel):
 
 
 class PortSpec(BaseModel):
-    """One routable port of a service (ADR-049).
+    """One routable port of a service (ADR-051).
 
     The top-level ``ports:`` list replaces the per-kind port fields. Each
     entry names the port's role (``label``), marks at most one of them
@@ -123,7 +123,7 @@ class PortSpec(BaseModel):
 
 
 def _validate_canonical_name(service: str, canonical_name: str | None) -> None:
-    """The declared canonical name must be a DNS label (ADR-049)."""
+    """The declared canonical name must be a DNS label (ADR-051)."""
     if canonical_name is None:
         return
     if not is_dns_label(canonical_name):
@@ -138,7 +138,7 @@ def _validate_declared_ports(
     legacy_present: Sequence[str],
     legacy_required: str = "",
 ) -> None:
-    """The cross-field rules of the ``ports:`` block (ADR-049).
+    """The cross-field rules of the ``ports:`` block (ADR-051).
 
     ``ports:`` is the single source of truth when it is present, so the
     legacy per-kind port fields must be absent; exactly one port is the
@@ -301,12 +301,12 @@ class DockerServiceSpec(BaseModel):
     image: ImageSpec
     container: ContainerSpec
 
-    # The cluster-wide canonical label this service answers to (ADR-049).
+    # The cluster-wide canonical label this service answers to (ADR-051).
     # Declaring it asserts that the service is cluster-wide and
     # single-instance.
     canonical_name: str | None = None
 
-    # The service's routable ports (ADR-049). Absent = the legacy
+    # The service's routable ports (ADR-051). Absent = the legacy
     # single-port form.
     ports: list[PortSpec] | None = None
 
@@ -382,10 +382,10 @@ class UvServiceSpec(BaseModel):
     session_name: str | None = None
     graceful_stop_timeout_s: float = 10.0
 
-    # The cluster-wide canonical label this service answers to (ADR-049).
+    # The cluster-wide canonical label this service answers to (ADR-051).
     canonical_name: str | None = None
 
-    # The service's routable ports (ADR-049). Absent = the legacy
+    # The service's routable ports (ADR-051). Absent = the legacy
     # single-port form.
     ports: list[PortSpec] | None = None
 
@@ -466,10 +466,10 @@ class ComposeServiceSpec(BaseModel):
     listen_port: PortValue | None = None
     health_probe_path: str = "/"
 
-    # The cluster-wide canonical label this service answers to (ADR-049).
+    # The cluster-wide canonical label this service answers to (ADR-051).
     canonical_name: str | None = None
 
-    # The service's routable ports (ADR-049). Absent = the legacy
+    # The service's routable ports (ADR-051). Absent = the legacy
     # single-port form.
     ports: list[PortSpec] | None = None
 

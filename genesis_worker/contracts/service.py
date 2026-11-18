@@ -73,7 +73,7 @@ class ServiceStatus:
 
 @dataclass(frozen=True)
 class ServicePort:
-    """One routable port of a service (ADR-049).
+    """One routable port of a service (ADR-051).
 
     ``label`` is the port's role (``ui``, ``api``, ...); ``None`` for the
     implicit single port of a service that declares no ``ports:`` block.
@@ -292,7 +292,7 @@ class InferenceService(Plugin):
         return None
 
     def declared_host_ports(self) -> tuple[int, ...]:
-        """Every fixed host port this service binds (ADR-049).
+        """Every fixed host port this service binds (ADR-051).
 
         The allocator reserves all of them, so a service's second fixed
         port cannot be handed to another service. A service that binds
@@ -306,7 +306,7 @@ class InferenceService(Plugin):
 
         Declaring a label asserts that the service is cluster-wide and
         single-instance; the orchestrator grants that name only while one
-        live instance exists (ADR-049).
+        live instance exists (ADR-051).
         """
         return None
 

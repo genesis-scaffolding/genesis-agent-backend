@@ -46,7 +46,7 @@ ConfigT = TypeVar("ConfigT")
 
 @dataclass(frozen=True)
 class DeclaredPort:
-    """One declared port of a declarative service (ADR-049).
+    """One declared port of a declarative service (ADR-051).
 
     ``host`` is the host port a client connects to — an int, or the
     ``$auto_port.<name>`` marker the allocator resolves at start time.
@@ -78,7 +78,7 @@ class DeclarativeServiceConfig:
     a rebuilt spec stops asking for a port.
 
     ``canonical_name`` is the cluster-wide label the service declares
-    (ADR-049); ``ports`` are its routable ports; ``fixed_host_ports``
+    (ADR-051); ``ports`` are its routable ports; ``fixed_host_ports``
     are the host ports it owns, so the allocator keeps off all of them.
     """
 
@@ -260,7 +260,7 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
         return port
 
     def declared_host_ports(self) -> tuple[int, ...]:
-        """Every fixed host port this service owns (ADR-049).
+        """Every fixed host port this service owns (ADR-051).
 
         A service that publishes more than one fixed port owns all of
         them; the allocator keeps off every one.
@@ -277,7 +277,7 @@ class DeclarativeServiceBase(InferenceService, Generic[ConfigT]):
         """The service's routable ports: role label, primary flag, endpoint.
 
         A spec without a ``ports:`` block declares one implicit port — the
-        existing listen port, with no role label (ADR-049).
+        existing listen port, with no role label (ADR-051).
         """
         cfg: DeclarativeServiceConfig = self.config  # type: ignore[assignment]
         if not cfg.ports:

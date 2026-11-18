@@ -1,4 +1,4 @@
-"""Declared service ports and canonical names (ADR-049).
+"""Declared service ports and canonical names (ADR-051).
 
 Covers the declaration matrix (the loader's validation rules), the
 derivation (the ``ports:`` block becomes the runtime port fields), and
@@ -458,7 +458,7 @@ def test_a_uv_spec_without_any_port_is_rejected() -> None:
         UvServiceSpec.model_validate(payload)
 
 
-# --- the DNS-label contract (ADR-049) ---------------------------------------
+# --- the DNS-label contract (ADR-051) ---------------------------------------
 
 
 @pytest.mark.parametrize(

@@ -251,7 +251,7 @@ class ServiceRegistry(_Registry):
         The framework's own ports plus every registered service's fixed
         host ports — a service that is not running still owns its port,
         so the bind test alone would not catch it. A service that declares
-        several ports owns all of them (ADR-049).
+        several ports owns all of them (ADR-051).
         """
         ports = set(framework_ports())
         services = cast("dict[str, InferenceService]", self._instances)

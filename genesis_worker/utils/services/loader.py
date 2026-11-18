@@ -226,7 +226,7 @@ def _declared_ports(spec: Any) -> tuple[DeclaredPort, ...] | None:
     """The ``ports:`` block of a validated spec, as runtime port records.
 
     ``None`` for the legacy single-port form — the per-kind port fields
-    stay the source of truth there (ADR-049).
+    stay the source of truth there (ADR-051).
     """
     raw_ports = getattr(spec, "ports", None)
     if raw_ports is None:
@@ -850,7 +850,7 @@ def load_service_spec(
             path,
         )
 
-    # The declared ``ports:`` block (ADR-049). Absent = the legacy
+    # The declared ``ports:`` block (ADR-051). Absent = the legacy
     # single-port form, where the per-kind fields stay the source of truth.
     declared = _declared_ports(spec)
     if isinstance(spec, ComposeServiceSpec):

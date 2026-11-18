@@ -107,7 +107,7 @@ options: {}                # optional user-editable settings (see "Options")
 `version`, `kind`, `name`, `display_name`, `capabilities`, `resource_estimate`
 are required. Everything else has sensible defaults.
 
-## Declared ports and the canonical name (ADR-049)
+## Declared ports and the canonical name (ADR-051)
 
 A spec describes **one** port by default: `container.listen_port` (docker),
 the top-level `listen_port` (uv), or the `listen_port` option the compose

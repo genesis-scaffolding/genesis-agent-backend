@@ -4,8 +4,8 @@
 branch `se/t-7aiamr-service-registry`, from `origin/main` @ `5630530`)
 **Task:** `t-7aiamr-service-registry` — *canonical service-name registry in the framework: auto-set
 ingress domain overrides for cluster-wide services* (the worker half of a cross-repo task).
-**ADR:** `docs/arch/adr-049-declared-service-ports-and-canonical-names.md`
-**Status:** implemented — the plan below is the execution reference for ADR-049.
+**ADR:** `docs/arch/adr-051-declared-service-ports-and-canonical-names.md`
+**Status:** implemented — the plan below is the execution reference for ADR-051.
 
 The orchestrator half (the canonical-name registry, the per-port ingress routes) lives in
 `genesis-infrastructure-toolkit` (ADR-021 / plan-020). This plan covers the worker half only:
@@ -63,7 +63,7 @@ twenty shipped specs need no edit and their derived hostnames do not change.
 | `genesis_worker/services/_declarative/{ntfy,bifrost,prometheus,freshrss,crawl4ai}.yaml` | one `canonical_name:` line each — no `ports:` block (they stay single-port). |
 | `docs/notes/orchestrator-service-control.md` | the two new read-side fields on `GET /v1/services`. |
 | `docs/tutorials/declarative-services.md` | the skeleton gains `canonical_name:` / `ports:`; a section states the rules. |
-| `docs/arch/adr-049-declared-service-ports-and-canonical-names.md` | the ADR (written before the code). |
+| `docs/arch/adr-051-declared-service-ports-and-canonical-names.md` | the ADR (written before the code). |
 | `docs/arch/plans/plan-048-declared-service-ports-and-canonical-names.md` | this plan. |
 
 **Not changed:** the API route layer, the detail schema, the compose templates, the twenty other

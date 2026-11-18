@@ -161,7 +161,7 @@ class ServiceStatusSchema(BaseModel):
 
 
 class ServicePortSchema(BaseModel):
-    """One routable port of a service (ADR-049)."""
+    """One routable port of a service (ADR-051)."""
 
     label: str | None = None
     primary: bool = True
@@ -181,7 +181,7 @@ class ServiceSummarySchema(BaseModel):
     methods themselves guard on ``is_running()`` so this is the
     natural shape.
 
-    ``canonical_name`` and ``ports`` are additive (ADR-049): an older
+    ``canonical_name`` and ``ports`` are additive (ADR-051): an older
     worker sends neither, and the orchestrator degrades to one route per
     service.
     """

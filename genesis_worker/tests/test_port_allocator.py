@@ -256,7 +256,7 @@ def test_adopt_does_not_run_the_bind_probe(tmp_path: Path) -> None:
 
 
 def test_a_services_second_fixed_port_is_reserved(tmp_path: Path) -> None:
-    """A declared second port must not be handed to another service (ADR-049).
+    """A declared second port must not be handed to another service (ADR-051).
 
     The productivity stack publishes 3000 (the UI) and 8765 (the API);
     both belong to it, so the allocator walks past 8765.
