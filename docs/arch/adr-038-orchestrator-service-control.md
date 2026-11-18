@@ -8,13 +8,15 @@ Orchestrator-driven service control — four `POST /v1/services/{name}/{action}`
 
 Accepted. Supersedes ADR-033's "Write endpoints (start/stop services, drive sessions, regenerate config): deferred" entry.
 
+> **Amended by ADR-049.** The install endpoint installs *the service* — every artifact it needs to run — instead of "the primary installable". The response shape is unchanged. The affected sections below are annotated in place.
+
 ## Context
 
 The Genesis orchestrator today reads from each worker over the FastAPI surface (`/v1/services`, `/v1/host`, `/v1/metrics`, `/v1/paths`) but has no path to install, start, stop, or configure a service on a worker. Every write the orchestrator performs goes through Ansible + SSH (source deploy, lifecycle start/stop of the worker tmux session). The orchestrator's stated goal is to drive a **bifrost LLM gateway** on a designated worker: install it, start it with a `config.json` the orchestrator composes from the rest of the fleet's llama-swap endpoints, and refresh / restart it as the fleet changes. The same endpoints are general — any docker or uv-tool declarative service is a candidate for orchestrator control.
 
 This change introduces four `POST /v1/services/{name}/{action}` endpoints on the existing FastAPI process (no new port, no separate control surface):
 
-- `POST /v1/services/{name}/install` — install the primary installable if missing; idempotent.
+- `POST /v1/services/{name}/install` — install the service (every artifact it needs to run) if missing; idempotent. *(Amended by ADR-049: this used to mean "install the primary installable", which fetched only one image of a multi-image compose stack.)*
 - `POST /v1/services/{name}/start` — start the service, optionally materialising a config object first.
 - `POST /v1/services/{name}/stop` — stop the service if running; idempotent.
 - `POST /v1/services/{name}/restart` — convenience for stop + start with optional config.
@@ -54,7 +56,7 @@ Three new / extended methods on `GenesisWorker`. All keep the existing single-pr
 ```python
 class GenesisWorker:
     def install_service(self, name: str) -> InstallResponse:
-        """Run the service's primary installable to completion.
+        """Install the service — every artifact it needs to run.
 
         Idempotent. Gates on capabilities().can_install and installs();
         raises :class:`ServiceCapabilityError` for either refusal, which
@@ -159,7 +161,7 @@ The lock is held only across the wait for the `AcquireSession` to reach a termin
 
 ### 7. Capability gating — `can_install` and `installs()` only
 
-The install endpoint gates on `capabilities().can_install` and the service's `installs()` returning a non-empty list. The orchestrator's note is explicit:
+The install endpoint gates on `capabilities().can_install` and the service's `installs()` returning a non-empty list. *(Amended by ADR-049: the gate is unchanged, but the work behind it is now the service-level install — the framework asks the service which of its installables are still missing and installs those, rather than assuming the primary installable is the whole job.)* The orchestrator's note is explicit:
 
 > `409` — service has `can_install=False`, or its `installs()` list is empty (no primary installable).
 

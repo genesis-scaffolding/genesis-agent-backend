@@ -15,7 +15,6 @@ from .contracts import (
     Catalog,
     InferenceService,
     InstallInProgressError,
-    InstallState,
     ModelSource,
     SecretsAccessor,
     ServiceCapabilityError,
@@ -525,11 +524,11 @@ class GenesisWorker:
         return self._service_registry.get(name).stop()
 
     def install_service(self, name: str) -> dict:
-        """Run the service's primary installable to completion.
+        """Install the service — every artifact it needs to run.
 
-        ADR-038. Idempotent: returns
-        ``{"installed": True, "version": ...}`` if the installable is
-        already present, with the resolved version.
+        ADR-038, amended by ADR-049. Idempotent: returns
+        ``{"installed": True, "version": ...}`` if the service's
+        installables are all present, with the resolved version.
 
         Raises:
             KeyError: ``name`` is not a registered service (route → 404).
@@ -546,14 +545,14 @@ class GenesisWorker:
         if not caps.can_install or not installables:
             raise ServiceCapabilityError(f"service {name!r} cannot be installed")
 
-        installable = svc.primary_installable()
-        if installable is None:
+        primary = svc.primary_installable()
+        if primary is None:
             raise ServiceCapabilityError(f"service {name!r} has no primary installable")
 
-        if installable.state() == InstallState.INSTALLED:
+        if not svc.missing_installables():
             return {
                 "installed": True,
-                "version": installable.installed_version(),
+                "version": primary.installed_version(),
             }
 
         # Per-service install lock. Process-local — sufficient under
@@ -564,7 +563,9 @@ class GenesisWorker:
             raise InstallInProgressError(f"install already in progress for {name!r}")
 
         try:
-            session = installable.install()
+            session = svc.service_install()
+            if session is None:
+                raise ServiceCapabilityError(f"service {name!r} has nothing to install")
             final = session.wait()
             if final.kind == AcquireStateKind.FAILED:
                 raise RuntimeError(f"install failed: {final.error or 'unknown error'}")
@@ -572,7 +573,7 @@ class GenesisWorker:
                 raise RuntimeError("install cancelled")
             return {
                 "installed": True,
-                "version": installable.installed_version(),
+                "version": primary.installed_version(),
             }
         finally:
             lock.release()

@@ -137,6 +137,9 @@ def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> None:
         def __getitem__(self, key: str) -> Any:
             return self._data[key]
 
+        def __contains__(self, key: str) -> bool:
+            return key in self._data
+
         def pop(self, key: str, default: Any = None) -> Any:
             return self._data.pop(key, default)
 

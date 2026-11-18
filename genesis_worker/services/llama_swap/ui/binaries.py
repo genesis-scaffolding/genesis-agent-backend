@@ -34,7 +34,6 @@ st.caption(
 
 _SESSION_KEY_PREFIX = "binaries/sessions"
 _VERSIONS_KEY_PREFIX = "binaries/available_versions"
-_DROP_PENDING_PREFIX = "binaries/drop_pending"
 _DRAFT_KEY = "binaries/installable-draft"
 _FORM_REVISION_KEY = "binaries/installable-form-revision"
 _CANDIDATE_KEY = "binaries/release-candidate"
@@ -63,10 +62,6 @@ def _session_key(name: str) -> str:
 
 def _versions_key(name: str) -> str:
     return f"{_VERSIONS_KEY_PREFIX}/{name}"
-
-
-def _drop_pending_key(name: str) -> str:
-    return f"{_DROP_PENDING_PREFIX}/{name}"
 
 
 def _form_revision() -> int:
@@ -554,7 +549,6 @@ if lookup_warning:
 for installable in svc.installs():
     name = installable.name
     sess_key = _session_key(name)
-    drop_key = _drop_pending_key(name)
 
     with st.expander(name, expanded=False):
         current = installable.installed_version()
@@ -642,28 +636,20 @@ for installable in svc.installs():
                 AcquireStateKind.CANCELLED,
             ):
                 _render_step(current_step)
-                if st.session_state.get(drop_key):
+                if st.button("Dismiss", key=f"dismiss-{name}"):
                     st.session_state.pop(sess_key, None)
-                    st.session_state.pop(drop_key, None)
                     st.rerun()
-                else:
-                    st.session_state[drop_key] = True
-                    if st.button("Dismiss", key=f"dismiss-{name}"):
-                        st.session_state.pop(sess_key, None)
-                        st.session_state.pop(drop_key, None)
-                        st.rerun()
             else:
 
                 @st.fragment(run_every="2s")
-                def _progress(session=session, drop_key=drop_key) -> None:
+                def _progress(session=session) -> None:
                     step = session.view()
                     _render_step(step)
                     if step.kind in (
                         AcquireStateKind.COMPLETE,
                         AcquireStateKind.FAILED,
                         AcquireStateKind.CANCELLED,
-                    ) and not st.session_state.get(drop_key):
-                        st.session_state[drop_key] = True
+                    ):
                         st.rerun(scope="app")
 
                 _progress()

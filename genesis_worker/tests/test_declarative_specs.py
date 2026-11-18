@@ -88,6 +88,7 @@ _BUILT_IN_SPECS = (
     "navidrome.yaml",
     "jellyfin.yaml",
     "ntfy.yaml",
+    "paperless.yaml",
     "photoprism.yaml",
     "prometheus.yaml",
     "romm.yaml",
@@ -99,7 +100,7 @@ _BUILT_IN_SPECS = (
 )
 
 # Compose-kind specs (they publish several ports and are tested separately)
-_COMPOSE_SPECS = ("romm.yaml", "traefik.yaml")
+_COMPOSE_SPECS = ("paperless.yaml", "romm.yaml", "traefik.yaml")
 
 # Docker-kind specs only (excludes compose services like romm.yaml)
 _DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS)
@@ -1253,6 +1254,281 @@ def test_romm_ui_panels_include_compose_status(tmp_path: Path) -> None:
     assert "container_info" in svc.ui_panels
     assert "log_tail" in svc.ui_panels
     assert "configure" in svc.ui_panels
+
+
+# --- paperless-specific ------------------------------------------------------
+
+
+def _load_paperless(tmp_path: Path) -> ComposeService:
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "paperless.yaml", ctx=service_ctx(tmp_path, name="paperless")
+    )
+    assert isinstance(svc, ComposeService)
+    return svc
+
+
+def test_paperless_identity(tmp_path: Path) -> None:
+    """Paperless-ngx's identity / category / description match the spec's surface."""
+    svc = _load_paperless(tmp_path)
+    assert svc.name == "paperless"
+    assert svc.display_name == "Paperless-ngx"
+    assert svc.category.value == "utility"
+    assert svc.description == "Document and receipt management"
+    # Host 8103 — 8080 is llama-swap's, 8090 bifrost's, 8102 vaultwarden's.
+    assert svc.config.listen_port == 8103
+    assert svc.listen_address == "0.0.0.0:8103"
+    # The image's own HEALTHCHECK curls "/"; the frontend answers 302 -> 200.
+    assert svc.config.health_probe_path == "/"
+    assert svc.ui_panels == ("service_info", "container_info", "log_tail", "configure")
+
+
+def test_paperless_is_compose_service(tmp_path: Path) -> None:
+    """Paperless-ngx is a compose-kind service, not docker-kind.
+
+    Upstream's stack is webserver + postgres + valkey broker; the broker is
+    mandatory (the image's init-wait-for-redis exits the container when it
+    cannot reach PAPERLESS_REDIS), so the single-container template cannot
+    express it.
+    """
+    svc = _load_paperless(tmp_path)
+    assert isinstance(svc, ComposeService)
+    assert not isinstance(svc, DockerService)
+
+
+def test_paperless_compose_config_fields(tmp_path: Path) -> None:
+    """Compose-specific fields are wired correctly."""
+    svc = _load_paperless(tmp_path)
+    assert svc.config.compose_version == "3.8"
+    assert svc.config.listen_host == "0.0.0.0"
+    assert svc.config.health_probe_path == "/"
+    # Every image of the stack is declared — each gets a version picker.
+    repos = {img.repo for img in svc.config.images}
+    assert repos == {"ghcr.io/paperless-ngx/paperless-ngx", "postgres", "valkey/valkey"}
+
+
+def test_paperless_compose_template_resolves_placeholders(tmp_path: Path) -> None:
+    """The compose template has had every $placeholder resolved by the loader.
+
+    Only the image markers survive the load pass — they are deliberately
+    kept for render-time substitution (the recorded version selection is not
+    known until the GUI changes it).
+    """
+    svc = _load_paperless(tmp_path)
+    template = svc.config.compose_template
+    assert "$state_dir" not in template
+    assert "$data_dir" not in template
+    assert "$options." not in template
+    assert "$images.paperless" in template
+    assert "$images.paperless-db" in template
+    assert "$images.paperless-broker" in template
+    # The port option is resolved at load time, so probe and container agree.
+    assert "0.0.0.0:8103:8000" in template
+
+    rendered = svc._rendered_template()
+    assert "$images." not in rendered
+    assert "$options." not in rendered
+    assert "$state_dir" not in rendered
+    assert "image: ghcr.io/paperless-ngx/paperless-ngx:latest" in rendered
+    assert "image: postgres:18-alpine" in rendered
+    assert "image: valkey/valkey:9-alpine" in rendered
+
+
+def test_paperless_mounts_live_only_in_the_compose_template(tmp_path: Path) -> None:
+    """Every mount is declared once — in the template, not in a second block.
+
+    The compose kind renders the template verbatim, so a top-level
+    ``volumes:`` block would never reach docker-compose.yml: it would only
+    feed the framework's host-dir pre-creation. The spec must not carry
+    that dead second declaration; the mounts come from the template alone.
+    """
+    ctx = service_ctx(tmp_path, name="paperless")
+    svc = load_service_spec(_DECLARATIVE_DIR / "paperless.yaml", ctx=ctx)
+    assert isinstance(svc, ComposeService)
+    assert svc.config.extra_volumes == {}
+
+    rendered = svc._rendered_template()
+    # The webserver's five mounts, the db's and the broker's.
+    assert f"{ctx.data_dir / 'data'}:/usr/src/paperless/data" in rendered
+    assert f"{ctx.data_dir / 'media'}:/usr/src/paperless/media" in rendered
+    assert f"{ctx.data_dir / 'export'}:/usr/src/paperless/export" in rendered
+    assert (
+        f"{ctx.media_vault_path / 'paperless' / 'consume'}:/usr/src/paperless/consume" in rendered
+    )
+    assert f"{ctx.state_dir / 'secret_key'}:/usr/src/paperless/secret_key:ro" in rendered
+    # postgres 18 moved PGDATA under /var/lib/postgresql/18/docker, so the
+    # mount is the PARENT dir (upstream's compose does the same).
+    assert f"{ctx.data_dir / 'db'}:/var/lib/postgresql" in rendered
+    assert f"{ctx.data_dir / 'redis'}:/data" in rendered
+
+
+def test_paperless_runtime_port_follows_option(tmp_path: Path) -> None:
+    """config.listen_port tracks options.listen_port — single source of truth.
+
+    The health probe and web UI endpoint use config.listen_port; the compose
+    file binds options.listen_port. They must be the same value, including
+    when the user overrides the option.
+    """
+    svc = _load_paperless(tmp_path)
+    assert svc.config.listen_port == 8103
+
+    svc2 = load_service_spec(
+        _DECLARATIVE_DIR / "paperless.yaml",
+        ctx=service_ctx(tmp_path, name="paperless", options={"listen_port": 8104}),
+    )
+    assert isinstance(svc2, ComposeService)
+    assert svc2.config.listen_port == 8104
+    assert "0.0.0.0:8104:8000" in svc2.config.compose_template
+
+
+def test_paperless_secret_key_hook_is_persistent(tmp_path: Path) -> None:
+    """The signing secret is generated once, kept at 0600, and reused.
+
+    paperless refuses to start without a valid PAPERLESS_SECRET_KEY, and the
+    key signs every session — so it must not change between restarts. The
+    file is mounted read-only into the container and read by the image's
+    own PAPERLESS_*_FILE mechanism, so a trailing newline would break it.
+    """
+    ctx = service_ctx(tmp_path, name="paperless")
+    svc = load_service_spec(_DECLARATIVE_DIR / "paperless.yaml", ctx=ctx)
+    assert isinstance(svc, ComposeService)
+    hooks = list(svc.config.pre_start_hooks)
+    assert len(hooks) == 1
+    assert hooks[0]["kind"] == "ensure_persistent_token"
+    assert hooks[0]["target"] == str(ctx.state_dir / "secret_key")
+    assert hooks[0]["mode"] == "0o600"
+
+    hook_ctx = PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir)
+    run_hooks(hooks, hook_ctx)
+    secret_file = ctx.state_dir / "secret_key"
+    generated = secret_file.read_text()
+    assert re.fullmatch(r"[0-9a-f]{64}", generated)
+    assert not generated.endswith("\n")
+    assert secret_file.stat().st_mode & 0o777 == 0o600
+
+    # A restart reuses the same secret.
+    run_hooks(hooks, hook_ctx)
+    assert secret_file.read_text() == generated
+
+
+def test_paperless_images_are_real_installables(tmp_path: Path) -> None:
+    """Every declared image is a real DockerImageInstall — registry tags.
+
+    All three images of the stack are declared, so all three are versionable
+    and each gets its own installable.
+    """
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
+    svc = _load_paperless(tmp_path)
+    installables = svc.installs()
+    assert len(installables) == 3
+    assert all(isinstance(i, DockerImageInstall) for i in installables)
+    typed_installables = cast(list[DockerImageInstall], installables)
+    refs = {i.image_ref for i in typed_installables}
+    assert refs == {
+        "ghcr.io/paperless-ngx/paperless-ngx:latest",
+        "postgres:18-alpine",
+        "valkey/valkey:9-alpine",
+    }
+    for i in typed_installables:
+        assert i.installed_version() in (None, i.image_ref.split(":", 1)[1])
+
+
+def test_paperless_admin_bootstrap_is_off_by_default(tmp_path: Path) -> None:
+    """No superuser is auto-created unless the operator asks for one.
+
+    Upstream's manage_superuser treats an empty PAPERLESS_ADMIN_PASSWORD as
+    a valid password, so a user name without a password would create a
+    superuser with an empty one. Both options therefore default to empty:
+    the web UI's first-run wizard creates the account instead.
+    """
+    svc = _load_paperless(tmp_path)
+    assert svc.options.admin_user == ""  # type: ignore[attr-defined]
+    assert svc.options.admin_password == ""  # type: ignore[attr-defined]
+    rendered = svc._rendered_template()
+    assert 'PAPERLESS_ADMIN_USER: ""' in rendered
+    assert 'PAPERLESS_ADMIN_PASSWORD: ""' in rendered
+
+
+# --- the compose load-time guard (ADR-049) ---------------------------------
+
+
+def _compose_spec_payload(**overrides: object) -> dict:
+    payload = {
+        "version": 1,
+        "kind": "compose",
+        "name": "demo",
+        "display_name": "Demo",
+        "description": "demo service",
+        "category": "utility",
+        "capabilities": {
+            "can_generate_config": False,
+            "can_export_for_agent": False,
+            "can_serve_llm": False,
+            "can_serve_image": False,
+            "can_train_models": False,
+            "has_web_ui": True,
+            "can_install": True,
+        },
+        "resource_estimate": {
+            "vram_bytes_typical": 0,
+            "vram_bytes_min": 0,
+            "cpu_cores_recommended": 1,
+        },
+        "compose_template": ('version: "3.8"\nservices:\n  app:\n    image: $images.app\n'),
+        "images": [{"name": "app", "repo": "example/app", "default_tag": "latest"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_a_compose_template_image_must_be_declared(tmp_path: Path) -> None:
+    """An undeclared template image is rejected at load time.
+
+    The availability check reads the template's images, the install axis is
+    built from the declared ones — an undeclared image would leave the
+    service uninstallable from the UI, forever and silently.
+    """
+    path = tmp_path / "demo.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            _compose_spec_payload(
+                compose_template=(
+                    'version: "3.8"\n'
+                    "services:\n"
+                    "  app:\n"
+                    "    image: $images.app\n"
+                    "  cache:\n"
+                    "    image: redis:7\n"
+                )
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="redis:7"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name="demo"))
+
+
+def test_a_compose_template_image_must_be_an_images_marker(tmp_path: Path) -> None:
+    """A literal image line is rejected too — every image gets a version picker."""
+    path = tmp_path / "demo.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            _compose_spec_payload(
+                compose_template=(
+                    'version: "3.8"\nservices:\n  app:\n    image: example/app:latest\n'
+                )
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="if it's in the template, it's declared here"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name="demo"))
+
+
+def test_a_compose_template_with_declared_images_loads(tmp_path: Path) -> None:
+    """The guard accepts the shape it demands."""
+    path = tmp_path / "demo.yaml"
+    path.write_text(yaml.safe_dump(_compose_spec_payload()))
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name="demo"))
+    assert isinstance(svc, ComposeService)
 
 
 # --- the auto-port adopters (ADR-043) --------------------------------------

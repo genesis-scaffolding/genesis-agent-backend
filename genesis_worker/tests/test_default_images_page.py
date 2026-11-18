@@ -227,6 +227,52 @@ class _FinishedSession:
         pass
 
 
+class _FailedSession:
+    """Acquire session whose view is permanently failed."""
+
+    def view(self) -> AcquireView:
+        return AcquireView(
+            kind=AcquireStateKind.FAILED,
+            title="Failed: repo/img:1.0",
+            error="RuntimeError: docker pull repo/img:1.0 failed (rc=1): denied",
+        )
+
+    def cancel(self) -> None:
+        pass
+
+
+def test_install_failure_stays_visible_after_a_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed pull on the Images page is shown — and stays shown.
+
+    The outcome used to be rendered into a run that was immediately
+    discarded, so a failed companion pull was invisible (ADR-049).
+    """
+    worker = _make_worker(tmp_path)
+    _patch_install_axis(monkeypatch)
+
+    def _install(self: Any, *, version: str | None = None) -> Any:
+        return _FailedSession()
+
+    monkeypatch.setattr(DockerImageInstall, "install", _install)
+    at = _render(worker, "bifrost")
+    at.run()
+    assert not at.exception
+
+    at.button(key="install-bifrost-bifrost").click()
+    at.run()
+    assert not at.exception
+    errors = [e.value for e in at.error]
+    assert errors, "the failure was not shown on the Images page"
+
+    # The page polls every 2s — the message must survive the rerun.
+    at.run()
+    assert not at.exception
+    errors = [e.value for e in at.error]
+    assert errors, "the failure message vanished on the next render"
+
+
 def test_images_page_renders_all_compose_images(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

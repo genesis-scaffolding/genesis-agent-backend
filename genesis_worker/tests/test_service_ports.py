@@ -75,11 +75,14 @@ COMPOSE_BASE: dict[str, Any] = {
     "category": "utility",
     "capabilities": dict(_CAPABILITIES),
     "resource_estimate": dict(_RESOURCE_ESTIMATE),
+    "images": [
+        {"name": "app", "repo": "example/demo", "default_tag": "v1"},
+    ],
     "compose_template": (
         'version: "3.8"\n'
         "services:\n"
         "  app:\n"
-        "    image: example/demo\n"
+        "    image: $images.app\n"
         "    ports:\n"
         '      - "0.0.0.0:3000:3000"\n'
         '      - "0.0.0.0:8765:8765"\n'
@@ -493,11 +496,11 @@ def test_a_canonical_name_that_is_a_dns_label_is_accepted() -> None:
 MULTI_BLOCK_TEMPLATE = """version: "3.8"
 services:
   app:
-    image: example/app
+    image: $images.app
     ports:
       - "0.0.0.0:3000:3000"
   api:
-    image: example/api
+    image: $images.api
     ports:
       - "0.0.0.0:8765:8765"
 """
@@ -510,6 +513,10 @@ def test_the_compose_check_reads_every_ports_block(tmp_path: Path) -> None:
         "stack.yaml",
         _compose(
             compose_template=MULTI_BLOCK_TEMPLATE,
+            images=[
+                {"name": "app", "repo": "example/app", "default_tag": "v1"},
+                {"name": "api", "repo": "example/api", "default_tag": "v1"},
+            ],
             ports=[
                 {"label": "ui", "primary": True, "host": "$options.listen_port", "container": 3000},
                 {"label": "api", "primary": False, "host": "$options.api_port", "container": 8765},
