@@ -21,7 +21,10 @@ Layout (ADR-029):
 Toggling mutates the registry immediately and ``st.rerun()``s so the
 next render shows the new state without a manual refresh. The toggle
 writes the shared state file, so the API process sees the flip on its
-next request (ADR-054) — no restart.
+next request (ADR-054) — no restart. The widget keeps its own session
+state, so a flip made elsewhere (the API, the CLI, a hand-edit of the
+state file) is reverted by the next interaction in an open session, and
+stands only once the session resets.
 """
 
 from __future__ import annotations

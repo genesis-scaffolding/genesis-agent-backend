@@ -169,6 +169,46 @@ def test_refresh_keeps_the_known_set_when_the_state_file_is_corrupt(tmp_path: Pa
     assert state_file.read_text() == "enabled: [unclosed\n"
 
 
+def test_bootstrap_adopts_a_publish_landing_after_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publish landing between the bootstrap write and the first read wins."""
+    from genesis_worker.registries import save_enabled_set as registry_save
+
+    def save_then_compete(state_dir: Path, names: set[str]) -> None:
+        registry_save(state_dir, names)
+        # Another process publishes right after our write.
+        registry_save(state_dir, {"sillytavern"})
+
+    monkeypatch.setattr("genesis_worker.registries.save_enabled_set", save_then_compete)
+
+    settings = _settings(tmp_path)
+    reg = ServiceRegistry(settings)
+
+    assert reg.is_enabled("sillytavern") is True
+    assert reg.is_enabled("llama_swap") is False
+
+
+def test_enable_reconciles_the_cache_when_the_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed write must not leave the cache claiming a state the file lacks."""
+    settings = _settings(tmp_path)
+    _seed_enabled_set(tmp_path, set())
+    reg = ServiceRegistry(settings)
+
+    def failing_save(state_dir: Path, names: set[str]) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("genesis_worker.registries.save_enabled_set", failing_save)
+
+    with pytest.raises(OSError):
+        reg.enable("llama_swap")
+
+    # The next read reconciles the cache against what is on disk.
+    assert reg.is_enabled("llama_swap") is False
+
+
 # --- the API response --------------------------------------------------------
 
 

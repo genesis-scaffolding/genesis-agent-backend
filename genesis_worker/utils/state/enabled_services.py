@@ -99,6 +99,10 @@ def load_enabled_set(state_dir: Path) -> set[str] | None:
     caller will re-bootstrap from current ``is_available()`` state. We
     don't raise here because there's nothing the user can do about a
     corrupt file at startup; the next mutation rewrites it cleanly.
+
+    No production caller: the registry reads through
+    :func:`read_enabled_snapshot` (ADR-054). Kept as the one-shot
+    accessor for callers that want the whole set.
     """
     snapshot = read_enabled_snapshot(state_dir)
     if not snapshot.readable:

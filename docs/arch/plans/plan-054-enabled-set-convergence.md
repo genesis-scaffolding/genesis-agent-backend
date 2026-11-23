@@ -144,6 +144,24 @@ The two units are untouched — the restart requirement disappears because the
 API re-reads on access. The toolkit's `BackendApiMonitor` is untouched: it
 already reads `is_enabled` from `/v1/services` and drops disabled services.
 
+### 4.6 The Streamlit session caveat (known limitation, not fixed here)
+
+The Service Catalog toggle (`st.toggle(key=...)`) keeps its own session state
+and the page writes that value back whenever it differs from
+`worker.services.is_enabled(...)`. With the refresh, `is_enabled` now reads
+the file, so an **open** UI session reverts an out-of-band flip: a flip made
+in the API process, by the CLI, or by hand-editing the state file is undone
+by the next interaction in that session and stands only once the session
+resets.
+
+The UI's *own* flip is unaffected (it writes the file it then reads back).
+The API process is unaffected (it re-reads the file per request).
+
+Fixing the write-back (dropping the widget's stale value, or reconciling the
+widget with the registry) is a UI change that the approved plan deliberately
+deferred. This branch therefore only corrects the documentation to state the
+real behaviour — no behaviour change here.
+
 ## 5. Failure modes
 
 | # | Failure mode | Behaviour |
@@ -161,6 +179,7 @@ already reads `is_enabled` from `/v1/services` and drops disabled services.
 | F11 | Filesystem without stable inodes | Low: the state dir is local; mtime+size remain as secondary signals. |
 | F12 | Multi-worker uvicorn | Each worker re-reads the file → all converge. |
 | F13 | A reader that never reads | Nothing to converge — the next read picks up the current file. |
+| F14 | An open Streamlit session sees an out-of-band flip | The session's stale toggle value is written back on the next interaction, reverting the flip until the session resets. The API process keeps the new value. See §4.6 — known limitation, the widget write-back is a separate change. |
 
 ## 6. Files touched
 
@@ -183,7 +202,7 @@ already reads `is_enabled` from `/v1/services` and drops disabled services.
 | `genesis_worker/tests/test_enabled_services_state.py` | Tests for the new file-level primitives. |
 | `docs/arch/adr-033-read-only-fastapi.md` | Partial-supersession annotation on the "Two-process model" section. |
 | `docs/arch/adr-029-service-catalog.md` | Pointer from the enable/disable section to ADR-054. |
-| `genesis_worker/ui/services_catalog.py` | Docstring note: a flip is visible to the API process on its next request. |
+| `genesis_worker/ui/services_catalog.py` | Docstring note: the flip reaches the API process on its next request — and an open UI session reverts an out-of-band flip until the session resets (§4.6). No behaviour change. |
 
 **Not touched**: the systemd units, the infrastructure toolkit, ADR-029's
 bootstrap rule, `genesis_worker/api/schemas.py` (the wire shape is unchanged),
@@ -249,3 +268,6 @@ systemctl show genesis-worker-api.service -p MainPID --value   # unchanged
   about the bootstrap rule.
 - **ADR-033's "acknowledged race"** is kept as-is (same-service
   last-writer-wins) rather than solved with a lock.
+- **The Service Catalog toggle's write-back**: an open UI session reverts an
+  out-of-band flip until the session resets (§4.6). Fixing it is a separate
+  UI change.

@@ -60,8 +60,9 @@ process's in-memory enabled set as a **cache** of it.
    applied to the freshest file content, so concurrent flips of *different*
    services do not clobber each other. Concurrent flips of the *same*
    service remain last-writer-wins.
-5. The API refreshes the set once per request and renders one snapshot per
-   response, so a flip landing mid-request cannot produce a mixed list.
+5. The API refreshes the set at the request boundary and renders one
+   snapshot per response, so a flip landing mid-request cannot produce a
+   mixed list.
 6. `disable()`'s running-guard is unchanged and remains the first statement
    of the method: a running service cannot be disabled, in any process.
 7. The bootstrap rule (ADR-029) is unchanged and remains one-shot: it runs
@@ -91,18 +92,28 @@ endpoint, a signal handler, or a background watcher thread.
   that the two-process model made reachable.
 - Hand-editing the state file now takes effect without a restart
   (config-as-code becomes possible; ADR-029 deferred it for lack of a
-  convergence mechanism).
+  convergence mechanism) — except inside an open Streamlit session, which
+  writes its stale toggle value back (see the Negative consequences).
 
 **Negative:**
 
 - The enabled set is no longer a process-local constant: reads now perform a
-  `stat()` (one syscall) and occasionally a YAML parse. `/v1/services`
-  performs one snapshot per response, so the cost is one `stat()` per
-  request, not one per service.
+  `stat()` (one syscall) and occasionally a YAML parse. A `/v1/services`
+  request refreshes twice — once in the `get_worker()` dependency and once
+  for the response snapshot — so the cost is two `stat()`s per request, not
+  one per service.
 - The file becomes the source of truth, so a hand-edit can disable a
   service fleet-wide. Unknown names in the file are still ignored when the
   registry resolves them (ADR-029), and a malformed file leaves the last
   known set in place rather than wiping it.
+- An open Streamlit session reverts an out-of-band flip. The Service
+  Catalog toggle keeps its own session state and writes that value back on
+  the next interaction, so a flip made elsewhere — the API process, the
+  CLI, a hand-edit of the state file — is undone by the next interaction in
+  an already-open session, and stands only once the session resets. The
+  API process is unaffected: it re-reads the file per request. Fixing the
+  toggle's write-back is a separate change; this ADR only corrects the
+  record of what the current code does.
 - The last-known-set rule means a deleted or corrupt file leaves a reader
   reporting a set that no longer matches the disk. This is deliberate: the
   alternative (re-bootstrap) silently re-enables services.

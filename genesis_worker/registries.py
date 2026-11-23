@@ -284,7 +284,10 @@ class ServiceRegistry(_Registry):
         until the user enables it on the Service Catalog page.
 
         Returns the set and the identity of the file version it came
-        from, so the first read after construction is a no-op.
+        from, so a read of an existing file is a no-op afterwards. A
+        bootstrap write returns no identity: a concurrent publish may
+        land between our write and the next read, so the first read
+        re-reads the file and adopts what is on disk.
         """
         snapshot = read_enabled_snapshot(self._settings.paths.state_dir)
         if snapshot.readable:
@@ -292,7 +295,7 @@ class ServiceRegistry(_Registry):
         services = cast("dict[str, InferenceService]", self._instances)
         to_enable = {name for name, svc in services.items() if svc.is_available()}
         save_enabled_set(self._settings.paths.state_dir, to_enable)
-        return to_enable, enabled_set_key(self._settings.paths.state_dir)
+        return to_enable, None
 
     def get(self, name: str) -> InferenceService:
         return self._instances[name]  # type: ignore[return-value]
@@ -334,7 +337,6 @@ class ServiceRegistry(_Registry):
         return changed
 
     def refresh_enabled_set(self) -> bool:
-        """Refresh the cached enabled set. Returns whether it changed."""
         return self._refresh_enabled_set()
 
     def enable(self, name: str) -> None:
@@ -345,8 +347,10 @@ class ServiceRegistry(_Registry):
         if name in self._enabled:
             return
         self._enabled.add(name)
-        save_enabled_set(self._settings.paths.state_dir, self._enabled)
+        # Invalidate before the write: a failed write must not leave a
+        # valid key caching content the file never got.
         self._enabled_key_valid = False
+        save_enabled_set(self._settings.paths.state_dir, self._enabled)
 
     def disable(self, name: str) -> None:
         """Mark a service disabled. Refuses when the service is running.
@@ -365,8 +369,10 @@ class ServiceRegistry(_Registry):
         if name not in self._enabled:
             return
         self._enabled.discard(name)
-        save_enabled_set(self._settings.paths.state_dir, self._enabled)
+        # Invalidate before the write: a failed write must not leave a
+        # valid key caching content the file never got.
         self._enabled_key_valid = False
+        save_enabled_set(self._settings.paths.state_dir, self._enabled)
 
     def enabled(self) -> list[InferenceService]:
         """Enabled services in registration order. Used by dashboard + sidebar."""
