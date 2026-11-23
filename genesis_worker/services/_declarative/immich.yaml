@@ -1,0 +1,227 @@
+# immich.yaml — Immich as a declarative compose service.
+#
+# WHY kind: compose (not kind: docker)
+# ------------------------------------
+# Upstream ships a four-container stack (docker/docker-compose.yml, v3.4.2):
+#   immich-server           ghcr.io/immich-app/immich-server — the API AND the
+#                           microservices worker. The image's entrypoint forks
+#                           the API as a child process and runs the workers as
+#                           threads in the same container, so there is NO
+#                           separate worker/transfer container to deploy.
+#   immich-machine-learning ghcr.io/immich-app/immich-machine-learning — CLIP /
+#                           face / OCR inference (CPU by default).
+#   redis                   valkey/valkey — the job queue and the event bus.
+#   database                ghcr.io/immich-app/postgres — the asset index
+#                           (VectorChord + pgvectors).
+#
+# SERVICE NAMES ARE PART OF THE CONTRACT
+# -------------------------------------
+# immich-server resolves its dependencies BY COMPOSE SERVICE NAME, through
+# upstream's own defaults (server/src/repositories/config.repository.ts):
+#   DB_HOSTNAME     -> "database"        REDIS_HOSTNAME -> "redis"
+#   ML URL (system config default) -> "http://immich-machine-learning:3003"
+# Renaming a service in the template below breaks the stack SILENTLY: the
+# server would wait for a host that does not exist. The names are upstream's.
+#
+# MOUNTS — the vault is the library, the data dir is the scratch space
+# ---------------------------------------------------------------
+# This is PhotoPrism's shape: PhotoPrism keeps its own state in $data_dir/storage
+# and mounts the vault at /photoprism/originals, the indexed source. Immich's
+# equivalent is an EXTERNAL LIBRARY:
+#   /data            <- $data_dir/data   (immich's own storage: upload/,
+#                                       library/, thumbs/, encoded-video/,
+#                                       profile/, backups/ — immich writes a
+#                                       .immich marker into each of them on
+#                                       every start and REFUSES TO START if it
+#                                       cannot, so /data must be writable)
+#   /external-library <- $options.media_dir, READ-ONLY (the user's photos)
+# Mounting the vault at /data instead would drop immich's own folders into the
+# user's media root and make the external scan re-index immich's uploads.
+#
+# THE EXTERNAL LIBRARY IS CREATED ONCE, BY HAND
+# ----------------------------------------------
+# Immich has no env var, no config-file key and no CLI command for external
+# libraries (the immich-admin CLI has no library command; the system config's
+# `library` section only carries `scan` and `watch`) — it is a database row.
+# After the first start:
+#   Administration -> External Libraries -> Create Library -> Add folder
+#   -> /external-library -> Scan New Library Files
+# The `media_dir` option's help text names that path.
+#
+# IMAGE VERSIONS: do not pick a tag from the Images page for the immich
+# images — GHCR's tag listing is paginated and the picker shows stale v1.x
+# tags. `v3` tracks the current release and keeps the server and the ML
+# container on the same version; bump both here if you pin one.
+#
+# See https://docs.immich.app/install/docker-compose
+#     https://docs.immich.app/guides/external-library
+#     https://docs.immich.app/administration/reverse-proxy
+
+version: 1
+kind: compose
+name: immich
+display_name: Immich
+description: Self-hosted photo and video library
+category: media
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 4      # the ML container runs CLIP + face detection on the CPU
+
+compose_version: "3.8"
+# The web app's root answers 200 (sirv serves the built SPA from the image).
+# A compose service has ONE path for the readiness probe AND the "Open Web UI"
+# button, so it must be the path a browser can open — not /api/server/ping.
+health_probe_path: /
+
+# Every image the stack uses. Each one becomes a real DockerImageInstall, so
+# the Images page offers a registry version picker for it and the Status
+# page's Install button pulls all four (ADR-049).
+# The marker names mirror upstream's compose service names, not the image
+# names — the marker only says which declared image a service runs.
+images:
+  - name: immich-server
+    repo: ghcr.io/immich-app/immich-server
+    default_tag: v3
+  - name: immich-machine-learning
+    repo: ghcr.io/immich-app/immich-machine-learning
+    default_tag: v3
+  - name: redis
+    repo: valkey/valkey
+    default_tag: "9"
+  - name: database
+    repo: ghcr.io/immich-app/postgres
+    default_tag: 14-vectorchord0.4.3-pgvectors0.2.0
+
+compose_template: |
+  version: "3.8"
+  services:
+    immich-server:
+      image: $images.immich-server
+      container_name: immich_server
+      restart: unless-stopped
+      depends_on:
+        - redis
+        - database
+      ports:
+        # Host 8104 -> container 2283 (the image's EXPOSE).
+        - "$options.listen_host:$options.listen_port:2283"
+      environment:
+        TZ: "$options.tz"
+        DB_HOSTNAME: database
+        DB_PORT: "5432"
+        DB_USERNAME: "$options.db_user"
+        DB_PASSWORD: "$options.db_password"
+        DB_DATABASE_NAME: "$options.db_name"
+        REDIS_HOSTNAME: redis
+        REDIS_PORT: "6379"
+        # Empty means "not set": upstream's env schema treats "" as absent and
+        # falls back to linklocal + uniquelocal.
+        IMMICH_TRUSTED_PROXIES: "$options.trusted_proxies"
+      volumes:
+        # Immich's own storage (upstream's UPLOAD_LOCATION role).
+        - $data_dir/data:/data
+        # The media vault, read-only: immich's "External Library".
+        - "$options.media_dir:/external-library:ro"
+      healthcheck:
+        disable: false
+
+    immich-machine-learning:
+      image: $images.immich-machine-learning
+      container_name: immich_machine_learning
+      restart: unless-stopped
+      environment:
+        # Upstream pins the newer model exports.
+        MACHINE_LEARNING_MODEL_REVISION: "v2"
+      volumes:
+        # The downloaded CLIP / face / OCR models (~2 GB). Kept under the
+        # data dir so they survive `docker compose down` and are not
+        # re-downloaded on every restart.
+        - $data_dir/ml-cache:/cache
+      healthcheck:
+        disable: false
+
+    redis:
+      image: $images.redis
+      container_name: immich_redis
+      restart: unless-stopped
+      healthcheck:
+        test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+    database:
+      image: $images.database
+      container_name: immich_postgres
+      restart: unless-stopped
+      environment:
+        POSTGRES_USER: "$options.db_user"
+        POSTGRES_PASSWORD: "$options.db_password"
+        POSTGRES_DB: "$options.db_name"
+        POSTGRES_INITDB_ARGS: "--data-checksums"
+      volumes:
+        # The image's PGDATA is /var/lib/postgresql/data (postgres 14
+        # layout), so the cluster lives at the mount root — upstream
+        # mounts its DB_DATA_LOCATION at the same path.
+        - $data_dir/db:/var/lib/postgresql/data
+      shm_size: 128mb
+      healthcheck:
+        disable: false
+
+options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
+    ui_label: Listen host
+    ui_group: Network
+  listen_port:
+    type: port
+    default: 8104
+    ui_label: Web UI port
+    ui_help: Host-side port the Immich web UI and API are published on. The container always listens on 2283.
+    ui_group: Network
+  media_dir:
+    type: path
+    default: "$media_vault_path"
+    ui_label: Media vault directory
+    ui_help: The worker's media vault, mounted read-only at /external-library. After the first start, add /external-library under Administration -> External Libraries so Immich indexes the same photos PhotoPrism does.
+    ui_group: Storage
+  tz:
+    type: string
+    default: "UTC"
+    ui_label: Timezone
+    ui_help: Container timezone (IANA tz database name, e.g. UTC or Australia/Adelaide)
+    ui_group: General
+  trusted_proxies:
+    type: string
+    default: ""
+    ui_label: Trusted proxies
+    ui_help: "Comma-separated IPs or CIDRs of the reverse proxies allowed to set X-Forwarded-For (the fleet's ingress proxy). Leave empty for Immich's default (link-local + unique-local). Example: 100.64.0.0/10"
+    ui_group: Network
+  db_name:
+    type: string
+    default: "immich"
+    ui_label: Database name
+    ui_group: Database
+  db_user:
+    type: string
+    default: "postgres"
+    ui_label: Database user
+    ui_group: Database
+  db_password:
+    type: string
+    default: "changeme"
+    ui_label: Database password
+    ui_help: The PostgreSQL password. Change it before the first start - the database only applies it when the cluster is initialised. Keep it to letters and digits.
+    ui_group: Database
