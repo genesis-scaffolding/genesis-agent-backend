@@ -19,7 +19,9 @@ Layout (ADR-029):
   ``ServiceRegistry.disable``.
 
 Toggling mutates the registry immediately and ``st.rerun()``s so the
-next render shows the new state without a manual refresh.
+next render shows the new state without a manual refresh. The toggle
+writes the shared state file, so the API process sees the flip on its
+next request (ADR-054) — no restart.
 """
 
 from __future__ import annotations

@@ -68,6 +68,12 @@ def save_enabled_set(state_dir: Path, names: set[str]) -> None: ...
 
 `load` returns `None` when the file is absent — the registry treats that as "first run" and triggers bootstrap (next section). Stale names in the file (services that no longer exist) are silently ignored when the registry resolves them; the file is rewritten on the next mutation.
 
+*Superseded by [ADR-054](adr-054-enabled-set-convergence.md): the file is
+authoritative and every process re-reads it when its identity changes, so a
+flip in one process (the Streamlit UI) is visible in the other (the FastAPI
+API) without a restart. The file format, the bootstrap rule and the API
+shape are unchanged.*
+
 ### 3. First-run bootstrap
 
 When `ServiceRegistry.__init__` finds no state file, it iterates the constructed instances and calls `svc.is_available()`. Services that report `True` (binary installed, image pulled, etc.) are added to the enabled set; the file is written; subsequent boots read it instead of re-probing. This matches the user's stated intent: *"out of the gate, services would be disabled, until user enable them, or they are already installed and ready to run"* — the bootstrap is the "or they are already installed" branch, executed exactly once.
