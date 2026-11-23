@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from genesis_worker.contracts.host import HostInfo
 from genesis_worker.tests._factories import service_ctx
 from genesis_worker.utils.services import (
     DockerService,
@@ -902,6 +903,96 @@ def test_compose_runtime_port_must_be_published_by_the_template(tmp_path: Path) 
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="does not publish it"):
         load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+# --- $hostname / $base_domain (ADR-056) -------------------------------------
+
+
+def _host_info(hostname: str) -> HostInfo:
+    """A host snapshot carrying just the hostname the placeholder reads."""
+    return HostInfo(
+        hostname=hostname,
+        os="Linux 6.5.0-arch1-1",
+        arch="x86_64",
+        python="3.11.7",
+        uptime_s=None,
+        public_ip=None,
+        tailscale_ip=None,
+    )
+
+
+def test_hostname_placeholder_takes_the_first_label(tmp_path: Path) -> None:
+    """``$hostname`` is the first label of the host's name, lowercased."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"HOST": "$hostname"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo", host_info=_host_info("Alpha.Example.com"))
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["HOST"] == "alpha"
+
+
+def test_hostname_placeholder_sanitises_unsafe_characters(tmp_path: Path) -> None:
+    """Characters outside ``[a-z0-9-]`` become ``-`` (the ntfy topic policy)."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"HOST": "$hostname"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo", host_info=_host_info("my host!?"))
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["HOST"] == "my-host"
+
+
+def test_hostname_placeholder_falls_back_to_localhost(tmp_path: Path) -> None:
+    """An empty or unsanitizable host name resolves to ``localhost``."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"HOST": "$hostname"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    for raw in ("", "---", "..."):
+        ctx = service_ctx(tmp_path, name="demo", host_info=_host_info(raw))
+        svc = load_service_spec(path, ctx=ctx)
+        assert svc.config.extra_env["HOST"] == "localhost"
+
+
+def test_base_domain_placeholder_resolves_the_configured_domain(tmp_path: Path) -> None:
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"DOMAIN": "$base_domain"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo", base_domain="cluster.example.com")
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["DOMAIN"] == "cluster.example.com"
+
+
+def test_base_domain_placeholder_falls_back_when_unset(tmp_path: Path) -> None:
+    """An unset base domain renders a visibly wrong host, not a wrong one."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"DOMAIN": "$base_domain"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name="demo"))
+    assert svc.config.extra_env["DOMAIN"] == "no-base-domain"
+
+
+def test_base_domain_placeholder_falls_back_when_blank(tmp_path: Path) -> None:
+    """A whitespace-only base domain counts as unset."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"DOMAIN": "$base_domain"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo", base_domain="   ")
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["DOMAIN"] == "no-base-domain"
+
+
+def test_hostname_and_base_domain_resolve_inside_mixed_strings(tmp_path: Path) -> None:
+    """Both placeholders substitute inside a longer string."""
+    payload = _copy(DOCKER_BASE)
+    payload["env"] = {"URL": "https://ntfy.$base_domain/$hostname"}
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(
+        tmp_path,
+        name="demo",
+        host_info=_host_info("p3.local"),
+        base_domain="cluster.example.com",
+    )
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.extra_env["URL"] == "https://ntfy.cluster.example.com/p3"
 
 
 # --- compose env file (ADR-053) --------------------------------------------

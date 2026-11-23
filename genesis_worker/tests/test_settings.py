@@ -118,6 +118,39 @@ def test_settings_resolved_vault_path_unchanged_by_media_vault(
     assert s.paths.resolved_media_vault_path == Path("/srv/media")
 
 
+def test_settings_base_domain_is_unset_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No base domain configured — the loader owns the fallback (ADR-056)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GENESIS__BASE_DOMAIN", raising=False)
+    s = Settings()
+    assert s.base_domain is None
+
+
+def test_settings_base_domain_reads_the_exact_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contract key is ``GENESIS__BASE_DOMAIN`` — double underscore."""
+    monkeypatch.setenv("GENESIS__BASE_DOMAIN", "cluster.example.com")
+    s = Settings()
+    assert s.base_domain == "cluster.example.com"
+
+
+def test_settings_base_domain_reads_a_dot_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The toolkit materialises the key into the worker's ``.env`` — read it there."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("GENESIS__BASE_DOMAIN=cluster.example.com\n")
+    s = Settings()
+    assert s.base_domain == "cluster.example.com"
+
+
+def test_settings_base_domain_accepts_the_constructor_field() -> None:
+    """``base_domain`` stays usable as a constructor argument."""
+    s = Settings(base_domain="cluster.example.com")
+    assert s.base_domain == "cluster.example.com"
+
+
 def test_settings_unknown_env_var_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GENESIS_BOGUS", "junk")
     s = Settings()  # must not raise

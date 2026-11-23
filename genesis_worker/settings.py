@@ -15,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .contracts import SecretsAccessor
@@ -147,12 +147,22 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
         env_file=("dev.env", ".env"),
         extra="ignore",
+        populate_by_name=True,
     )
 
     paths: PathsSettings = Field(default_factory=PathsSettings)
     sources: dict[str, dict[str, Any]] = Field(default_factory=dict)
     services: dict[str, dict[str, Any]] = Field(default_factory=dict)
     secrets: SecretsSettings = Field(default_factory=SecretsSettings)
+    # The cluster's public base domain. The environment contract is the
+    # exact key ``GENESIS__BASE_DOMAIN`` — the orchestrator seeds it from
+    # the fleet's ``ingress.domain`` setting. The alias keeps the plain
+    # ``base_domain`` spelling usable as a constructor argument.
+    # Unset stays ``None``; the declarative loader owns the fallback.
+    base_domain: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GENESIS__BASE_DOMAIN", "base_domain"),
+    )
 
     def __init__(self, **data: Any) -> None:
         # Layer the user-overrides file at the top of the precedence chain

@@ -73,10 +73,15 @@ class ServiceContext(PluginContext):
     time. ``None`` when the worker wired no allocator — a service that
     asks for a port then fails loudly at start rather than falling back
     to a fixed port.
+
+    ``base_domain`` is the cluster's public base domain (ADR-056).
+    ``None`` when the worker has no ``GENESIS__BASE_DOMAIN`` — the
+    declarative loader renders its placeholder fallback.
     """
 
     media_vault_path: Path = field(default_factory=Path)
     port_allocator: PortAllocator | None = None
+    base_domain: str | None = None
 
 
 __all__ = ["PluginContext", "ServiceContext", "SourceContext"]

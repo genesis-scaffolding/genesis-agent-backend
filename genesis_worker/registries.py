@@ -237,6 +237,7 @@ class ServiceRegistry(_Registry):
             host_info=collect_host_info(),
             secrets=self._settings.secrets.accessor(),
             options=self._settings.options_for("services", name),
+            base_domain=self._settings.base_domain,
             data_dir=p.data_dir / name.replace("_", "-"),
             config_dir=p.config_dir / name.replace("_", "-"),
             cache_dir=p.cache_dir / name.replace("_", "-"),

@@ -141,6 +141,10 @@ from single-container specs work inside the template string:
 
 - `$state_dir`, `$data_dir`, `$vault_path`, `$media_vault_path`, `$log_dir`,
   `$cache_dir`, `$config_dir` — the context paths
+- `$hostname` — the worker host's sanitised hostname (stable across container
+  recreations)
+- `$base_domain` — the cluster's public base domain (`no-base-domain` when the
+  worker has no `GENESIS__BASE_DOMAIN`)
 - `$options.<name>` — every option in the `options:` block
 - `$images.<name>` — the image markers (the one compose-specific marker)
 
