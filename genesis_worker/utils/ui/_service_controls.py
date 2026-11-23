@@ -5,7 +5,6 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis_worker.contracts import InferenceService, ServiceState, ServiceStatus
-from genesis_worker.utils.refs import installable_ref
 from genesis_worker.utils.ui._install_flow import (
     install_session_key,
     render_inline_install,
@@ -157,12 +156,6 @@ def render_action_button(
 
     if not is_available:
         svc = worker.service(name)
-        missing = svc.missing_installables()
-        if missing:
-            st.caption(
-                f"Still needed: {', '.join(installable_ref(item) for item in missing)} — "
-                "Install fetches all of them."
-            )
         if svc.primary_installable() is None:
             st.caption("Not installed")
             return

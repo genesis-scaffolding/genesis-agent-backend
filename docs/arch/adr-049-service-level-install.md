@@ -8,6 +8,8 @@ Service-level install axis — the Install button and the install endpoint act o
 
 Accepted. Amends ADR-038 (the install endpoint's semantics).
 
+> **Amended (2026-11-23, t-2vuyma-install-message).** The pre-install caption that named the still-missing images was removed. The Install button fetches the whole stack, so the list was noise on every card. The install axis, the composite session and the API contract are unchanged.
+
 ## Context
 
 A declarative service exposes an **install axis**: a list of `ServiceInstall`s, one per artifact it needs. A single-container service has one (its image). A `kind: compose` service has one per image in the stack — ROMM has two (app + postgres), paperless-ngx has three (webserver + postgres + valkey broker).
@@ -79,11 +81,11 @@ The defaults are exactly today's behaviour: the primary installable, and the pri
 
 ### 4. Compose services install the whole stack
 
-`ComposeService` overrides both methods: its service-level install is a `MultiInstallSession` over every declared image, and its missing installables are the images whose effective ref is absent. The list is derived from the same effective refs `is_available()` checks, so the caption and the availability check never disagree.
+`ComposeService` overrides both methods: its service-level install is a `MultiInstallSession` over every declared image, and its missing installables are the images whose effective ref is absent. The list is derived from the same effective refs `is_available()` checks, so the missing list and the availability check never disagree.
 
 ### 5. The UI installs the service and keeps the outcome
 
-- The Status page's action button drives `service_install()` and, before the install, names what is still missing: `Still needed: postgres:18-alpine, valkey/valkey:9-alpine — Install fetches all of them.`
+- The Status page's action button drives `service_install()`, which fetches every image the service needs.
 - **An install outcome stays on screen until it is dismissed.** The `drop_pending` auto-drop is gone: the session is popped only when the operator clicks *Dismiss*. This applies to every surface that renders an install outcome — the Status page, the shared Images page, the llama-swap Binaries page and the ComfyUI Images page.
 - When the install completes and the service becomes available, the page offers **Start** next to the outcome.
 
@@ -108,7 +110,7 @@ The loader rejects a compose spec whose template contains an `image:` line that 
 
 **Negative**
 
-- The Install button of a compose service now pulls the whole stack — more bytes, more time, on a first install. The caption states what will be fetched up front.
+- The Install button of a compose service now pulls the whole stack — more bytes, more time, on a first install.
 - A failure message persists until dismissed; the page keeps a session in `session_state` for the duration. The Dismiss button restores the plain Install button.
 - `InferenceService` grows two methods. The defaults keep every existing service's behaviour, but the ABC is the contract every plugin implements.
 

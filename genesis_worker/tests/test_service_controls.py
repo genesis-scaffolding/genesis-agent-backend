@@ -128,3 +128,16 @@ def test_running_or_starting_branch_polls_for_state_transition() -> None:
     # Specifically: it must compare ``current != last`` and rerun,
     # not check for being outside (RUNNING, STARTING).
     assert "current != last" in src
+
+
+def test_the_missing_images_caption_is_not_rendered() -> None:
+    """The pre-install caption naming the missing images was removed.
+
+    The Install button fetches the whole stack (ADR-049), so naming the
+    images above the button was noise on every card.
+    """
+    from genesis_worker.utils.ui._service_controls import render_action_button
+
+    src = inspect.getsource(render_action_button)
+    assert "Still needed" not in src
+    assert "Install fetches all of them" not in src

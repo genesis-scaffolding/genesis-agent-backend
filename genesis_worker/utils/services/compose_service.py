@@ -424,8 +424,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         """The images whose effective ref is absent locally.
 
         Derived from the same refs ``is_available()`` checks, so the
-        status page's "still needed" list and the availability check
-        never disagree.
+        missing list and the availability check never disagree.
         """
         return [installable for installable in self._installables if not installable.is_present()]
 

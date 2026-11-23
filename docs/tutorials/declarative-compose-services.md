@@ -120,10 +120,7 @@ button depends on.
 The Status page's **Install** button installs *the service* — every image
 the stack needs, not just the first one (ADR-049). For a two-image stack
 like ROMM that means two pulls; for paperless-ngx, three; for immich,
-four. Before the install the page names what is missing:
-
-> Still needed: postgres:18-alpine, valkey/valkey:9-alpine — Install
-> fetches all of them.
+four.
 
 The install is a single session: the images are pulled in order, each
 one at its recorded version when the operator has pinned one on the
