@@ -15,6 +15,7 @@ from .compose_service import (
     ComposeImage,
     ComposeService,
     ComposeServiceConfig,
+    CredentialEnv,
 )
 from .docker_service import (
     AuthConfig,
@@ -25,6 +26,7 @@ from .docker_service import (
 from .loader import load_service_spec, resolve_placeholders
 from .spec import (
     ComposeServiceSpec,
+    CredentialEnvSpec,
     DockerServiceSpec,
     OptionSpec,
     ServiceSpecUnion,
@@ -40,6 +42,8 @@ __all__ = [
     "ComposeService",
     "ComposeServiceConfig",
     "ComposeServiceSpec",
+    "CredentialEnv",
+    "CredentialEnvSpec",
     "DeclarativeServiceBase",
     "DeclarativeServiceConfig",
     "DockerImageInstall",

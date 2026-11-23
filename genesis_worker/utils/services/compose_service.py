@@ -38,6 +38,7 @@ from ..process import DockerContainer
 from ..process.docker import ContainerPortBinding, container_port_bindings
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_stack import DockerComposeStack
+from .spec import CREDENTIAL_ENV_MARKER_TEXT
 
 _IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
 
@@ -84,6 +85,20 @@ class ComposeImage:
 
 
 @dataclass(frozen=True)
+class CredentialEnv:
+    """Which environment variable a service's credential is written under.
+
+    ``provider_option`` names one of the spec's options; that option's
+    current value selects the variable name from ``by_provider``
+    (ADR-055). The names are the service's own data — the framework
+    maps a value to a string and knows nothing about the domain.
+    """
+
+    provider_option: str
+    by_provider: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ComposeServiceConfig(DeclarativeServiceConfig):
     """Per-service compose config. Add identity / capabilities / options_model in caller."""
 
@@ -101,6 +116,9 @@ class ComposeServiceConfig(DeclarativeServiceConfig):
     # DockerImageInstall (real registry versioning, GUI version pick).
     # Rule: if it's in the template, it's declared here.
     images: tuple[ComposeImage, ...] = ()
+    # The credential's environment variable, derived from an option's
+    # value (ADR-055). None = the service has no credential env var.
+    credential_env: CredentialEnv | None = None
 
 
 # --- service ---------------------------------------------------------------
@@ -258,6 +276,22 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
             for img, installable in zip(self.config.images, self._installables, strict=True)
         }
 
+    def _credential_env_name(self) -> str | None:
+        """The environment variable the selected provider's credential goes under.
+
+        ``None`` when the service declares no credential env block, or when
+        the option's current value is not in the map — the refusal
+        happens at render time (ADR-055), never here: the catalogue page
+        must not break on a value nobody mapped.
+        """
+        block = self.config.credential_env
+        if block is None:
+            return None
+        value = getattr(self.options, block.provider_option, None)
+        if not isinstance(value, str):
+            return None
+        return block.by_provider.get(value)
+
     def _rendered_template(self, ports: Callable[[str], int] | None = None) -> str:
         """The compose template with ``$images.<name>`` at its effective ref.
 
@@ -269,12 +303,22 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         ``ports`` materialises the ``$auto_port.<name>`` markers (ADR-043).
         It is only supplied on the start path: rendering the template to
         read its image list must not allocate a port.
+
+        ``credential_env`` materialises the ``$credential_env`` marker —
+        the name of the variable the credential is written under, derived
+        from an option's value (ADR-055).
         """
         from .loader import resolve_placeholders
 
         ctx = self._ctx
         return resolve_placeholders(
-            self.config.compose_template, ctx, {}, None, images=self._image_refs(), ports=ports
+            self.config.compose_template,
+            ctx,
+            {},
+            None,
+            images=self._image_refs(),
+            ports=ports,
+            credential_env=self._credential_env_name(),
         )
 
     def _stack_images(self) -> list[str]:
@@ -332,11 +376,36 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         """
         body = self._rendered_template(ports)
         assert_no_markers(body, f"{self.name} compose template")
+        self._assert_credential_env_resolved(body)
         self._compose_dir.mkdir(parents=True, exist_ok=True)
         path = self._compose_dir / "docker-compose.yml"
         path.write_text(body)
         path.chmod(0o600)
         return path
+
+    def _assert_credential_env_resolved(self, body: str) -> None:
+        """The rendered file must not carry an unresolved credential marker.
+
+        The credential's variable name follows an option's value, and that
+        value is a runtime value — so an unmapped provider can only be
+        caught here, on the start path (ADR-055). The refusal is the
+        service's own failure; the worker stays up.
+        """
+        if CREDENTIAL_ENV_MARKER_TEXT not in body:
+            return
+        block = self.config.credential_env
+        if block is None:
+            raise ValueError(
+                f"{self.name}: the compose template uses {CREDENTIAL_ENV_MARKER_TEXT} but the "
+                "spec declares no credential_env block"
+            )
+        value = getattr(self.options, block.provider_option, None)
+        known = ", ".join(sorted(block.by_provider))
+        raise ValueError(
+            f"{self.name}: the provider {value!r} (option {block.provider_option!r}) has no "
+            "credential environment variable — add it to the spec's "
+            f"credential_env.by_provider map (known: {known})"
+        )
 
     def start(self) -> StartResult:
         self._ensure_volume_dirs()
@@ -434,4 +503,5 @@ __all__ = [
     "ComposeImage",
     "ComposeService",
     "ComposeServiceConfig",
+    "CredentialEnv",
 ]

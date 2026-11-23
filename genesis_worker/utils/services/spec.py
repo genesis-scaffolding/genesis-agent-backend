@@ -48,6 +48,11 @@ PortValue = (
 DNS_LABEL_PATTERN = r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
 _DNS_LABEL_RE = re.compile(DNS_LABEL_PATTERN)
 
+# The ``$credential_env`` placeholder key — the name of the environment
+# variable a service's credential is written under (ADR-055).
+CREDENTIAL_ENV_KEY = "credential_env"
+CREDENTIAL_ENV_MARKER_TEXT = "$" + CREDENTIAL_ENV_KEY
+
 
 def is_dns_label(value: str) -> bool:
     """True iff ``value`` is a DNS label usable as one hostname label.
@@ -428,6 +433,20 @@ class ComposeImageSpec(BaseModel):
     default_tag: str = "latest"
 
 
+class CredentialEnvSpec(BaseModel):
+    """Which environment variable a service's credential is written under.
+
+    ``provider_option`` names one of the spec's own options; that
+    option's value selects the variable (``by_provider``). The framework
+    resolves the name when it renders the runtime command (ADR-055).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_option: str
+    by_provider: dict[str, str]
+
+
 class ComposeServiceSpec(BaseModel):
     """The full compose-kind YAML, validated against ``extra="forbid"``.
 
@@ -458,6 +477,11 @@ class ComposeServiceSpec(BaseModel):
     # (real registry versioning, GUI version pick). Rule: if it's in the
     # template, it's declared here.
     images: list[ComposeImageSpec] = Field(default_factory=list)
+
+    # The credential's environment variable, derived from an option's
+    # value (ADR-055). Compose-only: the docker kind substitutes
+    # environment values, not environment keys.
+    credential_env: CredentialEnvSpec | None = None
 
     # Port / health. Optional at top level: when the service declares a
     # ``listen_port`` option (the norm), the loader derives the runtime
@@ -653,10 +677,13 @@ def spec_to_options_model(
 
 
 __all__ = [
+    "CREDENTIAL_ENV_KEY",
+    "CREDENTIAL_ENV_MARKER_TEXT",
     "AuthSpec",
     "ComposeImageSpec",
     "ComposeServiceSpec",
     "ContainerSpec",
+    "CredentialEnvSpec",
     "DockerServiceSpec",
     "ExtraPortSpec",
     "HookSpec",

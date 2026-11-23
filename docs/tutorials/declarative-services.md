@@ -383,6 +383,56 @@ container:
 service's own `status()` / `web_ui_endpoint()`, the node-local registry file,
 and the container's own port bindings. The HTTP API is unchanged.
 
+### Credential env placeholders (`$credential_env`)
+
+A service whose credential is read from an environment variable can let the
+variable's *name* follow one of its options:
+
+```yaml
+options:
+  dns_provider:
+    type: string
+    default: "godaddyv3"
+  dns_api_token:
+    type: string
+    default: ""
+
+credential_env:
+  provider_option: dns_provider
+  by_provider:
+    godaddyv3: GODADDYV3_PERSONAL_ACCESS_TOKEN
+    cloudflare: CLOUDFLARE_DNS_API_TOKEN
+
+compose_template: |
+  services:
+    app:
+      environment:
+        $credential_env: "$options.dns_api_token"
+```
+
+`provider_option` names one of the spec's own options; that option's value
+selects the variable from `by_provider`. The credential is then written under
+the selected provider's own variable — a provider that reads
+`CLOUDFLARE_DNS_API_TOKEN` never receives a token under a GoDaddy name.
+
+**How it works.**
+
+1. At load time the marker survives the substitution rounds, exactly the way
+   `$images.<name>` does — the option's value is a runtime value.
+2. At render time (when the compose file is written) the framework reads the
+   option's current value, looks it up in `by_provider` and writes that name
+   into the template.
+3. A value the map does not cover fails the **start**, not the worker: the
+   render refuses to write the file and names the value and the known ones.
+   A spec whose `provider_option` names no option is rejected at load time —
+   a spec error belongs there.
+
+**Compose only.** The docker kind substitutes environment *values*, not
+environment *keys*, so a templated variable name cannot be expressed there;
+the uv kind has no environment block at all. The mechanism is one more
+resolution source in the existing `$` namespace — no second templating
+language (ADR-055).
+
 ### Where placeholders can appear
 
 | Field | Placeholders supported? |
@@ -395,6 +445,7 @@ and the container's own port bindings. The HTTP API is unchanged.
 | `image.repo`, `image.tag` | No — these are concrete image references |
 | `container.listen_host`, `listen_port`, `internal_port`, `public_host` | Yes (`$options.X` only) — user-editable since ADR-036 |
 | `container.listen_port`, `container.extra_ports[].host` | Yes — also `$auto_port.<name>` (ADR-043) |
+| `compose_template` | Yes — the whole template is substituted as text, so a placeholder can be a *key* too (`$images.<name>`, `$credential_env`) |
 
 ## Options block
 
