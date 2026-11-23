@@ -1032,6 +1032,47 @@ def test_speaches_hf_cache_dir_option_overrides_the_vault(tmp_path: Path) -> Non
     assert svc.config.extra_volumes["/home/ubuntu/.cache/huggingface/hub"] == str(elsewhere)
 
 
+def test_speaches_sets_the_loopback_url_for_the_gradio_api_client(tmp_path: Path) -> None:
+    """The Gradio app's own API client is pointed at the container's loopback.
+
+    Upstream's ``base_url_from_gradio_req`` falls back to the URL the BROWSER
+    used, which behind the ingress is the public hostname — the call has to
+    hairpin back through the proxy and the model dropdowns time out.
+    """
+    svc = _load_spec("speaches.yaml", tmp_path)
+    assert svc.config.extra_env["LOOPBACK_HOST_URL"] == "http://127.0.0.1:8000"
+    # The CONTAINER port, not the host port 8001.
+    assert svc.config.internal_port == 8000
+    assert (
+        svc.config.extra_env["LOOPBACK_HOST_URL"] == f"http://127.0.0.1:{svc.config.internal_port}"
+    )
+
+
+def test_speaches_operator_can_override_the_loopback_url(tmp_path: Path) -> None:
+    """The ``extra_env`` option wins over the spec's default on a collision."""
+    ctx = service_ctx(
+        tmp_path,
+        name="speaches",
+        options={"extra_env": {"LOOPBACK_HOST_URL": "http://speaches:8000"}},
+    )
+    svc = load_service_spec(_DECLARATIVE_DIR / "speaches.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.extra_env["LOOPBACK_HOST_URL"] == "http://speaches:8000"
+
+
+def test_speaches_extra_env_additions_do_not_drop_the_loopback_default(tmp_path: Path) -> None:
+    """An unrelated ``extra_env`` entry must not cost the service its loopback default.
+
+    A map option replaces its own default wholesale, so the default lives in
+    the YAML ``env:`` block (which merges additively) and not in the option.
+    """
+    ctx = service_ctx(tmp_path, name="speaches", options={"extra_env": {"API_KEY": "s3cret"}})
+    svc = load_service_spec(_DECLARATIVE_DIR / "speaches.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.extra_env["LOOPBACK_HOST_URL"] == "http://127.0.0.1:8000"
+    assert svc.config.extra_env["API_KEY"] == "s3cret"
+
+
 def test_speaches_options_have_configure_panel(tmp_path: Path) -> None:
     """Speaches declares an ``options:`` block so ``configure`` auto-includes (ADR-036)."""
     ctx = service_ctx(tmp_path, name="speaches")

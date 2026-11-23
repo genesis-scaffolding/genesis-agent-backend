@@ -72,6 +72,20 @@ env:
   HF_HUB_CACHE: "/home/ubuntu/.cache/huggingface/hub"
   ENABLE_UI: "$options.enable_ui"
   LOG_LEVEL: "$options.log_level"
+  # The Gradio app's own API client (upstream src/speaches/ui/utils.py:
+  # base_url_from_gradio_req) falls back to the URL the BROWSER used to reach
+  # the UI. Behind the cluster ingress that is the public hostname: the call
+  # leaves the node and has to come back through the proxy (hairpin), and the
+  # model dropdowns stall until the client times out (the OpenAI SDK's
+  # 600 s default; the httpx path uses upstream's 180 s TIMEOUT_SECONDS)
+  # before raising openai.APITimeoutError. Upstream's ``loopback_host_url``
+  # config field (the LOOPBACK_HOST_URL env var) exists for exactly this
+  # case — the API and the Gradio app are the SAME uvicorn inside this
+  # container, so the container's loopback address is always correct. Must
+  # track ``container.internal_port`` (8000) — the CONTAINER port, never the
+  # host port 8001. An operator can still override it through the
+  # ``extra_env`` option (the map wins).
+  LOOPBACK_HOST_URL: "http://127.0.0.1:8000"
 
 volumes:
   /home/ubuntu/.cache/huggingface/hub: "$options.hf_cache_dir"
@@ -104,7 +118,7 @@ options:
     type: env_map
     default: {}
     ui_label: Extra environment variables
-    ui_help: Additional environment variables (e.g. API_KEY to require an API key, STT_MODEL_TTL)
+    ui_help: Additional environment variables (e.g. API_KEY to require an API key, STT_MODEL_TTL, LOOPBACK_HOST_URL to override the web UI's API client base URL — it defaults to the container's own loopback)
     ui_group: Advanced
   extra_mounts:
     type: mount_map
