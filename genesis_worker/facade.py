@@ -456,6 +456,9 @@ class GenesisWorker:
         - A config body carrying an ``options`` section applies those
           values to the service's own options before the start (see
           :meth:`_apply_orchestrator_options`).
+        - A start re-reads the service's on-disk options and rebuilds the
+          instance when they changed (ADR-053), so a direct sidecar edit
+          takes effect on the next plain restart.
         """
         svc = self._service_registry.get(name)  # KeyError → 404
 
@@ -473,6 +476,9 @@ class GenesisWorker:
                 )
 
         svc = self._apply_orchestrator_options(name, config)
+        # ADR-053: the on-disk options are authoritative — converge the
+        # in-memory instance with them before the start.
+        svc = self._service_registry.refresh_options(name)
         svc._pending_orchestrator_config = config
         try:
             return svc.start()
@@ -490,7 +496,10 @@ class GenesisWorker:
         rebuilt so the next start renders the new values.
 
         Nothing happens when the body has no ``options`` section: the
-        service keeps whatever its options currently say.
+        service keeps whatever its options currently say — the
+        orchestrator's push is not a writer. A start still re-reads the
+        service's on-disk options and rebuilds the instance when they
+        changed (ADR-053).
         """
         section = (config or {}).get("options")
         if not isinstance(section, dict) or not section:
@@ -516,7 +525,8 @@ class GenesisWorker:
         ADR-038. Implemented as ``start_service(name, config=config)``;
         the orchestrator can issue stop + start separately if it wants
         tighter control. The file lands on disk during the start hook;
-        the freshly-started container picks it up on boot.
+        the freshly-started container picks it up on boot. A plain restart
+        (no body) re-reads the service's on-disk options first (ADR-053).
         """
         return self.start_service(name, config=config)
 

@@ -57,7 +57,12 @@ service's option values.
   the same store the Configure panel writes to — and the service is
   rebuilt so the new values are the ones the start renders.
 - A config body without an `options` section changes nothing: the
-  service keeps whatever its options currently say.
+  service keeps whatever its options currently say. *Partially
+  superseded by [ADR-053](adr-053-service-options-resync-on-start.md): a
+  body without an `options` section still changes nothing **by itself** —
+  the orchestrator's push is not a writer — but the service's options now
+  converge with the **sidecar** on every start, so a direct sidecar edit
+  is honoured by the next restart.*
 - The `options` section is not written to any file by the
   materialisation hooks; only file-shaped keys are.
 

@@ -6,9 +6,10 @@ import importlib
 import inspect
 import pkgutil
 from collections.abc import Callable, Iterable, Iterator
+from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from .contracts import (
     InferenceService,
@@ -160,6 +161,9 @@ class ServiceRegistry(_Registry):
 
     def __init__(self, settings: Settings, *, adopt_published_ports: bool = True) -> None:
         super().__init__(settings)
+        # The option slice each instance was built from. The sidecar on
+        # disk is the authority; the instance is a cache of it (ADR-053).
+        self._option_inputs: dict[str, dict[str, Any]] = {}
         # One port allocator per worker (ADR-043). It owns the node-level
         # registry of allocated host ports; every service context carries
         # the handle.
@@ -172,7 +176,9 @@ class ServiceRegistry(_Registry):
         # service can pin a YAML aside while keeping the Python class).
         for cls in _plugin_classes(_SERVICES_PKG, InferenceService):
             build = cast("Callable[[ServiceContext], InferenceService]", cls)
-            self._instances[cls.name] = build(self._context(cls))
+            ctx = self._context(cls)
+            self._instances[cls.name] = build(ctx)
+            self._option_inputs[cls.name] = deepcopy(dict(ctx.options))
         # Spec-path map for declarative services so ``rebuild`` can
         # re-run the loader without re-walking the YAMLs (ADR-036).
         self._spec_paths: dict[str, Path] = {}
@@ -189,6 +195,7 @@ class ServiceRegistry(_Registry):
                 )
             self._instances[svc.name] = svc
             self._spec_paths[svc.name] = spec_path
+            self._option_inputs[svc.name] = deepcopy(dict(ctx.options))
         self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
         self._adopt_enabled = adopt_published_ports
         if adopt_published_ports:
@@ -362,8 +369,13 @@ class ServiceRegistry(_Registry):
             raise RuntimeError(f"cannot rebuild {name!r} while running — stop the service first")
         from .utils.services import load_service_spec
 
-        new_svc = load_service_spec(spec_path, ctx=self._context_for_name(name))
+        ctx = self._context_for_name(name)
+        new_svc = load_service_spec(spec_path, ctx=ctx)
         self._instances[name] = new_svc
+        # The slice the new instance was built from — recorded after the
+        # swap, so a failed rebuild leaves the record matching the
+        # surviving instance (ADR-053).
+        self._option_inputs[name] = deepcopy(dict(ctx.options))
         # The rebuilt spec may no longer declare an auto-port marker (the
         # user pinned a fixed port instead) — release the stale record so
         # the range does not leak.
@@ -371,6 +383,43 @@ class ServiceRegistry(_Registry):
         if self._adopt_enabled:
             self._adopt_published_ports([new_svc])
         return new_svc
+
+    # --- option resync (ADR-053) -------------------------------------------
+
+    def options_drifted(self, name: str) -> bool:
+        """Whether the service's on-disk options differ from the ones it was built from.
+
+        The comparison is on the merged option slice, so it isolates the
+        sidecar delta: the flat-file half is the same snapshot on both
+        sides.
+        """
+        recorded = self._option_inputs.get(name)
+        if recorded is None:
+            return False
+        return recorded != self._settings.options_for("services", name)
+
+    def refresh_options(self, name: str) -> InferenceService:
+        """Re-construct ``name`` when its on-disk options changed.
+
+        The sidecar is the authority for a service's options; the
+        in-memory instance is a cache of it. A start is an operator-visible
+        action, so it re-reads the disk and rebuilds when the two disagree
+        (ADR-053).
+
+        Python services have no declarative rebuild path (ADR-036) — they
+        are returned unchanged; their own pages write the sidecar and update
+        the instance in place.
+        """
+        svc = cast("InferenceService", self._instances[name])
+        if name not in self._spec_paths:
+            return svc
+        try:
+            drifted = self.options_drifted(name)
+        except (OSError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"cannot apply the on-disk options for {name!r}: {exc}") from exc
+        if not drifted:
+            return svc
+        return self.rebuild(name)
 
 
 __all__ = ["ServiceRegistry", "SourceRegistry"]
