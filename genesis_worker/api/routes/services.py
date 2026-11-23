@@ -24,6 +24,7 @@ from ...contracts import (
     InstallInProgressError,
     ServiceCapabilityError,
 )
+from ...utils.models import ServiceInfo
 from ..deps import WorkerDep
 from ..schemas import (
     ConfigMaterialiseRequest,
@@ -45,7 +46,7 @@ def _state_str(worker: GenesisWorker, name: str) -> str:
     return worker.service_status(name).state.value
 
 
-def _summary(worker: GenesisWorker, info) -> ServiceSummarySchema:
+def _summary(worker: GenesisWorker, info: ServiceInfo, enabled: set[str]) -> ServiceSummarySchema:
     svc = worker.service(info.name)
     is_running = svc.is_running()
     # ``runtime_endpoint`` is on the ABC; ``web_ui_endpoint`` is
@@ -62,7 +63,7 @@ def _summary(worker: GenesisWorker, info) -> ServiceSummarySchema:
     can_install = bool(info.capabilities.can_install) and bool(svc.installs())
     return ServiceSummarySchema.from_facade(
         info,
-        is_enabled=worker.services.is_enabled(info.name),
+        is_enabled=info.name in enabled,
         is_available=svc.is_available(),
         state=_state_str(worker, info.name),
         runtime_endpoint=runtime_endpoint,
@@ -73,7 +74,10 @@ def _summary(worker: GenesisWorker, info) -> ServiceSummarySchema:
 
 @router.get("/services", response_model=list[ServiceSummarySchema])
 def list_services(worker: WorkerDep) -> list[ServiceSummarySchema]:
-    return [_summary(worker, info) for info in worker.list_services()]
+    # One snapshot for the whole response (ADR-054): a flip landing
+    # mid-request can't render a half-old, half-new list.
+    enabled = worker.services.enabled_names()
+    return [_summary(worker, info, enabled) for info in worker.list_services()]
 
 
 @router.get("/services/{name}", response_model=ServiceDetailSchema)

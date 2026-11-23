@@ -24,11 +24,18 @@ _worker: GenesisWorker | None = None
 
 
 def get_worker() -> GenesisWorker:
-    """Return the process-level worker, constructing it on first call."""
+    """Return the process-level worker, constructing it on first call.
+
+    The enabled set lives in a state file shared with the Streamlit
+    process (ADR-054); re-read it once per request so a flip made there
+    is visible here without a restart.
+    """
     global _worker
     if _worker is None:
         _worker = GenesisWorker()
-    return _worker
+    worker = _worker
+    worker.services.refresh_enabled_set()
+    return worker
 
 
 def reset_worker() -> None:

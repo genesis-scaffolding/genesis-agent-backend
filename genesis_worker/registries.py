@@ -19,7 +19,12 @@ from .contracts import (
 )
 from .utils.ports import NodePortAllocator, framework_ports
 from .utils.process.docker import container_port_bindings
-from .utils.state.enabled_services import load_enabled_set, save_enabled_set
+from .utils.state.enabled_services import (
+    FileKey,
+    enabled_set_key,
+    read_enabled_snapshot,
+    save_enabled_set,
+)
 
 if TYPE_CHECKING:
     from .settings import Settings
@@ -156,6 +161,11 @@ class ServiceRegistry(_Registry):
     persisted at ``<state_dir>/enabled_services.yaml``; on first run
     (no file) we bootstrap by auto-enabling every service that reports
     ``is_available() == True``. After that the set is user-controlled.
+
+    The persisted file is the authority (ADR-054): the in-memory set is
+    a cache of it, re-read when the file's identity changes, so a flip
+    in the other worker process (the Streamlit UI vs the FastAPI API)
+    converges without a restart.
     """
 
     def __init__(self, settings: Settings, *, adopt_published_ports: bool = True) -> None:
@@ -189,7 +199,8 @@ class ServiceRegistry(_Registry):
                 )
             self._instances[svc.name] = svc
             self._spec_paths[svc.name] = spec_path
-        self._enabled: set[str] = self._load_or_bootstrap_enabled_set()
+        self._enabled, self._enabled_key = self._load_or_bootstrap_enabled_set()
+        self._enabled_key_valid = True
         self._adopt_enabled = adopt_published_ports
         if adopt_published_ports:
             self._adopt_published_ports()
@@ -262,7 +273,7 @@ class ServiceRegistry(_Registry):
     def _context(self, cls: type[InferenceService]) -> ServiceContext:
         return self._context_for_name(cls.name)
 
-    def _load_or_bootstrap_enabled_set(self) -> set[str]:
+    def _load_or_bootstrap_enabled_set(self) -> tuple[set[str], FileKey | None]:
         """Read the persisted enabled set, or bootstrap on first run.
 
         Bootstrap rule (ADR-029): on first run (no state file), enable
@@ -271,14 +282,20 @@ class ServiceRegistry(_Registry):
         disabled until enabled, or already installed and ready to run").
         One-shot — a service installed after bootstrap stays disabled
         until the user enables it on the Service Catalog page.
+
+        Returns the set and the identity of the file version it came
+        from, so a read of an existing file is a no-op afterwards. A
+        bootstrap write returns no identity: a concurrent publish may
+        land between our write and the next read, so the first read
+        re-reads the file and adopts what is on disk.
         """
-        existing = load_enabled_set(self._settings.paths.state_dir)
-        if existing is not None:
-            return existing
+        snapshot = read_enabled_snapshot(self._settings.paths.state_dir)
+        if snapshot.readable:
+            return set(snapshot.names), snapshot.key
         services = cast("dict[str, InferenceService]", self._instances)
         to_enable = {name for name, svc in services.items() if svc.is_available()}
         save_enabled_set(self._settings.paths.state_dir, to_enable)
-        return to_enable
+        return to_enable, None
 
     def get(self, name: str) -> InferenceService:
         return self._instances[name]  # type: ignore[return-value]
@@ -286,21 +303,53 @@ class ServiceRegistry(_Registry):
     def all(self) -> list[InferenceService]:
         return list(self._instances.values())  # type: ignore[arg-type]
 
-    # --- enable / disable (ADR-029) --------------------------------------
+    # --- enable / disable (ADR-029, ADR-054) ----------------------------
 
     def is_enabled(self, name: str) -> bool:
+        self._refresh_enabled_set()
         return name in self._enabled
 
     def enabled_names(self) -> set[str]:
+        self._refresh_enabled_set()
         return set(self._enabled)
+
+    def _refresh_enabled_set(self) -> bool:
+        """Re-read the state file when its identity changed (ADR-054).
+
+        The file is authoritative; the in-memory set is a cache of it, so
+        a flip in the other process is picked up here. A missing or
+        corrupt file leaves the last known set in place — it never
+        re-bootstraps (the bootstrap is one-shot, at construction only).
+        """
+        if self._enabled_key_valid and (
+            enabled_set_key(self._settings.paths.state_dir) == self._enabled_key
+        ):
+            return False
+        snapshot = read_enabled_snapshot(self._settings.paths.state_dir)
+        if not snapshot.readable:
+            self._enabled_key = snapshot.key
+            self._enabled_key_valid = True
+            return False
+        changed = snapshot.names != self._enabled
+        self._enabled = set(snapshot.names)
+        self._enabled_key = snapshot.key
+        self._enabled_key_valid = True
+        return changed
+
+    def refresh_enabled_set(self) -> bool:
+        return self._refresh_enabled_set()
 
     def enable(self, name: str) -> None:
         """Mark a service enabled. Idempotent. Raises on unknown service."""
         if name not in self._instances:
             raise KeyError(f"unknown service: {name}")
+        self._refresh_enabled_set()
         if name in self._enabled:
             return
         self._enabled.add(name)
+        # Invalidate before the write: a failed write must not leave a
+        # valid key caching content the file never got.
+        self._enabled_key_valid = False
         save_enabled_set(self._settings.paths.state_dir, self._enabled)
 
     def disable(self, name: str) -> None:
@@ -315,19 +364,25 @@ class ServiceRegistry(_Registry):
             raise RuntimeError(
                 f"cannot disable {svc.display_name}: service is running — stop it first"
             )
+        self._refresh_enabled_set()
         # Idempotent: if already disabled, just skip the persist.
         if name not in self._enabled:
             return
         self._enabled.discard(name)
+        # Invalidate before the write: a failed write must not leave a
+        # valid key caching content the file never got.
+        self._enabled_key_valid = False
         save_enabled_set(self._settings.paths.state_dir, self._enabled)
 
     def enabled(self) -> list[InferenceService]:
         """Enabled services in registration order. Used by dashboard + sidebar."""
+        self._refresh_enabled_set()
         services = cast("dict[str, InferenceService]", self._instances)
         return [svc for name, svc in services.items() if name in self._enabled]
 
     def disabled(self) -> list[InferenceService]:
         """Disabled services in registration order. Used by the catalog page."""
+        self._refresh_enabled_set()
         services = cast("dict[str, InferenceService]", self._instances)
         return [svc for name, svc in services.items() if name not in self._enabled]
 

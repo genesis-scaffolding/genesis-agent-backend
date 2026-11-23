@@ -88,6 +88,12 @@ writes if both are modifying services concurrently. The same race
 exists today between Streamlit and any CLI invocation; v1 doesn't
 make it worse. A supervisor process would solve it but is out of scope.
 
+*Partially superseded by [ADR-054](adr-054-enabled-set-convergence.md): the
+on-disk enabled set is no longer read once at construction — every process
+re-reads it when the file's identity changes, and the file is authoritative
+for the enabled set. The two-process model, the absence of cross-process
+IPC, and the acknowledged write race are unchanged.*
+
 ### Uvicorn, single worker
 
 `uvicorn genesis_worker.api.app:app` with default settings — one Python
