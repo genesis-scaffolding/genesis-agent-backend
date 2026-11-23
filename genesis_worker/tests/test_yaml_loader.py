@@ -878,3 +878,87 @@ def test_compose_runtime_port_must_be_published_by_the_template(tmp_path: Path) 
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="does not publish it"):
         load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+# --- compose env file (ADR-053) --------------------------------------------
+
+
+def _compose_payload(**overrides: Any) -> dict[str, Any]:
+    """A minimal compose spec with an ``env_file`` and an ``extra_env`` option."""
+    payload: dict[str, Any] = {
+        "version": 1,
+        "kind": "compose",
+        "name": "demo",
+        "display_name": "Demo",
+        "description": "demo service",
+        "category": "utility",
+        "capabilities": {
+            "can_generate_config": False,
+            "can_export_for_agent": False,
+            "can_serve_llm": False,
+            "can_serve_image": False,
+            "can_train_models": False,
+            "has_web_ui": True,
+            "can_install": True,
+        },
+        "resource_estimate": {
+            "vram_bytes_typical": 0,
+            "vram_bytes_min": 0,
+            "cpu_cores_recommended": 1,
+        },
+        "compose_template": (
+            "services:\n"
+            "  app:\n"
+            "    image: $images.app\n"
+            "    env_file:\n"
+            "      - $state_dir/demo.env\n"
+        ),
+        "images": [{"name": "app", "repo": "example/app", "default_tag": "latest"}],
+        "env_file": "$state_dir/demo.env",
+        "options": {
+            "extra_env": {"type": "env_map", "default": {}},
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_compose_spec_with_extra_env_option_requires_env_file(tmp_path: Path) -> None:
+    """An ``extra_env`` option without an ``env_file`` is a silent drop.
+
+    The user's env vars would never reach the container — the spec would
+    load and the service would start without them.
+    """
+    payload = _compose_payload()
+    payload.pop("env_file")
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="extra_env"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_compose_spec_env_file_must_be_referenced_by_the_template(tmp_path: Path) -> None:
+    """The declared env file has to be the one the template points at."""
+    payload = _compose_payload()
+    payload["compose_template"] = (
+        "services:\n  app:\n    image: $images.app\n    env_file:\n      - $state_dir/other.env\n"
+    )
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="does not reference it"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_compose_spec_accepts_a_matching_env_file_reference(tmp_path: Path) -> None:
+    """The happy path: the declared file is the one the template reads."""
+    path = _write_yaml(tmp_path, "demo.yaml", _compose_payload())
+    svc = load_service_spec(
+        path,
+        ctx=service_ctx(
+            tmp_path,
+            name=path.stem,
+            options={"extra_env": {"SCREENSCRAPER_USER": "gen"}},
+        ),
+    )
+    assert svc.config.env_file == tmp_path / "state" / "demo.env"
+    # The user's map is the container's environment.
+    assert svc.config.extra_env == {"SCREENSCRAPER_USER": "gen"}
+    assert svc.config.user_env == {"SCREENSCRAPER_USER": "gen"}

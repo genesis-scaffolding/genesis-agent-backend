@@ -231,9 +231,119 @@ Notes that matter when writing compose templates:
   `$options.some_bool` in the template gets stringified during substitution.
   For env values, quote booleans in the compose YAML
   (`ROMM_FRONTEND: "1"`) so compose parses them as you intend.
-- **`env_map` / `mount_map` options** (the free-form long tail) are
-  docker-kind features; compose services declare their env and volumes
-  directly in the template.
+- **`mount_map` options** (the free-form bind-mount tail) are a docker-kind
+  feature; a compose service declares its volumes directly in the template.
+  The `env_map` option works for both kinds — see below.
+
+## The environment: the user's `extra_env` reaches the container
+
+A template can only name the environment variables it knows. The long tail of
+upstream env vars — ROMM's metadata providers (`SCREENSCRAPER_USER`,
+`IGDB_CLIENT_ID`, …), photoprism's thirty, every image's own knobs — has no
+place in a template that would need an edit per variable.
+
+For the compose kind the framework delivers that long tail through a
+**framework-managed env file** (ADR-053):
+
+```yaml
+env_file: "$state_dir/romm.env"        # the spec declares the path
+
+options:
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Metadata provider credentials
+    ui_group: Metadata providers
+
+compose_template: |
+  services:
+    romm:
+      env_file:
+        - $state_dir/romm.env            # the template references it
+```
+
+The user fills the map in the **configure** panel (a key/value row editor;
+the values land in `<config_dir>/services/<name>.overrides.json`). The
+framework writes the map to the declared file before the stack comes up —
+mode `0600`, atomically — and compose hands every entry to the container.
+
+Rules worth knowing:
+
+- **The declared file must be the one the template references.** The loader
+  rejects a spec whose `env_file` the template does not read, and a spec
+  with an `extra_env` option and no `env_file` at all — the user's vars
+  would be silently dropped.
+- **A variable the user did not set is absent** from the container, not an
+  empty string.
+- **The template's `environment:` block wins.** Compose gives
+  `environment:` precedence over `env_file:`, so the typed knobs
+  (`DB_PASSWD`, `ROMM_FRONTEND`) keep priority over a map entry with the
+  same name. (The docker kind is the other way round — ADR-036 §5 — because
+  the framework builds that command line itself.)
+- **Values round-trip exactly.** The file is written in compose's own
+  env-file syntax: a double-quoted value, with `\`, `"`, `$` and the
+  control characters escaped the way compose unescapes them.
+
+The compose *process* environment (the template's `$VAR` interpolation
+source) still carries the user's map, so the list form remains available as
+a fallback:
+
+```yaml
+environment:
+  - SCREENSCRAPER_USER
+  - SCREENSCRAPER_PASSWORD
+```
+
+That form needs no framework support, but the set of forwardable names is
+frozen in the template — a provider ROMM adds later needs a YAML edit. The
+env file is the form that scales.
+
+## Running as a specific user
+
+Compose has no framework-level notion of the container's identity: a service
+runs as its image's default user unless the template says otherwise. Many
+upstream images run as root, and then everything they write into a
+bind-mounted host directory is root-owned — the operator cannot manage their
+own files.
+
+Two halves fix it:
+
+1. **The service declares the uid/gid** in the template's own `user:`
+   directive:
+
+   ```yaml
+   compose_template: |
+     services:
+       romm:
+         user: "$options.puid:$options.pgid"    # 1000:1000 by default
+   ```
+
+   `puid` / `pgid` are ordinary `int` options, so an operator whose host uid
+   differs can set them. Pick a uid that owns the paths the container writes
+   to *inside* the image (ROMM's own `romm` user is 1000:1000 and owns
+   `/romm` and `/redis-data`).
+
+2. **The framework creates the bind-mount targets** before Docker sees them,
+   so Docker never creates them as root. A compose spec declares its mounts
+   inside the template, which means the framework's volume pre-creation
+   (`_ensure_volume_dirs`) has nothing to walk — the `ensure_writable_dir`
+   pre-start hook names the paths instead:
+
+   ```yaml
+   pre_start_hooks:
+     - kind: ensure_writable_dir
+       target: "$options.roms_dir"
+       uid: "$options.puid"
+       gid: "$options.pgid"
+       mode: "0o775"
+   ```
+
+   The hook creates the directory as the host user and chowns it to the
+   container's uid when the worker is privileged enough; when it is not, the
+   declared mode bounds the fallback.
+
+Note that the hook also resets the directory's mode to `0755` once it could
+chown it — a custom mode on a directory the hook owns is not kept.
 
 ## Worked example: ROMM
 
@@ -262,6 +372,9 @@ health_probe_path: /
 
 # Port 8101 — 8080 is taken by llama-swap on this host.
 
+# The framework-managed env file the user's `extra_env` map is written to.
+env_file: "$state_dir/romm.env"
+
 images:
   - name: romm
     repo: rommapp/romm
@@ -270,6 +383,25 @@ images:
     repo: postgres
     default_tag: 16-alpine
 
+# The library and config directories are created by the worker (as the
+# host user) before Docker sees them; the signing key is created once and
+# never rewritten.
+pre_start_hooks:
+  - kind: ensure_writable_dir
+    target: "$options.roms_dir"
+    uid: "$options.puid"
+    gid: "$options.pgid"
+    mode: "0o775"
+  - kind: ensure_writable_dir
+    target: "$state_dir/config"
+    uid: "$options.puid"
+    gid: "$options.pgid"
+    mode: "0o775"
+  - kind: ensure_persistent_token
+    target: "$state_dir/romm_auth_secret"
+    mode: "0o600"
+    generator: random_hex_32
+
 compose_template: |
   version: "3.8"
   services:
@@ -277,8 +409,11 @@ compose_template: |
       image: $images.romm
       container_name: romm
       restart: unless-stopped
+      user: "$options.puid:$options.pgid"
       ports:
         - "$options.listen_host:$options.listen_port:8080"
+      env_file:
+        - $state_dir/romm.env
       environment:
         ROMM_DB_DRIVER: postgresql
         DB_HOST: romm-db
@@ -287,9 +422,11 @@ compose_template: |
         DB_PASSWD: "$options.db_password"
         DB_NAME: $options.db_name
         ROMM_FRONTEND: "1"
+        ROMM_AUTH_SECRET_KEY_FILE: "/romm/secrets/auth_secret"
       volumes:
         - $options.roms_dir:/romm/library
         - $state_dir/config:/romm/config
+        - $state_dir/romm_auth_secret:/romm/secrets/auth_secret:ro
       healthcheck:
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
         interval: 10s
@@ -345,6 +482,21 @@ options:
     ui_label: Database password
     ui_help: Change this to a strong unique password before starting
     ui_group: Database
+  puid:
+    type: int
+    default: 1000
+    ui_label: User ID (PUID)
+    ui_group: Permissions
+  pgid:
+    type: int
+    default: 1000
+    ui_label: Group ID (PGID)
+    ui_group: Permissions
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Metadata provider credentials
+    ui_group: Metadata providers
 ```
 
 Note the storage model: `$options.roms_dir` mounts at `/romm/library`,
@@ -356,6 +508,12 @@ uploads and scan results both land in `~/media/roms`. The earlier
 `$state_dir/library` + `$options.roms_dir:/romm/roms` split put uploads in
 XDG state and left the vault empty — confusing, and it fought the vault-as-
 source-of-truth principle.
+
+Note also the permission model: the image runs as root by default, so the
+app container declares `user: "$options.puid:$options.pgid"` and the two
+`ensure_writable_dir` hooks create the bind-mount targets as the host user
+— without them Docker would create them as root and the library would be
+unusable by its owner.
 
 Trace one line through both phases:
 
@@ -392,6 +550,8 @@ assert "$state_dir" not in rendered
 assert "image: rommapp/romm:latest" in rendered
 assert "image: postgres:16-alpine" in rendered
 assert "/tmp/media-vault/roms:/romm/library" in rendered  # vault is the store
+assert 'user: "1000:1000"' in rendered  # the host user, not root
+assert str(svc.config.env_file) in rendered  # the env file the template reads
 
 # The install axis covers the whole stack (ADR-049) — the Status page's
 # Install button fetches every one of them.

@@ -228,6 +228,74 @@ def test_ensure_writable_dir_is_idempotent(tmp_path: Path) -> None:
     assert stat.S_IMODE(target.stat().st_mode) == 0o770
 
 
+def test_ensure_writable_dir_accepts_a_placeholder_resolved_uid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A uid that came from ``$options.X`` stays an int through the loader.
+
+    The hook chowns only when both ids are ints — a stringified "1000"
+    would silently take the world-writable fallback instead.
+    """
+    from genesis_worker.tests._factories import service_ctx
+    from genesis_worker.utils.services import load_service_spec
+
+    spec = tmp_path / "demo.yaml"
+    spec.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "kind": "docker",
+                "name": "demo",
+                "display_name": "Demo",
+                "description": "demo service",
+                "category": "utility",
+                "capabilities": {
+                    "can_generate_config": False,
+                    "can_export_for_agent": False,
+                    "can_serve_llm": False,
+                    "can_serve_image": False,
+                    "can_train_models": False,
+                    "has_web_ui": True,
+                    "can_install": True,
+                },
+                "resource_estimate": {
+                    "vram_bytes_typical": 0,
+                    "vram_bytes_min": 0,
+                    "cpu_cores_recommended": 1,
+                },
+                "image": {"repo": "example/demo", "tag": "v1"},
+                "container": {"name": "demo", "listen_port": 8080},
+                "options": {"puid": {"type": "int", "default": 1000}},
+                "pre_start_hooks": [
+                    {
+                        "kind": "ensure_writable_dir",
+                        "target": "$state_dir/tsdb",
+                        "uid": "$options.puid",
+                        "gid": "$options.puid",
+                        "mode": "0o775",
+                    }
+                ],
+            }
+        )
+    )
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(spec, ctx=ctx)
+    entry = svc.config.pre_start_hooks[0]
+    assert entry["uid"] == 1000
+    assert isinstance(entry["uid"], int)
+
+    calls: list[tuple[int, int]] = []
+
+    def _fake_chown(path: Path, uid: int, gid: int) -> None:
+        calls.append((uid, gid))
+        path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("genesis_worker.utils.services.hooks.os.chown", _fake_chown)
+    run([entry], PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir))
+    assert calls == [(1000, 1000)]
+    assert (ctx.state_dir / "tsdb").is_dir()
+
+
 # --- materialize_orchestrator_config (keyed selector) ----------------------
 
 

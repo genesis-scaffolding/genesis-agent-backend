@@ -295,6 +295,73 @@ def _assert_compose_ports_published(
         )
 
 
+def _env_value(value: Any) -> str:
+    """An env value as a container sees it: a string, booleans lowercased."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+def _compose_template_env_files(template: str) -> set[str]:
+    """The host paths a compose template references through ``env_file:``.
+
+    Every service of the stack is read; the entries may be a single path
+    or a list of them.
+    """
+    try:
+        document = yaml.safe_load(template)
+    except yaml.YAMLError:
+        return set()
+    if not isinstance(document, dict):
+        return set()
+    services = document.get("services")
+    if not isinstance(services, dict):
+        return set()
+    found: set[str] = set()
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+        entries = service.get("env_file")
+        if isinstance(entries, str):
+            entries = [entries]
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, str):
+                found.add(entry)
+    return found
+
+
+def _assert_compose_env_file(resolved: dict, path: Path) -> None:
+    """The user's env map must reach the container (ADR-053).
+
+    Two rules:
+
+    1. A spec with an ``extra_env`` option must declare an ``env_file`` —
+       otherwise the user's env vars are silently dropped.
+    2. A spec that declares an ``env_file`` must reference it in the
+       template's ``env_file:`` — the file the framework writes is inert
+       unless the template points at it.
+    """
+    options = resolved.get("options") or {}
+    declared = resolved.get("env_file")
+    if not declared:
+        if "extra_env" in options:
+            raise ValueError(
+                f"{path}: the spec declares an 'extra_env' option but no 'env_file' — "
+                "the user's env vars would not reach the container"
+            )
+        return
+    template = str(resolved.get("compose_template") or "")
+    if str(declared) not in _compose_template_env_files(template):
+        raise ValueError(
+            f"{path}: the spec declares env_file {str(declared)!r} but the compose template "
+            "does not reference it — add it to the service's env_file: list"
+        )
+
+
 def _compose_template_images(template: str) -> list[str]:
     """The image refs of a compose template's services, in declaration order.
 
@@ -637,13 +704,17 @@ def _build_compose_config(
     category = ServiceCategory(resolved["category"])
     capabilities = ServiceCapabilities(**resolved["capabilities"])
     resource_estimate = ServiceResourceEstimate(**resolved["resource_estimate"])
-    extra_env = dict(options_resolved.get("extra_env") or {})
+    # The user's long-tail env map (ADR-053). It is the container's
+    # environment — for the compose kind it travels through the
+    # framework-managed env file the template references.
+    user_env = {str(k): v for k, v in (options_resolved.get("extra_env") or {}).items()}
+    extra_env = {k: _env_value(v) for k, v in user_env.items()}
     extra_mounts_raw = options_resolved.get("extra_mounts") or {}
     extra_mounts = {k: str(v) for k, v in extra_mounts_raw.items()}
-    merged_env = {**(resolved.get("env") or {}), **extra_env}
-    merged_env = {
-        k: ("true" if v is True else "false" if v is False else v) for k, v in merged_env.items()
-    }
+    # The compose process environment: the spec's own env block plus the
+    # user's map — the template may interpolate either of them.
+    compose_env = {**(resolved.get("env") or {}), **user_env}
+    compose_env = {k: _env_value(v) for k, v in compose_env.items()}
     merged_volumes = {**(resolved.get("volumes") or {}), **extra_mounts}
     # The runtime port (health probe, web UI endpoint) follows the
     # resolved ``listen_port`` option when one exists — the same value the
@@ -682,7 +753,10 @@ def _build_compose_config(
         ports=declared or (),
         fixed_host_ports=_fixed_host_ports(declared, runtime_port),
         health_probe_path=resolved.get("health_probe_path", "/"),
-        extra_env=merged_env,
+        extra_env=extra_env,
+        user_env=user_env,
+        compose_env=compose_env,
+        env_file=Path(resolved["env_file"]) if resolved.get("env_file") else None,
         extra_volumes=merged_volumes,
         pre_start_hooks=_clean_hook_entries(resolved.get("pre_start_hooks")),
         data_dir_subpath=resolved.get("data_dir_subpath"),
@@ -849,6 +923,7 @@ def load_service_spec(
             {str(image["name"]) for image in resolved.get("images") or ()},
             path,
         )
+        _assert_compose_env_file(resolved, path)
 
     # The declared ``ports:`` block (ADR-051). Absent = the legacy
     # single-port form, where the per-kind fields stay the source of truth.

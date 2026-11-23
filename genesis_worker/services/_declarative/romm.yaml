@@ -1,6 +1,43 @@
 # ROMM — self-hosted ROM library manager.
 # https://docs.romm.app/latest/getting-started/quick-start/
 # Ships as a docker compose stack: romm (web app) + romm-db (PostgreSQL).
+#
+# PERMISSIONS — the library must stay host-owned
+# ------------------------------------------------
+# The upstream image has no USER directive, so the container runs as root
+# and everything ROMM writes into the bind-mounted library is root-owned:
+# the desktop user cannot drop a ROM into a platform directory, rename or
+# delete what ROMM put there. Two things fix it:
+#
+#   1. the app container runs as the host user — ``user: "$options.puid:$options.pgid"``
+#      (1000:1000 by default: the image's own ``romm`` user, which also
+#      owns /romm and /redis-data inside the image);
+#   2. the bind-mount targets are created by the worker, as the host user,
+#      before Docker ever sees them — a compose spec declares its mounts
+#      in the template, so the framework's volume pre-creation never
+#      runs and Docker would otherwise create them as root.
+#
+# The pre-start hooks do (2). Note that ``ensure_writable_dir`` also
+# resets the directory's mode to 0755 once it could chown it — the ROMs
+# directory belongs to the operator, so a custom mode on it is not kept.
+#
+# The files ROMM already created as root stay root-owned: the framework
+# cannot chown what it does not own. One-time remediation after the
+# upgrade:
+#
+#   sudo chown -R "$(id -u):$(id -g)" ~/media/roms ~/.local/state/genesis-worker/romm
+#
+# METADATA PROVIDERS — the upstream env vars
+# ------------------------------------------
+# ROMM reads its metadata-provider credentials from the environment
+# (SCREENSCRAPER_USER / SCREENSCRAPER_PASSWORD, IGDB_CLIENT_ID,
+# MOBYGAMES_API_KEY, ...). The ``extra_env`` option is a free-form
+# KEY=VALUE map: every entry lands in the container through the
+# framework-managed env file the template references with ``env_file:``.
+# A variable the user did not set is absent from the container, not an
+# empty string. The typed knobs in the template's ``environment:`` block
+# win over the map (compose gives ``environment:`` precedence over
+# ``env_file:``).
 
 version: 1
 kind: compose
@@ -27,6 +64,10 @@ compose_version: "3.8"
 health_probe_path: /
 # Default port 8101 — 8080 is taken by llama-swap.
 
+# The framework-managed env file the user's ``extra_env`` map is written
+# to. The template below references it with ``env_file:``.
+env_file: "$state_dir/romm.env"
+
 # Every image the stack uses, declared here (framework-level, NOT a user
 # option — the options panel is for app tuning only). Each gets a real
 # DockerImageInstall (registry tags, GUI version pick). The template names
@@ -50,6 +91,27 @@ images:
 # is the single source of truth for the collection. There is no
 # separate state-backed library mount.
 
+# The library directory and ROMM's config directory are created by the
+# worker (as the host user) before Docker sees them, so they are never
+# root-owned. The JWT signing key is created once and never rewritten:
+# without it the image generates a random key on every start, which
+# invalidates every session on every restart.
+pre_start_hooks:
+  - kind: ensure_writable_dir
+    target: "$options.roms_dir"
+    uid: "$options.puid"
+    gid: "$options.pgid"
+    mode: "0o775"
+  - kind: ensure_writable_dir
+    target: "$state_dir/config"
+    uid: "$options.puid"
+    gid: "$options.pgid"
+    mode: "0o775"
+  - kind: ensure_persistent_token
+    target: "$state_dir/romm_auth_secret"
+    mode: "0o600"
+    generator: random_hex_32
+
 # The compose_template is a plain string populated by the standard
 # $placeholder mechanism ($state_dir, $data_dir, $options.X) at load
 # time — the same mechanism every other declarative service uses. No
@@ -61,8 +123,16 @@ compose_template: |
       image: $images.romm
       container_name: romm
       restart: unless-stopped
+      # The image runs as root by default — everything it writes into the
+      # bind-mounted library would be root-owned. Run it as the host user
+      # (the image's own `romm` user is 1000:1000).
+      user: "$options.puid:$options.pgid"
       ports:
         - "$options.listen_host:$options.listen_port:8080"
+      # The user's metadata-provider credentials (and any other upstream
+      # env var) — written by the worker before the stack starts.
+      env_file:
+        - $state_dir/romm.env
       environment:
         # ROMM 5.x env scheme (bare DB_* + ROMM_DB_DRIVER), not the
         # legacy ROMM_DB_* names. Driver must be postgresql and port 5432
@@ -74,9 +144,13 @@ compose_template: |
         DB_PASSWD: "$options.db_password"
         DB_NAME: $options.db_name
         ROMM_FRONTEND: "1"
+        # The signing key lives in the host file the pre-start hook
+        # created — the image reads it through its own *_FILE mechanism.
+        ROMM_AUTH_SECRET_KEY_FILE: "/romm/secrets/auth_secret"
       volumes:
         - $options.roms_dir:/romm/library
         - $state_dir/config:/romm/config
+        - $state_dir/romm_auth_secret:/romm/secrets/auth_secret:ro
       healthcheck:
         # ROMM 5.x serves /health (not /api/health, which 404s).
         test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
@@ -134,3 +208,21 @@ options:
     ui_label: Database password
     ui_help: Change this to a strong unique password before starting
     ui_group: Database
+  puid:
+    type: int
+    default: 1000
+    ui_label: User ID (PUID)
+    ui_help: UID the ROMM process runs as inside the container; set it to your host UID so the ROMs directory stays host-owned. The image's /romm and /redis-data belong to 1000, so a different UID needs host directories mounted over them.
+    ui_group: Permissions
+  pgid:
+    type: int
+    default: 1000
+    ui_label: Group ID (PGID)
+    ui_help: GID the ROMM process runs as inside the container.
+    ui_group: Permissions
+  extra_env:
+    type: env_map
+    default: {}
+    ui_label: Metadata provider credentials
+    ui_help: "Upstream env vars, one KEY=VALUE per row. ScreenScraper: SCREENSCRAPER_USER, SCREENSCRAPER_PASSWORD. Others: IGDB_CLIENT_ID, IGDB_CLIENT_SECRET, MOBYGAMES_API_KEY, STEAMGRIDDB_API_KEY, RETROACHIEVEMENTS_API_KEY, PLAYMATCH_API_ENABLED, LAUNCHBOX_API_ENABLED, HASHEOUS_API_ENABLED, FLASHPOINT_API_ENABLED, HLTB_API_ENABLED, DEMOZOO_API_ENABLED, POUET_API_ENABLED, CSDB_API_ENABLED, STEAM_API_ENABLED, TGDB_API_ENABLED, UPC_LOOKUP_API_KEY. Stored in <config_dir>/services/romm.overrides.json."
+    ui_group: Metadata providers

@@ -1256,6 +1256,111 @@ def test_romm_ui_panels_include_compose_status(tmp_path: Path) -> None:
     assert "configure" in svc.ui_panels
 
 
+def test_romm_runs_as_the_declared_user(tmp_path: Path) -> None:
+    """The app container runs as the host user, not as root.
+
+    The upstream image has no USER directive: as root it would write
+    root-owned files into the bind-mounted library and lock the operator
+    out of their own ROMs.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    rendered = svc._render_compose_file().read_text()
+    assert 'user: "1000:1000"' in rendered
+
+    svc2 = load_service_spec(
+        _DECLARATIVE_DIR / "romm.yaml",
+        ctx=service_ctx(tmp_path, name="romm", options={"puid": 1500, "pgid": 1600}),
+    )
+    assert isinstance(svc2, ComposeService)
+    assert 'user: "1500:1600"' in svc2._render_compose_file().read_text()
+
+
+def test_romm_declares_writable_dir_hooks_for_library_and_config(tmp_path: Path) -> None:
+    """The bind-mount targets are created by the worker, as the host user.
+
+    A compose spec declares its mounts in the template, so the framework's
+    volume pre-creation never runs — Docker would create the missing
+    directories as root.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    hooks = [h for h in svc.config.pre_start_hooks if h.get("kind") == "ensure_writable_dir"]
+    targets = {h["target"]: h for h in hooks}
+    assert set(targets) == {
+        str(tmp_path / "media-vault" / "roms"),
+        str(tmp_path / "state" / "config"),
+    }
+    for hook in targets.values():
+        # The uid/gid stay ints after the placeholder pass — the hook
+        # chowns to them.
+        assert hook["uid"] == 1000
+        assert hook["gid"] == 1000
+
+
+def test_romm_provider_env_option_is_an_env_map(tmp_path: Path) -> None:
+    """The metadata-provider credentials are a free-form env map.
+
+    Every upstream provider variable is configurable without a spec edit —
+    the long tail the configure panel's key/value editor handles.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert svc.config.option_specs["extra_env"].type == "env_map"
+    assert svc.options.extra_env == {}  # type: ignore[attr-defined]
+
+    svc2 = load_service_spec(
+        _DECLARATIVE_DIR / "romm.yaml",
+        ctx=service_ctx(
+            tmp_path,
+            name="romm",
+            options={
+                "extra_env": {
+                    "SCREENSCRAPER_USER": "gen",
+                    "SCREENSCRAPER_PASSWORD": "hunter2",
+                }
+            },
+        ),
+    )
+    assert isinstance(svc2, ComposeService)
+    assert svc2.options.extra_env == {  # type: ignore[attr-defined]
+        "SCREENSCRAPER_USER": "gen",
+        "SCREENSCRAPER_PASSWORD": "hunter2",
+    }
+    # The map is the container's environment.
+    assert svc2.config.extra_env["SCREENSCRAPER_PASSWORD"] == "hunter2"
+
+
+def test_romm_template_references_the_env_file(tmp_path: Path) -> None:
+    """The template reads the framework-managed env file."""
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    assert svc.config.env_file == tmp_path / "state" / "romm.env"
+    template = yaml.safe_load(svc.config.compose_template)
+    assert template["services"]["romm"]["env_file"] == [str(svc.config.env_file)]
+
+
+def test_romm_persists_the_auth_secret_key(tmp_path: Path) -> None:
+    """The JWT signing key is created once and mounted into the container.
+
+    Without it the image generates a random key on every start, which
+    invalidates every session on every restart.
+    """
+    svc = load_service_spec(_DECLARATIVE_DIR / "romm.yaml", ctx=service_ctx(tmp_path, name="romm"))
+    assert isinstance(svc, ComposeService)
+    token_hooks = [
+        h for h in svc.config.pre_start_hooks if h.get("kind") == "ensure_persistent_token"
+    ]
+    assert len(token_hooks) == 1
+    secret = tmp_path / "state" / "romm_auth_secret"
+    assert token_hooks[0]["target"] == str(secret)
+
+    template = yaml.safe_load(svc.config.compose_template)
+    romm = template["services"]["romm"]
+    assert romm["environment"]["ROMM_AUTH_SECRET_KEY_FILE"] == "/romm/secrets/auth_secret"
+    assert f"{secret}:/romm/secrets/auth_secret:ro" in romm["volumes"]
+
+
 # --- paperless-specific ------------------------------------------------------
 
 

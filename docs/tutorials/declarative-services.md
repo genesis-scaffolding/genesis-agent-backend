@@ -422,10 +422,14 @@ Three new types landed in ADR-036:
   `listen_port`, `internal_port`, and any other service-controlled port.
 - **`env_map`** — `dict[str, str]`. A free-form map of additional env
   vars. The user populates key/value pairs through the configure panel;
-  YAML-declared typed knobs in `env:` still win on collision (the typed
-  knob is the discovery surface; the map is the long tail).
+  the user's map wins on collision with a YAML-declared knob in `env:`
+  (ADR-036 §5 — the user picked the long tail deliberately). The compose
+  kind is the other way round: there the typed knobs live in the
+  template's `environment:` block, which compose gives precedence over
+  the env file the map travels in (ADR-053).
 - **`mount_map`** — `dict[str, Path]`. Same shape for bind mounts
-  (container path → host path).
+  (container path → host path). Docker-kind only — a compose service
+  declares its volumes in the template.
 
 `optional: true` means "may be unset by the user". The Python type becomes
 `<declared> | None`, and pydantic accepts `None` for the value.
@@ -859,6 +863,12 @@ sidecar wins on key collisions (the typed knob is the discovery
 surface; the map is the long tail — a user who types
 `PHOTOPRISM_UPLOAD_NSFW=false` into `extra_env` while the typed knob
 is `true` gets the long-tail value).
+
+For a **compose** service the map travels to the container through the
+framework-managed env file the spec declares (`env_file:`) — the compose
+kind's typed knobs live in the template's `environment:` block and win
+there. See
+[the compose tutorial](declarative-compose-services.md#the-environment-the-users-extra_env-reaches-the-container).
 
 ## Limitations (when to fall back to Python)
 
