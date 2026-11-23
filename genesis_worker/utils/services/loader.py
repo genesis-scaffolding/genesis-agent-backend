@@ -37,10 +37,12 @@ from ...contracts import (
 from ..ports.markers import AUTO_PORT_KEY_PREFIX, is_marker, marker_name
 from . import spec as _spec_module
 from .base import DeclarativeServiceBase, DeclaredPort
-from .compose_service import ComposeImage, ComposeService, ComposeServiceConfig
+from .compose_service import ComposeImage, ComposeService, ComposeServiceConfig, CredentialEnv
 from .docker_service import AuthConfig, DockerService, DockerServiceConfig, ExtraPort
 from .spec import (
+    CREDENTIAL_ENV_KEY,
     ComposeServiceSpec,
+    CredentialEnvSpec,
     DockerServiceSpec,
     OptionSpec,
     UvServiceSpec,
@@ -353,6 +355,7 @@ def _resolve_string(
     auth_token: Any,
     images: Mapping[str, str] | None = None,
     ports: Callable[[str], int] | None = None,
+    credential_env: str | None = None,
 ) -> Any:
     """Resolve ``$placeholders`` in ``value``.
 
@@ -371,7 +374,9 @@ def _resolve_string(
     """
     match = _PLACEHOLDER_RE.fullmatch(value)
     if match:
-        resolved = _resolve_placeholder(match.group(1), ctx, options, auth_token, images, ports)
+        resolved = _resolve_placeholder(
+            match.group(1), ctx, options, auth_token, images, ports, credential_env
+        )
         if resolved is None:
             return None
         if isinstance(resolved, str):
@@ -383,9 +388,47 @@ def _resolve_string(
         return str(resolved)  # Path / int from $data_dir etc.
 
     def _replace(match: re.Match[str]) -> str:
-        return str(_resolve_placeholder(match.group(1), ctx, options, auth_token, images, ports))
+        return str(
+            _resolve_placeholder(
+                match.group(1), ctx, options, auth_token, images, ports, credential_env
+            )
+        )
 
     return _PLACEHOLDER_RE.sub(_replace, value)
+
+
+def _assert_credential_env_block(
+    block: CredentialEnvSpec | None,
+    options: Mapping[str, OptionSpec],
+    path: Path,
+) -> None:
+    """The credential_env block must name one of the spec's own options.
+
+    A typo in ``provider_option`` is a spec error, and a spec error
+    belongs at load time (ADR-055). The option's *value* is a runtime
+    value — a provider nobody mapped fails on the start path instead, so
+    it never takes the worker down.
+    """
+    if block is None:
+        return
+    if block.provider_option not in options:
+        raise ValueError(
+            f"{path}: the credential_env block names the option "
+            f"{block.provider_option!r}, which the spec does not declare — "
+            "it must name one of the spec's own options"
+        )
+    if not block.by_provider:
+        raise ValueError(
+            f"{path}: the credential_env block maps no provider — "
+            "the credential's environment variable cannot be resolved"
+        )
+    for provider, variable in block.by_provider.items():
+        if not variable.strip():
+            raise ValueError(
+                f"{path}: the credential_env block maps the provider {provider!r} to an "
+                "empty environment variable — the name must be the variable the "
+                "service reads"
+            )
 
 
 def _resolve_placeholder(
@@ -395,6 +438,7 @@ def _resolve_placeholder(
     auth_token: Any,
     images: Mapping[str, str] | None = None,
     ports: Callable[[str], int] | None = None,
+    credential_env: str | None = None,
 ) -> Any:
     """Resolve a single placeholder key to its typed value.
 
@@ -437,6 +481,12 @@ def _resolve_placeholder(
         if ports is None:
             return f"${key}"
         return ports(key[len(AUTO_PORT_KEY_PREFIX) :])
+    # The credential's environment variable name ($credential_env)
+    # resolves when the caller supplies it -- the render-time resolution
+    # source. At load time there is none, so the marker survives, the
+    # same way $images.<name> survives.
+    if key == CREDENTIAL_ENV_KEY:
+        return credential_env if credential_env is not None else f"${key}"
     # Unknown placeholder -- leave the marker intact so callers can spot it.
     return f"${key}"
 
@@ -448,6 +498,7 @@ def resolve_placeholders(
     auth_token: Any = None,
     images: Mapping[str, str] | None = None,
     ports: Callable[[str], int] | None = None,
+    credential_env: str | None = None,
 ) -> Any:
     """Recursively replace ``$state_dir`` / ``$options.X`` markers in ``value``.
 
@@ -460,22 +511,28 @@ def resolve_placeholders(
     omitted, image markers survive untouched (load-time pass).
     ``ports`` supplies the ``$auto_port.<name>`` resolver (name -> port);
     when omitted, auto-port markers survive untouched (load-time pass).
+    ``credential_env`` supplies the ``$credential_env`` name (the
+    environment variable the credential is written under); when omitted,
+    the marker survives untouched (load-time pass).
     """
     if isinstance(value, str):
-        return _resolve_string(value, ctx, options, auth_token, images, ports)
+        return _resolve_string(value, ctx, options, auth_token, images, ports, credential_env)
     if isinstance(value, Path):
         # Path objects can survive ``model_dump`` with their string
         # form containing ``$variable`` markers (e.g. option defaults
         # like ``"$data_dir/.."``). Stringify so the substitution
         # path picks them up; the next pass replaces the marker.
-        return _resolve_string(str(value), ctx, options, auth_token, images, ports)
+        return _resolve_string(str(value), ctx, options, auth_token, images, ports, credential_env)
     if isinstance(value, dict):
         return {
-            k: resolve_placeholders(v, ctx, options, auth_token, images, ports)
+            k: resolve_placeholders(v, ctx, options, auth_token, images, ports, credential_env)
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [resolve_placeholders(v, ctx, options, auth_token, images, ports) for v in value]
+        return [
+            resolve_placeholders(v, ctx, options, auth_token, images, ports, credential_env)
+            for v in value
+        ]
     return value
 
 
@@ -647,6 +704,17 @@ def _build_compose_config(
         k: ("true" if v is True else "false" if v is False else v) for k, v in merged_env.items()
     }
     merged_volumes = {**(resolved.get("volumes") or {}), **extra_mounts}
+    credential_block = resolved.get("credential_env") or {}
+    credential_env = (
+        CredentialEnv(
+            provider_option=str(credential_block["provider_option"]),
+            by_provider={
+                str(k): str(v) for k, v in (credential_block["by_provider"] or {}).items()
+            },
+        )
+        if credential_block
+        else None
+    )
     # The runtime port (health probe, web UI endpoint) follows the
     # resolved ``listen_port`` option when one exists — the same value the
     # compose template binds to — so the probe and the container can never
@@ -696,6 +764,7 @@ def _build_compose_config(
             )
             for t in resolved.get("images") or ()
         ),
+        credential_env=credential_env,
     )
 
 
@@ -833,6 +902,9 @@ def load_service_spec(
         )
     except ValidationError as exc:
         raise ValueError(f"{path}: YAML failed schema validation:\n{exc}") from exc
+
+    if isinstance(spec, ComposeServiceSpec):
+        _assert_credential_env_block(spec.credential_env, spec.options, path)
 
     # The fully-resolved spec, used to feed the config builder.
     resolved = resolve_placeholders(spec.model_dump(), ctx, options_resolved)

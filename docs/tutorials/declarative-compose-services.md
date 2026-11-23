@@ -115,6 +115,47 @@ hand. What an undeclared image breaks is the install axis: the UI cannot
 fetch it, so the service never reaches the "available" state the Start
 button depends on.
 
+### The `credential_env:` block
+
+Some services read a credential from an environment variable whose *name*
+depends on which provider the user picked (a DNS provider, a cloud
+account). The `credential_env:` block says which of the spec's options
+selects the name, and which value maps to which variable:
+
+```yaml
+options:
+  dns_provider:
+    type: string
+    default: "godaddyv3"
+  dns_api_token:
+    type: string
+    default: ""
+
+credential_env:
+  provider_option: dns_provider
+  by_provider:
+    godaddyv3: GODADDYV3_PERSONAL_ACCESS_TOKEN
+    cloudflare: CLOUDFLARE_DNS_API_TOKEN
+```
+
+The template then writes the credential under the selected provider's own
+variable:
+
+```yaml
+compose_template: |
+  ...
+      environment:
+        $credential_env: "$options.dns_api_token"
+```
+
+`provider_option` must name one of the spec's own options — a typo there
+is rejected at load time, like any other spec error. A *value* the map
+does not cover is a runtime value: the service still loads, and the
+render refuses to write the file, naming the value and the known ones.
+The mechanism is compose-only (the docker kind substitutes environment
+values, not environment keys) — see
+[the declarative-services tutorial](declarative-services.md#credential-env-placeholders-credential_env).
+
 ### Installing a multi-image stack
 
 The Status page's **Install** button installs *the service* — every image
@@ -145,7 +186,12 @@ from single-container specs work inside the template string:
 - `$state_dir`, `$data_dir`, `$vault_path`, `$media_vault_path`, `$log_dir`,
   `$cache_dir`, `$config_dir` — the context paths
 - `$options.<name>` — every option in the `options:` block
-- `$images.<name>` — the image markers (the one compose-specific marker)
+- `$images.<name>` — the image markers
+- `$credential_env` — the environment variable a credential is written under
+
+`$images.<name>` and `$credential_env` are the two compose-specific
+markers: both survive the load-time pass untouched and are materialised
+at render time.
 
 ### Single source of truth for the port
 
@@ -172,26 +218,36 @@ understanding before writing a template.
 **Phase 1 — load time** (same as every other declarative service). When
 `load_service_spec` runs, *every* placeholder in the template is resolved
 against the service context and the merged options. After loading, the stored
-template contains concrete paths, the user's actual option values, and exactly
-one kind of marker left: `$images.<name>`. Those markers are deliberately
-left intact, because the thing they resolve to — the user's recorded version
-selection — is not known at load time; it can be changed in the GUI at any
-point without re-loading the spec.
+template contains concrete paths, the user's actual option values, and two
+kinds of marker left: `$images.<name>` and `$credential_env`. The image
+markers are deliberately left intact, because the thing they resolve to — the
+user's recorded version selection — is not known at load time; it can be
+changed in the GUI at any point without re-loading the spec. The credential
+marker survives phase 1 the same way: the environment variable's name is
+derived from an option's value, and phase 2 is where that value is read.
 
 **Phase 2 — render time.** On every `start()`, the service builds the
 effective refs (`recorded selection, else default_tag`) and runs the *same*
 `resolve_placeholders` engine over the stored template with an
-`images={name: "repo:tag"}` table. The result is the final `docker-compose.yml`,
-written to `<state_dir>/compose/docker-compose.yml` verbatim.
+`images={name: "repo:tag"}` table and a `credential_env=<VARIABLE_NAME>`
+source — the name the `credential_env:` block maps the current option value
+to. The result is the final `docker-compose.yml`, written to
+`<state_dir>/compose/docker-compose.yml` verbatim.
 
 The consequence for you as an author: **a user's GUI version pick reaches the
 running stack on the next start, with no code change and no spec reload.**
 That's the whole reason phase 2 exists.
 
-Everything else in the template is final after load. If you write a marker
-that resolves to nothing (a typo, an option you forgot to declare), it
-survives to the rendered file as a literal `$typo` string — the engine never
-silently drops markers. Catch it in the bootstrap test below, not at 2am.
+Everything else in the template is final after load — the two marker kinds
+above are the exception. If you write a marker that resolves to nothing (a
+typo, an option you forgot to declare), it survives to the rendered file as
+a literal `$typo` string — the engine never silently drops markers. Catch it
+in the bootstrap test below, not at 2am.
+
+The credential marker is the exception to *that*: an unmapped provider (or a
+template that uses `$credential_env` without a `credential_env:` block) makes
+the render refuse to write the file, rather than ship a credential under a
+name nobody reads.
 
 ## Options: user-tweakable knobs in the template
 
@@ -387,6 +443,7 @@ assert "0.0.0.0:8101:8080" in t
 # Render phase: every marker gone, effective refs present.
 rendered = svc._rendered_template()
 assert "$images." not in rendered
+assert "$credential_env" not in rendered
 assert "$options." not in rendered
 assert "$state_dir" not in rendered
 assert "image: rommapp/romm:latest" in rendered

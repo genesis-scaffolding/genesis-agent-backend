@@ -47,9 +47,14 @@
 # delete DNS zone records); a write scope satisfies the reads for the
 # same resource. The provider name and the credential are options — the
 # orchestrator pushes them with the route table, and the worker's own
-# Configure panel can set them for single-node work. Another provider
-# needs its own credential variable, so switching providers is not only
-# this field.
+# Configure panel can set them for single-node work.
+#
+# Every Lego provider reads its credential from its OWN environment
+# variable, and the names are not derivable from the provider name
+# (``DO_AUTH_TOKEN``, ``CLOUDFLARE_DNS_API_TOKEN``). The
+# ``credential_env:`` block below maps each provider to the variable Lego
+# reads for it, and the compose template writes the credential under that
+# name — so switching providers is only this field (ADR-055).
 #
 # CONFIG DIR — what the orchestrator is expected to write
 # -------------------------------------------------------
@@ -145,14 +150,36 @@ options:
     type: string
     default: "godaddyv3"
     ui_label: DNS provider
-    ui_help: "Traefik DNS-01 provider name (lego): godaddyv3 (the GoDaddy case — Personal Access Token), cloudflare, route53, ovh, azure, digitalocean, gandi, linode, vultr. Another provider needs its own credential variable, so switching providers is not only this field."
+    ui_help: "Traefik DNS-01 provider name (lego): godaddyv3 (the GoDaddy case — Personal Access Token), cloudflare, digitalocean, gandi, gandiv5, linode, vultr. The credential is written under the provider's own environment variable (see the spec's credential_env map). Providers that need more than one credential (route53, ovh, azuredns) are not served."
     ui_group: TLS
   dns_api_token:
     type: string
     default: ""
     ui_label: DNS API token
-    ui_help: "The DNS provider credential — for GoDaddy a Personal Access Token with the domains.dns:update scope (create, update and delete DNS zone records)."
+    ui_help: "The DNS provider credential — for GoDaddy a Personal Access Token with the domains.dns:update scope (create, update and delete DNS zone records). It reaches the container under the selected provider's own environment variable."
     ui_group: TLS
+
+# The credential's environment variable follows the DNS provider: Lego
+# reads one variable per provider, and the names are not derivable from
+# the provider name. The framework resolves the name when it renders the
+# compose file (ADR-055), so the template can write the credential under
+# it.
+#
+# The names are the ones Lego reads (Lego v5.6.0, embedded in
+# traefik:v3.7) — see https://go-acme.github.io/lego/dns/<provider>/.
+# Providers that need more than one credential (route53, ovh, azuredns)
+# are deliberately absent: the proxy carries ONE credential, and a map
+# from one credential to one variable cannot express them.
+credential_env:
+  provider_option: dns_provider
+  by_provider:
+    godaddyv3: GODADDYV3_PERSONAL_ACCESS_TOKEN
+    cloudflare: CLOUDFLARE_DNS_API_TOKEN
+    digitalocean: DO_AUTH_TOKEN
+    gandi: GANDI_API_KEY
+    gandiv5: GANDIV5_PERSONAL_ACCESS_TOKEN
+    linode: LINODE_TOKEN
+    vultr: VULTR_API_KEY
 
 pre_start_hooks:
   # acme.json lives in the mounted data dir and must be writable by the
@@ -183,9 +210,10 @@ compose_template: |
         # health probe is HTTP-only.
         - "$options.listen_host:$options.listen_port:8080"
       environment:
-        # Lego (embedded in the official image) reads the GoDaddy
-        # Personal Access Token from the environment.
-        GODADDYV3_PERSONAL_ACCESS_TOKEN: "$options.dns_api_token"
+        # Lego (embedded in the official image) reads the provider's
+        # credential from one environment variable — the name follows the
+        # selected provider (see the credential_env block).
+        $credential_env: "$options.dns_api_token"
       volumes:
         # The PARENT of dynamic/ is mounted — Traefik watches the
         # directory, and a bind mount over the watched dir itself

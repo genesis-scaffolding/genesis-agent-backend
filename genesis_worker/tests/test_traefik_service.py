@@ -9,6 +9,8 @@ Covered here:
 
 - the spec's identity, kind and options,
 - the GoDaddy credential wiring (Lego reads it from the environment),
+- the credential's environment variable following the DNS provider
+  (ADR-055),
 - the ``routes`` materialisation hook (and the fact that a missing
   key fails the start loudly),
 - the start path applying the orchestrator-supplied ``options`` section
@@ -147,6 +149,50 @@ def test_rendered_compose_carries_the_godaddy_token(tmp_path: Path) -> None:
     assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "the-token"' in _render(svc)
 
 
+# --- the credential's variable follows the provider (ADR-055) --------------
+
+
+def test_the_credential_variable_follows_the_provider(tmp_path: Path) -> None:
+    """Lego reads one variable per provider — the name is not the provider's."""
+    svc = _load(tmp_path, options={"dns_provider": "cloudflare", "dns_api_token": "the-token"})
+    rendered = _render(svc)
+    assert 'CLOUDFLARE_DNS_API_TOKEN: "the-token"' in rendered
+    assert "GODADDYV3_PERSONAL_ACCESS_TOKEN" not in rendered
+
+
+def test_the_credential_variable_for_the_other_providers(tmp_path: Path) -> None:
+    """The names are Lego v5.6.0's, not derivable from the provider name."""
+    cases = {
+        "digitalocean": "DO_AUTH_TOKEN",
+        "gandi": "GANDI_API_KEY",
+        "gandiv5": "GANDIV5_PERSONAL_ACCESS_TOKEN",
+        "linode": "LINODE_TOKEN",
+        "vultr": "VULTR_API_KEY",
+    }
+    for provider, variable in cases.items():
+        svc = _load(tmp_path, options={"dns_provider": provider, "dns_api_token": "the-token"})
+        rendered = _render(svc)
+        assert f'{variable}: "the-token"' in rendered, provider
+        assert "GODADDYV3_PERSONAL_ACCESS_TOKEN" not in rendered
+
+
+def test_an_unmapped_provider_fails_the_start_not_the_worker(tmp_path: Path) -> None:
+    """The provider is a runtime value — it must not break the worker.
+
+    The service loads; the render refuses to write a file that would
+    hand the credential to a provider under a name it never reads.
+    """
+    svc = _load(tmp_path, options={"dns_provider": "azure", "dns_api_token": "the-token"})
+    assert svc.name == "traefik"
+    with pytest.raises(ValueError, match="azure") as excinfo:
+        svc._render_compose_file(ports=svc.port_binder().resolver())
+    message = str(excinfo.value)
+    assert "credential_env.by_provider" in message
+    # The message names the providers that ARE mapped.
+    assert "godaddyv3" in message
+    assert "cloudflare" in message
+
+
 def test_rendered_compose_file_is_not_world_readable(tmp_path: Path) -> None:
     """The compose file carries the DNS credential."""
     svc = _load(tmp_path, options={"dns_api_token": "the-token"})
@@ -259,6 +305,25 @@ def test_orchestrator_options_reach_the_rendered_compose_file(tmp_path: Path) ->
     rendered = _render(svc)
     assert 'GODADDYV3_PERSONAL_ACCESS_TOKEN: "pushed-token"' in rendered
     assert "--certificatesResolvers.letsencrypt.acme.email=a@b.c" in rendered
+
+
+def test_orchestrator_options_carry_the_provider_and_its_credential(tmp_path: Path) -> None:
+    """A pushed provider takes its own credential variable with it."""
+    worker = _worker(tmp_path)
+    svc = cast(
+        ComposeService,
+        worker._apply_orchestrator_options(
+            "traefik",
+            {
+                "routes": {},
+                "options": {"dns_provider": "cloudflare", "dns_api_token": "pushed-token"},
+            },
+        ),
+    )
+    rendered = _render(svc)
+    assert 'CLOUDFLARE_DNS_API_TOKEN: "pushed-token"' in rendered
+    assert "GODADDYV3_PERSONAL_ACCESS_TOKEN" not in rendered
+    assert "--certificatesResolvers.letsencrypt.acme.dnschallenge.provider=cloudflare" in rendered
 
 
 def test_orchestrator_options_are_persisted_in_the_workers_option_store(tmp_path: Path) -> None:

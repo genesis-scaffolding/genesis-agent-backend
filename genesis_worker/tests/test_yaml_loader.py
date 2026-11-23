@@ -16,6 +16,7 @@ import pytest
 
 from genesis_worker.tests._factories import service_ctx
 from genesis_worker.utils.services import (
+    ComposeService,
     DockerService,
     UvService,
     load_service_spec,
@@ -902,3 +903,137 @@ def test_compose_runtime_port_must_be_published_by_the_template(tmp_path: Path) 
     path = _write_yaml(tmp_path, "demo.yaml", payload)
     with pytest.raises(ValueError, match="does not publish it"):
         load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+# --- the credential env var (ADR-055) --------------------------------------
+
+
+def _compose_base() -> dict[str, Any]:
+    """A compose spec whose template writes a credential under ``$credential_env``."""
+    return {
+        "version": 1,
+        "kind": "compose",
+        "name": "demo",
+        "display_name": "Demo",
+        "description": "demo service",
+        "category": "utility",
+        "capabilities": {
+            "can_generate_config": False,
+            "can_export_for_agent": False,
+            "can_serve_llm": False,
+            "can_serve_image": False,
+            "can_train_models": False,
+            "has_web_ui": True,
+            "can_install": True,
+        },
+        "resource_estimate": {
+            "vram_bytes_typical": 0,
+            "vram_bytes_min": 0,
+            "cpu_cores_recommended": 1,
+        },
+        "images": [{"name": "app", "repo": "example/app", "default_tag": "v1"}],
+        "compose_template": (
+            "services:\n"
+            "  app:\n"
+            "    image: $images.app\n"
+            "    environment:\n"
+            '      $credential_env: "$options.token"\n'
+        ),
+        "options": {
+            "provider": {"type": "string", "default": "acme"},
+            "token": {"type": "string", "default": "t0k"},
+        },
+        "credential_env": {
+            "provider_option": "provider",
+            "by_provider": {"acme": "ACME_API_TOKEN", "other": "OTHER_API_TOKEN"},
+        },
+    }
+
+
+def test_resolve_placeholders_resolves_the_credential_env_when_given_a_name(
+    tmp_path: Path,
+) -> None:
+    ctx = service_ctx(tmp_path, name="svc")
+    out = resolve_placeholders(
+        {"a": "$credential_env", "mixed": "token under $credential_env"},
+        ctx,
+        {},
+        None,
+        credential_env="ACME_API_TOKEN",
+    )
+    assert out["a"] == "ACME_API_TOKEN"
+    assert out["mixed"] == "token under ACME_API_TOKEN"
+    # Without a name the marker survives — the load-time behaviour.
+    out2 = resolve_placeholders({"a": "$credential_env"}, ctx, {}, None)
+    assert out2["a"] == "$credential_env"
+
+
+def test_the_credential_env_marker_survives_the_load_time_pass(tmp_path: Path) -> None:
+    """The name is only known at render time — the marker rides the load pass."""
+    path = _write_yaml(tmp_path, "demo.yaml", _compose_base())
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+    assert "$credential_env" in svc.config.compose_template
+
+
+def test_the_rendered_compose_file_carries_the_credential_under_the_mapped_name(
+    tmp_path: Path,
+) -> None:
+    path = _write_yaml(tmp_path, "demo.yaml", _compose_base())
+    svc = load_service_spec(
+        path, ctx=service_ctx(tmp_path, name=path.stem, options={"provider": "other"})
+    )
+    assert isinstance(svc, ComposeService)
+    rendered = svc._render_compose_file().read_text()
+    assert 'OTHER_API_TOKEN: "t0k"' in rendered
+    assert "$credential_env" not in rendered
+
+
+def test_a_credential_env_block_naming_no_option_is_rejected(tmp_path: Path) -> None:
+    """A typo in ``provider_option`` is a spec error — it fails at load time."""
+    payload = _compose_base()
+    payload["credential_env"]["provider_option"] = "provider_typo"  # type: ignore[index]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="provider_typo"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_a_credential_env_block_with_no_provider_is_rejected(tmp_path: Path) -> None:
+    payload = _compose_base()
+    payload["credential_env"]["by_provider"] = {}  # type: ignore[index]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="maps no provider"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_a_credential_env_block_with_an_empty_variable_is_rejected(tmp_path: Path) -> None:
+    """An empty name would render an empty mapping key — reject it at load time."""
+    payload = _compose_base()
+    payload["credential_env"]["by_provider"] = {"acme": "  "}  # type: ignore[index]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="maps the provider 'acme' to an empty"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
+def test_an_unmapped_provider_refuses_the_render(tmp_path: Path) -> None:
+    """A runtime value nobody mapped fails the start, not the worker."""
+    path = _write_yaml(tmp_path, "demo.yaml", _compose_base())
+    svc = load_service_spec(
+        path, ctx=service_ctx(tmp_path, name=path.stem, options={"provider": "unmapped"})
+    )
+    assert isinstance(svc, ComposeService)
+    assert svc.name == "demo"
+    with pytest.raises(ValueError, match="unmapped"):
+        svc._render_compose_file()
+
+
+def test_a_template_using_the_marker_without_a_block_refuses_the_render(
+    tmp_path: Path,
+) -> None:
+    """A template that uses ``$credential_env`` with no block has no name to write."""
+    payload = _compose_base()
+    payload.pop("credential_env")
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+    assert isinstance(svc, ComposeService)
+    with pytest.raises(ValueError, match="declares no credential_env block"):
+        svc._render_compose_file()
