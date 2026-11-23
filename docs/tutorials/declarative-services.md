@@ -444,11 +444,19 @@ per-service JSON sidecar at
 override path stays as-is for backward compat with bifrost / crawl4ai /
 sillytavern; the sidecar carries map values only.
 
+The sidecar is **authoritative**: it is the store the configure panel
+writes to, the store the orchestrator's `options` section is written to
+(ADR-046), and the store a start re-reads. Edit it by hand and the next
+start of that service picks the edit up (ADR-053) — the resolved values
+are baked into `DockerServiceConfig.extra_env` at construction, so the
+start rebuilds the instance when the sidecar changed.
+
 This is why the user doesn't have to restart the worker to pick up changes
 to **most** fields — but for `env` and `volumes` whose `$...` substitution
 happens at construction, the user DOES need to restart the service on its
 own page (the resolved values are baked into `DockerServiceConfig.extra_env`
-and never re-resolved at start time). The configure panel's **Apply**
+at construction and re-resolved when the start finds the on-disk options
+changed). The configure panel's **Apply**
 button rebuilds the in-memory service; **Apply & restart** stops + starts
 the container so the new config takes effect immediately (ADR-036).
 
