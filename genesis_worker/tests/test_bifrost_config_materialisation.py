@@ -168,8 +168,10 @@ def test_hook_unknown_format_raises(tmp_path: Path) -> None:
     # Mutate the resolved hook entry to inject an unsupported format;
     # the loader doesn't validate ``format`` (it stays a hook-handler
     # concern) so we simulate a typo via direct mutation.
-    hooks = list(svc.config.pre_start_hooks)
-    hooks[0] = {**hooks[0], "format": "toml"}
+    hooks = [
+        {**hook, "format": "toml"} if hook["kind"] == "materialize_orchestrator_config" else hook
+        for hook in svc.config.pre_start_hooks
+    ]
     svc._pending_orchestrator_config = {"x": 1}
 
     with pytest.raises(ValueError, match="unsupported format"):

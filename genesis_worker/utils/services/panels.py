@@ -122,11 +122,18 @@ def _auth_token(svc: InferenceService, panel_config: dict) -> None:
     is True, renders the JWT info message. Otherwise, when a token is present,
     renders the bearer header + an HTML/JS copy-to-clipboard control (same UX
     as the old ``services/crawl4ai/ui/status.py``).
+
+    The heading and the usage line come from the service's auth block
+    (``svc.auth_config()``) when it declares them (ADR-052) — a secret
+    that is not a bearer credential says so in its own words. Empty
+    fields keep the framework's wording.
     """
     token = getattr(svc, "auth_token", lambda: None)()
     enabled = getattr(svc, "auth_enabled", lambda: False)()
     env_var = panel_config.get("token_env_var", "API_TOKEN")
-    source_label = panel_config.get("source_label", "API token")
+    auth_cfg = getattr(svc, "auth_config", lambda: None)()
+    source_label = panel_config.get("source_label") or getattr(auth_cfg, "label", "") or "API token"
+    usage = getattr(auth_cfg, "usage", "") or "Authorization header: `Bearer <token>`"
 
     with st.container(border=True):
         st.subheader(f"{source_label}")
@@ -160,7 +167,7 @@ def _auth_token(svc: InferenceService, panel_config: dict) -> None:
                 "the worker can read it)"
             )
 
-        st.caption(f"Authorization header: `Bearer <token>`  ·  source: {source_note}")
+        st.caption(f"{usage}  ·  source: {source_note}")
         _render_copy_token(token)
 
 
