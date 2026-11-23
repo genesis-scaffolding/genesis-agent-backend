@@ -38,6 +38,7 @@ from ..process import DockerContainer
 from ..process.docker import ContainerPortBinding, container_port_bindings
 from .base import DeclarativeServiceBase, DeclarativeServiceConfig
 from .compose_stack import DockerComposeStack
+from .env_file import write_env_file
 
 _IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
 
@@ -93,7 +94,17 @@ class ComposeServiceConfig(DeclarativeServiceConfig):
     listen_host: str = "0.0.0.0"
     listen_port: int | str = 0
     health_probe_path: str = "/"
-    extra_env: dict[str, Any] = field(default_factory=dict)
+    # The container's environment — the same meaning the docker kind gives
+    # ``extra_env`` (ADR-053). For the compose kind it reaches the
+    # container through the framework-managed env file (``env_file``).
+    extra_env: dict[str, str] = field(default_factory=dict)
+    # The user's ``extra_env`` option map, as configured.
+    user_env: dict[str, str] = field(default_factory=dict)
+    # The ``docker compose`` process environment — the template's
+    # interpolation source (``$VAR`` in the compose file).
+    compose_env: dict[str, Any] = field(default_factory=dict)
+    # Host path of the framework-managed env file.
+    env_file: Path | None = None
     extra_volumes: dict[str, Any] = field(default_factory=dict)
     pre_start_hooks: tuple[dict, ...] = ()
     data_dir_subpath: str | None = "data"
@@ -338,6 +349,21 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         path.chmod(0o600)
         return path
 
+    def _write_env_file(self) -> None:
+        """Write the user's env map to the framework-managed env file.
+
+        The compose template references the file with ``env_file:``, so
+        every variable the user configured reaches the container — the
+        long tail of upstream env vars, without a spec edit per variable.
+        """
+        if self.config.env_file is None:
+            return
+        write_env_file(self.config.env_file, self.config.extra_env)
+
+    def _compose_process_env(self) -> dict[str, str]:
+        """The ``docker compose`` process environment (interpolation source)."""
+        return {k: str(v) for k, v in self.config.compose_env.items()}
+
     def start(self) -> StartResult:
         self._ensure_volume_dirs()
 
@@ -354,6 +380,10 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
                 ),
             )
 
+        # The env file the template points at must exist before compose
+        # reads the file — ``up`` fails on a missing one.
+        self._write_env_file()
+
         # Render with the effective tags and the allocated ports, then pull
         # anything missing. A full ``docker compose pull`` makes start()
         # self-sufficient: it fetches every declared image at its rendered
@@ -367,8 +397,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         if not pull.ok:
             return pull
 
-        env: dict[str, str] = {k: str(v) for k, v in self.config.extra_env.items()}
-        return self._stack.up(env=env)
+        return self._stack.up(env=self._compose_process_env())
 
     def stop(self) -> StopResult:
         return self._stack.down()

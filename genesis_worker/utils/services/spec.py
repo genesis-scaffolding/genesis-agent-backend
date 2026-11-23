@@ -461,6 +461,12 @@ class ComposeServiceSpec(BaseModel):
     compose_template: str
     compose_version: str = "3.8"
 
+    # Host path of the framework-managed env file the user's ``extra_env``
+    # map is written to (ADR-053). The template must reference the file
+    # with compose's ``env_file:`` — the loader checks that it does, and
+    # that a spec with an ``extra_env`` option declares one at all.
+    env_file: str | None = None
+
     # Every image the stack uses. Each entry gets its own DockerImageInstall
     # (real registry versioning, GUI version pick). Rule: if it's in the
     # template, it's declared here.

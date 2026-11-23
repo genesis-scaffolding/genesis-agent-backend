@@ -68,6 +68,10 @@ class ComposeServiceSpec(BaseModel):
     compose_template: str          # plain string, $placeholder-resolved at load time (the compose file body)
     compose_version: str = "3.8"  # compose file format version; emitted in the rendered output
 
+    # The framework-managed env file the user's `extra_env` map is written
+    # to (ADR-053). The template must reference it with `env_file:`.
+    env_file: str | None = None
+
     # Port mapping for the web UI. Optional at top level: when the spec
     # declares a ``listen_port`` option (the norm), the loader derives
     # the runtime port from the resolved option — single source of truth
@@ -101,7 +105,10 @@ class ComposeServiceConfig(DeclarativeServiceConfig):
     listen_host: str
     listen_port: int
     health_probe_path: str
-    extra_env: dict[str, str]
+    extra_env: dict[str, str]        # the container's environment (ADR-053)
+    user_env: dict[str, str]         # the user's `extra_env` option map
+    compose_env: dict[str, Any]       # the `docker compose` process environment
+    env_file: Path | None             # the framework-managed env file
     extra_volumes: dict[str, str]
     pre_start_hooks: tuple[dict, ...]
     data_dir_subpath: str | None
@@ -142,7 +149,7 @@ Deliberate design choice (resolved 16 Oct): a second templating engine (Jinja2) 
 |---|---|
 | `is_available()` | All images in the compose file are present locally (`docker image inspect` for each `image:` line) |
 | `is_running()` | `stack.is_running()` — at least one container in `running` state |
-| `start()` | 1. `_ensure_volume_dirs()` pre-creates bind-mount targets<br>2. Pre-start hooks fire<br>3. Write the resolved template → `docker-compose.yml`<br>4. `stack.up(env=merged_env)` |
+| `start()` | 1. `_ensure_volume_dirs()` pre-creates bind-mount targets<br>2. Pre-start hooks fire<br>3. The framework-managed env file is written (ADR-053)<br>4. Write the resolved template → `docker-compose.yml`<br>5. `stack.up(env=compose_env)` |
 | `stop()` | `stack.down()` |
 | `status()` | `is_running()` → health probe → `ServiceState` |
 | `wait_ready()` | `HealthProbe(...).wait_ready(timeout_s)` |
