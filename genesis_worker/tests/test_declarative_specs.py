@@ -428,10 +428,81 @@ def test_bifrost_pre_start_hooks_includes_materialize_orchestrator_config(
     """
     svc = _load_spec("bifrost.yaml", tmp_path)
     hooks = list(svc.config.pre_start_hooks)
-    assert len(hooks) == 1
-    assert hooks[0]["kind"] == "materialize_orchestrator_config"
+    materialise = [h for h in hooks if h["kind"] == "materialize_orchestrator_config"]
+    assert len(materialise) == 1
     expected_target = str(tmp_path / "data" / "data" / "config.json")
-    assert hooks[0]["target"] == expected_target
+    assert materialise[0]["target"] == expected_target
+
+
+def test_bifrost_setup_token_block(tmp_path: Path) -> None:
+    """The auth block declares bifrost's setup token (ADR-052).
+
+    The block owns the ``BIFROST_SETUP_TOKEN`` env var — the YAML does
+    not declare it in ``env:`` as well.
+    """
+    ctx = service_ctx(tmp_path, name="bifrost")
+    svc = load_service_spec(_DECLARATIVE_DIR / "bifrost.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    auth = svc.config.auth
+    assert auth is not None
+    assert auth.token_env_var == "BIFROST_SETUP_TOKEN"
+    assert auth.token_file == ctx.state_dir / "setup_token"
+    assert auth.token_file_mode == 0o600
+    assert auth.token_generator == "random_hex_32"
+    assert auth.fallback is None
+    assert auth.label == "Setup token"
+    assert "Setup token" in auth.usage
+
+
+def test_bifrost_setup_token_is_persistent_and_private(tmp_path: Path) -> None:
+    """The setup token is generated once, kept at 0600, and reused on the next start."""
+    ctx = service_ctx(tmp_path, name="bifrost")
+    svc = load_service_spec(_DECLARATIVE_DIR / "bifrost.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    hooks = list(svc.config.pre_start_hooks)
+    token_hooks = [h for h in hooks if h["kind"] == "ensure_persistent_token"]
+    assert len(token_hooks) == 1
+    assert token_hooks[0]["target"] == str(ctx.state_dir / "setup_token")
+    assert token_hooks[0]["mode"] == "0o600"
+
+    hook_ctx = PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir)
+    run_hooks(hooks, hook_ctx)
+    token_file = ctx.state_dir / "setup_token"
+    generated = token_file.read_text()
+    assert re.fullmatch(r"[0-9a-f]{64}", generated)
+    assert token_file.stat().st_mode & 0o777 == 0o600
+    assert svc.auth_token() == generated
+
+    # A restart reuses the same token.
+    run_hooks(hooks, hook_ctx)
+    assert token_file.read_text() == generated
+
+
+def test_bifrost_user_supplied_setup_token_wins(tmp_path: Path) -> None:
+    """A user-typed setup_token option beats the generated file."""
+    ctx = service_ctx(tmp_path, name="bifrost", options={"setup_token": "operator-token"})
+    svc = load_service_spec(_DECLARATIVE_DIR / "bifrost.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.auth is not None
+    assert svc.config.auth.fallback == "operator-token"
+
+    # The pre-start hook still writes the generated token to the state
+    # file -- the operator's value still wins over it.
+    hooks = list(svc.config.pre_start_hooks)
+    run_hooks(
+        hooks,
+        PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir),
+    )
+    generated = (ctx.state_dir / "setup_token").read_text().strip()
+    assert generated
+    assert generated != "operator-token"
+    assert svc.auth_token() == "operator-token"
+
+
+def test_bifrost_ui_panels_include_auth_token(tmp_path: Path) -> None:
+    """The bifrost spec opts in to the ``auth_token`` panel; the framework honours it."""
+    svc = _load_spec("bifrost.yaml", tmp_path)
+    assert "auth_token" in svc.ui_panels
 
 
 def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:

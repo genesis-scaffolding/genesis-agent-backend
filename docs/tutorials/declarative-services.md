@@ -98,7 +98,7 @@ volumes: {}                # bind mounts (host -> container)
 canonical_name: null       # optional; the cluster-wide label (see "Declared ports")
 ports: null                # optional; the routable ports (see "Declared ports")
 pre_start_hooks: []        # optional; see "Pre-start hooks"
-auth: null                 # optional; see "Auth (API tokens)"
+auth: null                 # optional; see "Auth (operator secrets)"
 ui:
   status_panels: []        # optional; see "UI panels"
 options: {}                # optional user-editable settings (see "Options")
@@ -553,10 +553,11 @@ No spec change, no loader change, no YAML schema migration. The hook entry's
 field shape is whatever you want — handlers parse their own fields from the
 dict.
 
-## Auth (API tokens)
+## Auth (operator secrets)
 
-If the container expects a static API token (crawl4ai's `CRAWL4AI_API_TOKEN`
-is the canonical example), declare `auth:`:
+The `auth:` block describes a secret the operator has to supply to the
+service: crawl4ai's `CRAWL4AI_API_TOKEN` is the canonical example, bifrost's
+`BIFROST_SETUP_TOKEN` is the other (ADR-052). Declare `auth:`:
 
 ```yaml
 auth:
@@ -566,6 +567,8 @@ auth:
   token_file: "$state_dir/api_token"
   token_file_mode: "0o600"
   token_generator: random_hex_32
+  label: "API token"                       # optional; heading on the status page
+  usage: "Authorization header: `Bearer <token>`"  # optional; what to do with it
 ```
 
 What this wires up:
@@ -582,6 +585,27 @@ What this wires up:
 Don't try to express the token in the `env:` block — `start()` overwrites
 the env var at runtime with the resolved token. The `auth:` block is the
 source of truth.
+
+`label` and `usage` are optional and default to empty, which means "keep the
+framework's wording". Set them when the secret is not a bearer credential —
+a Bifrost setup token is pasted into a dashboard form, so the panel must say
+so:
+
+```yaml
+auth:
+  token_env_var: BIFROST_SETUP_TOKEN
+  token_file: "$state_dir/setup_token"
+  token_file_mode: "0o600"
+  token_generator: random_hex_32
+  fallback_option: "$options.setup_token"
+  label: "Setup token"
+  usage: "Paste into Bifrost's Workspace → Config → Security → Setup token field."
+```
+
+With the `auth_token` panel opted in (`ui.status_panels`), the status page
+shows the secret under the `label` heading with a copy button and the
+`usage` line underneath — so the operator can copy it and paste it wherever
+the service asks for it.
 
 ## UI panels
 

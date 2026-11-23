@@ -51,13 +51,16 @@ class ExtraPort:
 
 @dataclass(frozen=True)
 class AuthConfig:
-    """Optional API-token plumbing for docker services.
+    """Optional operator-secret plumbing for docker services.
 
     ``enabled`` and ``fallback`` are resolved values from the YAML
     loader (not string references to option names). ``enabled`` is
     truthy when the service should advertise JWT mode; ``fallback``
     is the explicit user-typed override that wins over the on-disk
     file.
+
+    ``label`` / ``usage`` are the wording the status page shows for
+    the secret (ADR-052). Empty means "keep the framework's wording".
     """
 
     enabled: bool | None
@@ -66,6 +69,8 @@ class AuthConfig:
     token_file: Path  # resolved against ctx.state_dir at construction
     token_file_mode: int
     token_generator: str
+    label: str = ""
+    usage: str = ""
 
 
 @dataclass(frozen=True)
@@ -443,6 +448,10 @@ class DockerService(DeclarativeServiceBase[DockerServiceConfig]):
         if self.config.auth is None:
             return False
         return bool(self.config.auth.enabled)
+
+    def auth_config(self) -> AuthConfig | None:
+        """The declared secret block, or ``None`` when the service has none."""
+        return self.config.auth
 
     def stop(self) -> StopResult:
         container = DockerContainer(self.config.container_name)

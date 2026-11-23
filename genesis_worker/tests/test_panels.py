@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from genesis_worker.utils.services import panels
+from genesis_worker.utils.services.docker_service import AuthConfig
 
 
 class _MockService:
@@ -27,6 +29,7 @@ class _MockService:
         listen_address: str | None = "0.0.0.0:8080",
         auth_token: str | None = None,
         auth_enabled: bool = False,
+        auth_config: AuthConfig | None = None,
         options_obj: Any = None,
         public_host: str = "host.local",
         web_ui_endpoint: str | None = None,
@@ -38,6 +41,7 @@ class _MockService:
         self._listen_address = listen_address
         self._auth_token = auth_token
         self._auth_enabled = auth_enabled
+        self._auth_config = auth_config
         self._options_obj = options_obj
         self._public_host = public_host
         self._web_ui_endpoint = web_ui_endpoint
@@ -66,6 +70,9 @@ class _MockService:
     def auth_enabled(self) -> bool:
         return self._auth_enabled
 
+    def auth_config(self) -> AuthConfig | None:
+        return self._auth_config
+
     def is_available(self) -> bool:
         return True
 
@@ -78,7 +85,7 @@ class _MockService:
 
 
 @pytest.fixture(autouse=True)
-def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     """Replace streamlit calls with no-op recorders so panel code runs in tests."""
     record: dict[str, list] = {}
 
@@ -100,6 +107,15 @@ def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> None:
     def _subheader(text: str):
         record.setdefault("subheader", []).append(text)
 
+    def _caption(text: str, *args, **kwargs):
+        record.setdefault("caption", []).append(text)
+
+    def _info(text: str, *args, **kwargs):
+        record.setdefault("info", []).append(text)
+
+    def _warning(text: str, *args, **kwargs):
+        record.setdefault("warning", []).append(text)
+
     def _columns(n: int):
         record.setdefault("columns", []).append(n)
         # Two-tuple of context managers: simple stand-ins.
@@ -115,6 +131,9 @@ def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(panels.st, "markdown", _markdown)
     monkeypatch.setattr(panels.st, "header", _header)
     monkeypatch.setattr(panels.st, "subheader", _subheader)
+    monkeypatch.setattr(panels.st, "caption", _caption)
+    monkeypatch.setattr(panels.st, "info", _info)
+    monkeypatch.setattr(panels.st, "warning", _warning)
     monkeypatch.setattr(panels.st, "columns", _columns)
     # ``components.html`` triggers the real browser renderer otherwise.
     monkeypatch.setattr(
@@ -147,6 +166,7 @@ def _stub_streamlit(monkeypatch: pytest.MonkeyPatch) -> None:
             self._data[key] = value
 
     monkeypatch.setattr(panels.st, "session_state", _StubSession())
+    return record
 
 
 # --- registry mechanics ----------------------------------------------------
@@ -235,3 +255,86 @@ def test_log_tail_respects_panel_config_n_bytes() -> None:
         _p.render_tail_log = monkey  # type: ignore[assignment]
 
     assert captured == [4096]
+
+
+# --- auth_token ------------------------------------------------------------
+
+
+def _auth_config(
+    *,
+    label: str = "",
+    usage: str = "",
+    token_env_var: str = "API_TOKEN",
+) -> AuthConfig:
+    return AuthConfig(
+        enabled=False,
+        fallback=None,
+        token_env_var=token_env_var,
+        token_file=Path("/state/api_token"),
+        token_file_mode=0o600,
+        token_generator="random_hex_32",
+        label=label,
+        usage=usage,
+    )
+
+
+def test_auth_token_panel_uses_block_label_and_usage(_stub_streamlit: dict[str, list]) -> None:
+    """The block's own wording wins over the framework's bearer-shaped default (ADR-052)."""
+    svc = _MockService(
+        auth_token="setup-token-value",
+        auth_config=_auth_config(
+            label="Setup token",
+            usage="Paste into Bifrost's Workspace → Config → Security → Setup token field.",
+        ),
+    )
+    panels.render(svc, ["auth_token"], {})  # type: ignore[arg-type]
+
+    assert _stub_streamlit["subheader"] == ["Setup token"]
+    captions = _stub_streamlit["caption"]
+    assert len(captions) == 1
+    assert "Paste into Bifrost's Workspace → Config → Security → Setup token field." in captions[0]
+    assert "Bearer" not in captions[0]
+
+
+def test_auth_token_panel_keeps_default_wording_without_block_fields(
+    _stub_streamlit: dict[str, list],
+) -> None:
+    """A block without label / usage renders exactly as before."""
+    svc = _MockService(auth_token="api-token-value", auth_config=_auth_config())
+    panels.render(svc, ["auth_token"], {})  # type: ignore[arg-type]
+
+    assert _stub_streamlit["subheader"] == ["API token"]
+    captions = _stub_streamlit["caption"]
+    assert len(captions) == 1
+    assert "Authorization header: `Bearer <token>`" in captions[0]
+
+
+def test_auth_token_panel_without_block_keeps_default_wording(
+    _stub_streamlit: dict[str, list],
+) -> None:
+    """A service with no auth block at all still renders the default wording."""
+    svc = _MockService(auth_token="api-token-value")
+    panels.render(svc, ["auth_token"], {})  # type: ignore[arg-type]
+
+    assert _stub_streamlit["subheader"] == ["API token"]
+    assert "Authorization header: `Bearer <token>`" in _stub_streamlit["caption"][0]
+
+
+def test_auth_token_panel_warns_when_no_token_yet(_stub_streamlit: dict[str, list]) -> None:
+    """No token on disk and no user override: the panel says so."""
+    svc = _MockService(auth_token=None, auth_config=_auth_config(label="Setup token"))
+    panels.render(svc, ["auth_token"], {})  # type: ignore[arg-type]
+
+    assert _stub_streamlit["subheader"] == ["Setup token"]
+    assert len(_stub_streamlit["warning"]) == 1
+    assert "caption" not in _stub_streamlit
+
+
+def test_auth_token_panel_reports_jwt_mode(_stub_streamlit: dict[str, list]) -> None:
+    """JWT mode: the panel explains that the service issues no token."""
+    svc = _MockService(auth_token=None, auth_enabled=True)
+    panels.render(svc, ["auth_token"], {})  # type: ignore[arg-type]
+
+    assert len(_stub_streamlit["info"]) == 1
+    assert "JWT_ENABLED" in _stub_streamlit["info"][0]
+    assert "caption" not in _stub_streamlit

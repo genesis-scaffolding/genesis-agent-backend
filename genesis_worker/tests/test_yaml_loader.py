@@ -650,6 +650,30 @@ def test_docker_with_auth_block_resolves_token_file(tmp_path: Path) -> None:
     assert svc.config.auth is not None
     assert svc.config.auth.token_file == ctx.state_dir / "api_token"
     assert svc.config.auth.token_file_mode == 0o600
+    # No display fields declared -> the panel keeps its current wording.
+    assert svc.config.auth.label == ""
+    assert svc.config.auth.usage == ""
+
+
+def test_docker_with_auth_block_resolves_label_and_usage(tmp_path: Path) -> None:
+    """The block's display fields land on ``AuthConfig`` (ADR-052)."""
+    payload = _copy(DOCKER_BASE)
+    payload["auth"] = {
+        "enabled_option": None,
+        "token_env_var": "BIFROST_SETUP_TOKEN",
+        "token_file": "$state_dir/setup_token",
+        "token_file_mode": "0o600",
+        "token_generator": "random_hex_32",
+        "fallback_option": None,
+        "label": "Setup token",
+        "usage": "Paste into Bifrost's dashboard.",
+    }
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    ctx = service_ctx(tmp_path, name="demo")
+    svc = load_service_spec(path, ctx=ctx)
+    assert svc.config.auth is not None
+    assert svc.config.auth.label == "Setup token"
+    assert svc.config.auth.usage == "Paste into Bifrost's dashboard."
 
 
 def test_docker_with_pre_start_hook_resolves_state_dir(tmp_path: Path) -> None:
