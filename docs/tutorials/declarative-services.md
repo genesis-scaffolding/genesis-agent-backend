@@ -83,9 +83,9 @@ image:                     # docker-only; ignored for kind: uv
 container:                 # docker-only
   name: my-service         # container name as it appears in `docker ps`
   listen_host: 0.0.0.0
-  listen_port: 8080
-  internal_port: 8080      # optional; defaults to listen_port
-  extra_ports: []          # optional; extra published ports (see "Auto-port placeholders")
+  listen_port: 8080        # legacy single-port form; omit when `ports:` is present
+  internal_port: 8080      # legacy single-port form; omit when `ports:` is present
+  extra_ports: []          # legacy single-port form; omit when `ports:` is present
   health_probe_path: /     # path the framework probes to confirm "RUNNING"
   web_ui_path: /           # appended to listen_address for the "Open Web UI" button
   restart_policy: unless-stopped
@@ -95,8 +95,8 @@ container:                 # docker-only
 
 env: {}                    # environment variables (see "The $variable substitution")
 volumes: {}                # bind mounts (host -> container)
-canonical_name: null       # optional; the cluster-wide label (see "Declared ports")
-ports: null                # optional; the routable ports (see "Declared ports")
+canonical_name: null       # optional; see "Declared ports and the canonical name"
+ports: null                # optional; see "Declared ports and the canonical name"
 pre_start_hooks: []        # optional; see "Pre-start hooks"
 auth: null                 # optional; see "Auth (operator secrets)"
 ui:
@@ -109,13 +109,18 @@ are required. Everything else has sensible defaults.
 
 ## Declared ports and the canonical name (ADR-051)
 
-A spec describes **one** port by default: `container.listen_port` (docker),
-the top-level `listen_port` (uv), or the `listen_port` option the compose
-template publishes (compose). That is enough for a single-port service, and
-all twenty shipped specs use it.
+A service declares its routable ports in one of two forms.
 
-A service that publishes **more than one** port declares them in a top-level
-`ports:` list:
+**The single-port form** — one port, no role label:
+
+| Kind | Where the port is declared |
+|---|---|
+| `docker` | `container.listen_port` (the host port) + `container.internal_port` (the port inside the container) |
+| `uv` | the top-level `listen_port` |
+| `compose` | the `listen_port` option the template publishes |
+
+**The `ports:` block** — for a service that publishes more than one port, or
+that wants to name the role of its port:
 
 ```yaml
 canonical_name: genesis        # the cluster-wide label (see below)
@@ -124,43 +129,108 @@ ports:
   - label: ui                  # the port's role
     primary: true              # exactly one primary per service
     host: $options.listen_port # the host port a client connects to
-    container: 3000            # the port inside the container (defaults to host)
+    container: 3000            # the port inside the container
   - label: api
     host: $options.api_port
     container: 8765
 ```
 
-`ports:` is the single source of truth when it is present — the legacy port
-fields must then be absent (`container.listen_port`,
-`container.internal_port`, `container.extra_ports` for docker; the top-level
-`listen_port` for uv and compose). The loader derives the runtime fields from
-the block: the primary becomes the listen / internal port, the others become
-extra ports (docker). The loader enforces:
+Nineteen of the twenty-one shipped specs use the single-port form;
+`genesis-productivity` and `genesis-agent-context` declare a `ports:` block.
 
-1. exactly one `primary: true` per service;
-2. distinct port labels;
-3. every port of a multi-port service is labelled (the labels keep the
-   per-port hostnames apart);
-4. labels are DNS labels (lowercase, digits and dashes);
-5. distinct host ports;
-6. the uv kind declares at most one port (its runner publishes one);
-7. `canonical_name` is a DNS label;
-8. the compose template publishes the declared ports (the template is the
-   mechanism; the block declares what it publishes).
+### The block, field by field
 
-A spec **without** a `ports:` block keeps today's shape: one implicit port
-(the existing listen port) with no role label. The twenty shipped specs need
-no edit and their derived hostnames do not change.
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `ports` | list | absent | The service's routable ports, in declaration order. Absent = the single-port form. |
+| `ports[].label` | string | `null` | The port's role (`ui`, `api`, …). Optional for a one-port service, required for a multi-port one. A DNS label. The vocabulary is open — a new role (`mcp`, `grpc`, `metrics`) needs no framework change. |
+| `ports[].primary` | bool | `false` | Exactly one entry per service is the primary — the port that carries the service's bare name. |
+| `ports[].host` | int, or a marker | — | The host port a client connects to. A fixed integer, `$options.<name>` (the resolved option value), or `$auto_port.<name>` (allocated at start time). |
+| `ports[].container` | int | `host` | The port inside the container. Defaults to `host` when `host` is a fixed integer; mandatory when `host` is a marker (docker). |
+| `canonical_name` | string | `null` | The cluster-wide, node-independent label the service answers to. A DNS label. |
+
+### What the loader derives
+
+| Kind | The primary port | The other ports |
+|---|---|---|
+| `docker` | `config.listen_port` (the host port) and `config.internal_port` (the container port) | `config.extra_ports` — one entry per non-primary port |
+| `compose` | `config.listen_port` — the health-probe / web-UI port | the compose template publishes them |
+| `uv` | `config.listen_port` | — the uv kind publishes one port |
+
+The runners are unchanged: the loader derives the runtime fields from the
+block, so no runner learns about `ports:`.
+
+### The rules the loader enforces
+
+1. **Exactly one primary.** A block with zero or two primaries is a load-time
+   error.
+2. **Distinct labels.** Two ports of one service may not share a label.
+3. **Every port of a multi-port service is labelled.** The labels are what
+   keep the per-port hostnames apart.
+4. **Labels are DNS labels** — lowercase `[a-z0-9-]`, no leading or trailing
+   dash, at most 63 characters.
+5. **Distinct host ports** within one service.
+6. **The uv kind declares at most one port** — its runner publishes one.
+7. **`canonical_name` is a DNS label**, when present.
+8. **For the compose kind, the template must publish the declared ports.**
+   The template is the mechanism that publishes; the `ports:` block declares
+   what it publishes. The loader compares the resolved template's published
+   host ports with the declared ones and fails the load on a mismatch. The
+   check is best effort: a template it cannot parse is not checked, and a
+   declared marker port (no number yet) skips the comparison — the template
+   must publish the same marker.
+9. **A docker port whose host is a marker must declare its `container:`
+   port.** The container port cannot default to a port that is not allocated
+   yet.
+10. **Declare the port in one place.** `ports:` present ⇒ the legacy fields
+    are absent (`container.listen_port`, `container.internal_port`,
+    `container.extra_ports` for docker; the top-level `listen_port` for uv
+    and compose). `ports:` absent ⇒ the legacy field is required where the
+    kind has one (`container.listen_port` for docker, `listen_port` for uv) —
+    a docker or uv spec that declares no port at all is an error. An empty
+    `ports:` block is an error.
+
+The single-port form is a first-class shorthand, not a deprecated path: the
+loader synthesises the one implicit port (the existing listen port, with no
+role label), so the framework sees exactly one port either way. The specs
+that use it need no edit, and their derived hostnames do not change.
+
+### Where the values come from
+
+`host:` takes its value from the two placeholder sources:
+
+- **`$options.<name>`** resolves to the **merged** option value — the YAML
+  default plus the user's override. A configure-panel change moves the
+  declared host port *and* the port the compose template publishes, because
+  both read the same option: the probe and the container cannot desync.
+- **`$auto_port.<name>`** asks the allocator for a host port at start time.
+  The marker is a use site of its own (two entries may not share a marker
+  name), it is materialised when the service starts, and it is **not** a
+  reserved fixed port — the allocator keeps off the ports a service declares
+  as fixed integers. See
+  [Auto-port placeholders](#auto-port-placeholders-auto_portname).
+
+### The canonical name
 
 `canonical_name:` is the cluster-wide, node-independent label the service
 answers to — `genesis` for `genesis-productivity`, `ntfy` for `ntfy`.
 Declaring it **asserts that the service is cluster-wide and single-instance**:
 the orchestrator grants that name only while exactly one live instance of the
 service exists, and withholds it from every instance when a second one
-appears. The worker never composes a hostname (the base domain belongs to
-the orchestrator) — it declares a label, and the orchestrator turns it into
+appears. The worker never composes a hostname (the base domain belongs to the
+orchestrator) — it declares a label, and the orchestrator turns it into
 `<label>.<domain>` for the primary port and `<portlabel>-<label>.<domain>`
 for the others.
+
+### What the declaration buys you
+
+The worker reports both fields on `GET /v1/services`: `canonical_name` and
+`ports` — one entry per port, with its label, its primary flag and the
+endpoint the service answers on (`null` while the service is not running).
+The orchestrator turns the labels into hostnames and grants the canonical
+name only while one live instance exists. See
+[the orchestrator service-control note](../notes/orchestrator-service-control.md)
+for the read-side contract.
 
 ## Two backends: `kind: docker` vs `kind: uv`
 
@@ -183,6 +253,9 @@ listen_port: 8080
 health_probe_path: /
 session_name: my-service   # tmux session name; defaults to `name`
 ```
+
+The uv kind may declare a one-entry `ports:` block instead of `listen_port`
+(the uv runner publishes one port, so the block may hold only one entry).
 
 Everything in this doc applies to `kind: docker`. The uv path is the same shape
 but with different lifecycle internals.
@@ -354,6 +427,20 @@ container:
   internal_port: 8081                   # required: the container port can't default
 ```
 
+A marker inside a `ports:` block is a use site of its own, so the block form
+reads:
+
+```yaml
+ports:
+  - label: ui
+    primary: true
+    host: $auto_port.ui      # allocated at start time
+    container: 3000          # required: a marker cannot default the container port
+```
+
+Two entries may not share a marker name — the loader rejects the spec and
+names both use sites.
+
 A `port` option whose current value is a marker renders in the configure
 panel as the allocated port plus an **assign automatically** checkbox. While
 the checkbox is ticked, Apply writes nothing for that option, so the YAML
@@ -364,11 +451,12 @@ fixed port.
 
 | Kind | Where the marker lives | Materialised at |
 |---|---|---|
-| `docker` | `container.listen_port`, `container.extra_ports[].host`, or the `port` option they reference | the `-p` map in `start()` |
-| `compose` | the `port` option, referenced from `compose_template` as `$options.X`, or written literally in the template | the rendered `docker-compose.yml` |
-| `uv` | the `port` option, referenced from `command`, or written literally in the command | the tmux command line |
+| `docker` | `container.listen_port`, `container.extra_ports[].host`, `ports[].host`, or the `port` option they reference | the `-p` map in `start()` |
+| `compose` | the `port` option, referenced from `compose_template` as `$options.X`, `ports[].host`, or written literally in the template | the rendered `docker-compose.yml` |
+| `uv` | the `port` option, referenced from `command`, `ports[].host`, or written literally in the command | the tmux command line |
 
-A docker service that needs a second published port declares it:
+A docker service that needs a second published port declares it — in the
+legacy form:
 
 ```yaml
 container:
@@ -378,6 +466,10 @@ container:
     - container: 9000
       host: "$auto_port.api"
 ```
+
+`container.extra_ports` is the legacy spelling of the same thing: it still
+parses, it is superseded by the `ports:` block, and it gains no new members
+(ADR-051). New specs use the block.
 
 **The allocated port is observable** in three places that already exist: the
 service's own `status()` / `web_ui_endpoint()`, the node-local registry file,
@@ -395,6 +487,7 @@ and the container's own port bindings. The HTTP API is unchanged.
 | `image.repo`, `image.tag` | No — these are concrete image references |
 | `container.listen_host`, `listen_port`, `internal_port`, `public_host` | Yes (`$options.X` only) — user-editable since ADR-036 |
 | `container.listen_port`, `container.extra_ports[].host` | Yes — also `$auto_port.<name>` (ADR-043) |
+| `ports[].host` | Yes — `$options.X` or `$auto_port.<name>` (ADR-043, ADR-051) |
 
 ## Options block
 
@@ -749,6 +842,10 @@ options:
     default: "json"
 ```
 
+Bifrost publishes one port, so it uses the single-port shorthand. A service
+that publishes a second port declares a `ports:` block instead — see
+[the two-port example](#worked-example-a-two-port-docker-service).
+
 5. **Bootstrap-test** before merging — load the spec against a hermetic
    context and confirm it parses, validates, and constructs:
 
@@ -774,6 +871,101 @@ assert svc.image_ref == "maximhq/bifrost:latest"
 8. **Run all four gates:** `uv run pytest -q`, `uv run pyright`,
    `uv run ruff check genesis_worker`, `uv run ruff format --check genesis_worker`.
 
+## Worked example: a two-port docker service
+
+A service that publishes a web UI **and** an API declares both in a
+`ports:` block. The `container:` block stays — it still carries the container
+name, the listen host and the health probe path — but its three port fields
+go away, because the block is now the single source of truth:
+
+```yaml
+# two-port.yaml
+version: 1
+kind: docker
+name: two-port
+display_name: Two Port
+description: A service with a UI and an API
+category: utility
+
+capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
+  has_web_ui: true
+  can_install: true
+
+resource_estimate:
+  vram_bytes_typical: 0
+  vram_bytes_min: 0
+  cpu_cores_recommended: 1
+
+image:
+  repo: org/two-port
+  tag: latest
+  install_name: two-port
+
+ports:
+  - label: ui
+    primary: true
+    host: $options.listen_port     # the host port a client connects to
+    container: 8080                # the port inside the container
+  - label: api
+    host: $options.api_port
+    container: 8765
+
+container:
+  name: two-port
+  listen_host: 0.0.0.0
+  health_probe_path: /
+  web_ui_path: /
+
+options:
+  listen_port:
+    type: port
+    default: 8080
+    ui_label: Web UI port
+    ui_group: Network
+  api_port:
+    type: port
+    default: 8765
+    ui_label: API port
+    ui_group: Network
+```
+
+Three load-time traps the example exists to avoid:
+
+1. **The `container:` block stays.** Only `container.listen_port`,
+   `container.internal_port` and `container.extra_ports` go away — the
+   container name, the listen host and the probe path are still declared
+   there.
+2. **The legacy port fields must go.** A spec that declares `ports:` and
+   `container.listen_port` at the same time fails to load: *"declare the
+   ports in one place"*.
+3. **A marker host needs its `container:` port.** `host: $auto_port.api`
+   without `container:` fails to load — the container port cannot default to
+   a host port that is not allocated yet.
+
+Bootstrap-test it like any other spec — the declared ports are part of the
+contract:
+
+```python
+from pathlib import Path
+from genesis_worker.tests._factories import service_ctx
+from genesis_worker.utils.services import load_service_spec
+
+ctx = service_ctx(Path("/tmp"), name="two-port")
+svc = load_service_spec(Path("genesis_worker/services/_declarative/two-port.yaml"), ctx=ctx)
+assert [(p.label, p.primary) for p in svc.service_ports()] == [("ui", True), ("api", False)]
+assert svc.config.listen_port == 8080 and svc.config.internal_port == 8080
+assert svc.declared_host_ports() == (8080, 8765)
+```
+
+The primary becomes the runtime listen / internal port, the other port
+becomes an extra published port, and both host ports are reserved against
+the port allocator.
+
 ## Worked example: photoprism with user-editable config
 
 PhotoPrism is the canonical example of a service that benefits from
@@ -794,6 +986,11 @@ description: Photo and video organizer
 category: media
 
 capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
   has_web_ui: true
   can_install: true
 resource_estimate:

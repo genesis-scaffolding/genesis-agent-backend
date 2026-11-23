@@ -44,6 +44,19 @@ resource_estimate:
 
 # --- compose-specific fields -------------------------------------------
 
+# The cluster-wide label this service answers to (optional).
+canonical_name: romm
+
+# The routable ports (optional). For the compose kind the template
+# publishes the ports and this block declares them. The ROMM spec
+# further down declares neither a label nor a block -- it uses the
+# single-port form.
+ports:
+  - label: ui
+    primary: true
+    host: $options.listen_port
+    container: 8080
+
 # Every image the stack uses. If it's in the template, it's declared here.
 images:
   - name: romm
@@ -146,12 +159,15 @@ from single-container specs work inside the template string:
 
 ### Single source of truth for the port
 
-Compose specs have no `container:` block. Declare a `listen_port` **option**
-and bind it in the template (`"$options.listen_host:$options.listen_port:8080"`);
-the loader derives the runtime port (health probe, web UI endpoint) from the
-*resolved option*, so the probe and the container can never desync — including
-when the user overrides the port in the configure panel. Top-level
-`listen_port` on the spec is a fallback for services without a port option.
+Compose specs have no `container:` block, so the port is declared in one of
+two places — and both are read against the template.
+
+**The single-port form.** Declare a `listen_port` **option** and bind it in
+the template (`"$options.listen_host:$options.listen_port:8080"`); the loader
+derives the runtime port (health probe, web UI endpoint) from the *resolved
+option*, so the probe and the container can never desync — including when the
+user overrides the port in the configure panel. Top-level `listen_port` on
+the spec is a fallback for services without a port option.
 
 The option may also carry a `$auto_port.<name>` marker, in which case the
 framework allocates the host port at start time and the template publishes
@@ -160,6 +176,111 @@ the allocation (ADR-043 — see
 The loader rejects a compose spec whose runtime port is a marker the
 template does not publish: the health probe would watch a port the stack
 never binds.
+
+**The `ports:` block.** A stack that publishes more than one port declares
+them in a top-level `ports:` list. The block *declares* what the template
+*publishes* — the same relationship the spec already has with `images:`:
+
+```yaml
+ports:
+  - label: ui
+    primary: true
+    host: $options.listen_port   # the published host port
+    container: 8080              # the port inside the container
+```
+
+- `host` is the **published host port** — the middle field of
+  `"$options.listen_host:$options.listen_port:8080"`. It may be a fixed
+  integer, `$options.<name>` (the resolved option value) or an
+  `$auto_port.<name>` marker. A marker has no number at load time, so the
+  loader cannot compare it: the template must publish the *same* marker
+  (`"0.0.0.0:$auto_port.ui:8080"`), or the stack binds a different port than
+  the block declares.
+- `container` is the port **inside** the container — the last field of the
+  same entry. It defaults to `host` when `host` is a fixed integer.
+- the primary port is the runtime port: the health probe and the web-UI
+  endpoint follow it.
+
+With a block present the **top-level `listen_port` must be absent** — the
+port is declared in one place. The `listen_port` *option* may stay: it is the
+user-facing knob the template publishes.
+
+**The loader checks the template against the declared ports.** It parses the
+resolved template, collects the published **host** ports and compares them
+with the declared ones; a mismatch fails the load with both sets in the
+message. The check is best effort — a template it cannot parse is not
+checked, and a declared marker port (no number yet) skips the comparison.
+
+The full field list and the rule set are in
+[the declarative-services tutorial](declarative-services.md#declared-ports-and-the-canonical-name-adr-051).
+
+### Declaring several ports
+
+A stack that publishes more than one port declares them all. The shipped
+`genesis-productivity` stack is the example — the Streamlit UI on 3000 and the
+FastAPI server on 8765:
+
+```yaml
+canonical_name: genesis
+
+ports:
+  - label: ui
+    primary: true
+    host: $options.listen_port
+    container: 3000
+  - label: api
+    host: $options.api_port
+    container: 8765
+
+compose_template: |
+  version: "3.8"
+  services:
+    app:
+      image: $images.app
+      ports:
+        - "$options.listen_host:$options.listen_port:3000"   # the UI port
+        - "$options.listen_host:$options.api_port:8765"      # the API port
+
+options:
+  listen_host:
+    type: string
+    default: "0.0.0.0"
+  listen_port:
+    type: port
+    default: 3000
+  api_port:
+    type: port
+    default: 8765
+```
+
+Three facts to keep straight:
+
+- the block's `host` values are the **published host ports** — the middle
+  field of `"$options.listen_host:$options.listen_port:3000"`;
+- the `container` values are the ports **inside** the container — the last
+  field of the same entry;
+- the loader fails the load when the two halves disagree: *"the service
+  publishes ports [3000, 8765] in its compose template but declares
+  [3000]"*.
+
+The primary port is the runtime port — the health probe and the web-UI
+endpoint follow it, so the UI is the one the framework watches.
+
+Bootstrap-test it like any other spec:
+
+```python
+from pathlib import Path
+from genesis_worker.tests._factories import service_ctx
+from genesis_worker.utils.services import load_service_spec
+
+ctx = service_ctx(Path("/tmp"), name="genesis-productivity")
+svc = load_service_spec(
+    Path("genesis_worker/services/_declarative/genesis-productivity.yaml"), ctx=ctx
+)
+assert [(p.label, p.primary) for p in svc.service_ports()] == [("ui", True), ("api", False)]
+assert svc.config.listen_port == 3000
+assert svc.declared_host_ports() == (3000, 8765)
+```
 
 ## Two-phase placeholder resolution
 
@@ -356,6 +477,11 @@ description: Self-hosted ROM library manager
 category: media
 
 capabilities:
+  can_generate_config: false
+  can_export_for_agent: false
+  can_serve_llm: false
+  can_serve_image: false
+  can_train_models: false
   has_web_ui: true
   can_install: true
 
@@ -496,6 +622,11 @@ options:
     ui_group: Metadata providers
 ```
 
+Note the port model: ROMM publishes one port, so it uses the single-port
+form — the `listen_port` option the template binds is also the runtime port.
+A stack that publishes a second port declares a `ports:` block instead — see
+[Declaring several ports](#declaring-several-ports).
+
 Note the storage model: `$options.roms_dir` mounts at `/romm/library`,
 ROMM's *library* location, not its scan source. ROMM has two storage
 concepts — the library (where UI uploads and managed files live) and the
@@ -559,6 +690,16 @@ ctx2 = service_ctx(Path("/tmp"), name="romm", options={"listen_port": 9090})
 svc2 = load_service_spec(Path("genesis_worker/services/_declarative/romm.yaml"), ctx=ctx2)
 assert svc2.config.listen_port == 9090
 assert "0.0.0.0:9090:8080" in svc2.config.compose_template
+
+# A stack that declares a `ports:` block reports its ports: the labels,
+# the primary flag and the endpoints.
+ctx3 = service_ctx(Path("/tmp"), name="genesis-productivity")
+svc3 = load_service_spec(
+    Path("genesis_worker/services/_declarative/genesis-productivity.yaml"), ctx=ctx3
+)
+assert [(p.label, p.primary) for p in svc3.service_ports()] == [("ui", True), ("api", False)]
+assert svc3.config.listen_port == 3000
+assert svc3.declared_host_ports() == (3000, 8765)
 ```
 
 The `assert "$images." not in rendered`-style checks are your guard against the
