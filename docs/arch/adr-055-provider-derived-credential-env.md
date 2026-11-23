@@ -231,9 +231,9 @@ starting.
 The same refusal covers the two ways the marker can survive: a provider with no
 mapping, and a template that uses `$credential_env` in a spec that declares no
 `credential_env` block. The loader rejects a `credential_env` block whose
-`provider_option` names no option of the spec, or whose `by_provider` map is
-empty — a typo there is a spec error and fails at load time, where spec errors
-belong.
+`provider_option` names no option of the spec, whose `by_provider` map is
+empty, or that maps a provider to an empty variable name — a typo there is a
+spec error and fails at load time, where spec errors belong.
 
 ### 4. The proxy's map
 

@@ -418,7 +418,8 @@ the selected provider's own variable — a provider that reads
 **How it works.**
 
 1. At load time the marker survives the substitution rounds, exactly the way
-   `$images.<name>` does — the option's value is a runtime value.
+   `$images.<name>` does — the variable's name is derived from an option's
+   value, and it is resolved when the runtime command is rendered.
 2. At render time (when the compose file is written) the framework reads the
    option's current value, looks it up in `by_provider` and writes that name
    into the template.
@@ -445,7 +446,7 @@ language (ADR-055).
 | `image.repo`, `image.tag` | No — these are concrete image references |
 | `container.listen_host`, `listen_port`, `internal_port`, `public_host` | Yes (`$options.X` only) — user-editable since ADR-036 |
 | `container.listen_port`, `container.extra_ports[].host` | Yes — also `$auto_port.<name>` (ADR-043) |
-| `compose_template` | Yes — the whole template is substituted as text, so a placeholder can be a *key* too (`$images.<name>`, `$credential_env`) |
+| `compose_template` | Yes — the whole template is substituted as text, so a placeholder can be a *key* too (`$credential_env`) |
 
 ## Options block
 

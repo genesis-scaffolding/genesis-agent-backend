@@ -193,7 +193,7 @@ def test_an_unmapped_provider_fails_the_start_not_the_worker(tmp_path: Path) -> 
     assert "cloudflare" in message
 
 
-def test_the_rendered_compose_file_is_not_world_readable(tmp_path: Path) -> None:
+def test_rendered_compose_file_is_not_world_readable(tmp_path: Path) -> None:
     """The compose file carries the DNS credential."""
     svc = _load(tmp_path, options={"dns_api_token": "the-token"})
     path = svc._render_compose_file(ports=svc.port_binder().resolver())

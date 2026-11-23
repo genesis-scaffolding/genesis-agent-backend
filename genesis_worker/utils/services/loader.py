@@ -422,6 +422,13 @@ def _assert_credential_env_block(
             f"{path}: the credential_env block maps no provider — "
             "the credential's environment variable cannot be resolved"
         )
+    for provider, variable in block.by_provider.items():
+        if not variable.strip():
+            raise ValueError(
+                f"{path}: the credential_env block maps the provider {provider!r} to an "
+                "empty environment variable — the name must be the variable the "
+                "service reads"
+            )
 
 
 def _resolve_placeholder(

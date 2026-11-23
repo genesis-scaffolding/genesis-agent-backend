@@ -981,6 +981,15 @@ def test_a_credential_env_block_with_no_provider_is_rejected(tmp_path: Path) -> 
         load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
 
 
+def test_a_credential_env_block_with_an_empty_variable_is_rejected(tmp_path: Path) -> None:
+    """An empty name would render an empty mapping key — reject it at load time."""
+    payload = _compose_base()
+    payload["credential_env"]["by_provider"] = {"acme": "  "}  # type: ignore[index]
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    with pytest.raises(ValueError, match="maps the provider 'acme' to an empty"):
+        load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+
+
 def test_an_unmapped_provider_refuses_the_render(tmp_path: Path) -> None:
     """A runtime value nobody mapped fails the start, not the worker."""
     path = _write_yaml(tmp_path, "demo.yaml", _compose_base())
@@ -990,4 +999,17 @@ def test_an_unmapped_provider_refuses_the_render(tmp_path: Path) -> None:
     assert isinstance(svc, ComposeService)
     assert svc.name == "demo"
     with pytest.raises(ValueError, match="unmapped"):
+        svc._render_compose_file()
+
+
+def test_a_template_using_the_marker_without_a_block_refuses_the_render(
+    tmp_path: Path,
+) -> None:
+    """A template that uses ``$credential_env`` with no block has no name to write."""
+    payload = _compose_base()
+    payload.pop("credential_env")
+    path = _write_yaml(tmp_path, "demo.yaml", payload)
+    svc = load_service_spec(path, ctx=service_ctx(tmp_path, name=path.stem))
+    assert isinstance(svc, ComposeService)
+    with pytest.raises(ValueError, match="declares no credential_env block"):
         svc._render_compose_file()

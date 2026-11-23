@@ -276,6 +276,18 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
             for img, installable in zip(self.config.images, self._installables, strict=True)
         }
 
+    def _credential_env_value(self) -> str | None:
+        """The current value of the option the credential env block names.
+
+        ``None`` when the service declares no block, or when the option's
+        value is not a string.
+        """
+        block = self.config.credential_env
+        if block is None:
+            return None
+        value = getattr(self.options, block.provider_option, None)
+        return value if isinstance(value, str) else None
+
     def _credential_env_name(self) -> str | None:
         """The environment variable the selected provider's credential goes under.
 
@@ -285,10 +297,8 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         must not break on a value nobody mapped.
         """
         block = self.config.credential_env
-        if block is None:
-            return None
-        value = getattr(self.options, block.provider_option, None)
-        if not isinstance(value, str):
+        value = self._credential_env_value()
+        if block is None or value is None:
             return None
         return block.by_provider.get(value)
 
@@ -304,9 +314,10 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
         It is only supplied on the start path: rendering the template to
         read its image list must not allocate a port.
 
-        ``credential_env`` materialises the ``$credential_env`` marker —
+        The ``$credential_env`` marker is materialised here too (ADR-055):
         the name of the variable the credential is written under, derived
-        from an option's value (ADR-055).
+        from the current value of the option the spec's ``credential_env``
+        block names.
         """
         from .loader import resolve_placeholders
 
@@ -399,7 +410,7 @@ class ComposeService(DeclarativeServiceBase[ComposeServiceConfig]):
                 f"{self.name}: the compose template uses {CREDENTIAL_ENV_MARKER_TEXT} but the "
                 "spec declares no credential_env block"
             )
-        value = getattr(self.options, block.provider_option, None)
+        value = self._credential_env_value()
         known = ", ".join(sorted(block.by_provider))
         raise ValueError(
             f"{self.name}: the provider {value!r} (option {block.provider_option!r}) has no "
