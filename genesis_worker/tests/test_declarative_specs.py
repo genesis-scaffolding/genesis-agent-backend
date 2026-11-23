@@ -83,6 +83,7 @@ _BUILT_IN_SPECS = (
     "bifrost.yaml",
     "crawl4ai.yaml",
     "freshrss.yaml",
+    "immich.yaml",
     "kavita.yaml",
     "metube.yaml",
     "navidrome.yaml",
@@ -100,7 +101,7 @@ _BUILT_IN_SPECS = (
 )
 
 # Compose-kind specs (they publish several ports and are tested separately)
-_COMPOSE_SPECS = ("paperless.yaml", "romm.yaml", "traefik.yaml")
+_COMPOSE_SPECS = ("immich.yaml", "paperless.yaml", "romm.yaml", "traefik.yaml")
 
 # Docker-kind specs only (excludes compose services like romm.yaml)
 _DOCKER_SPECS = tuple(s for s in _BUILT_IN_SPECS if s not in _COMPOSE_SPECS)
@@ -428,10 +429,81 @@ def test_bifrost_pre_start_hooks_includes_materialize_orchestrator_config(
     """
     svc = _load_spec("bifrost.yaml", tmp_path)
     hooks = list(svc.config.pre_start_hooks)
-    assert len(hooks) == 1
-    assert hooks[0]["kind"] == "materialize_orchestrator_config"
+    materialise = [h for h in hooks if h["kind"] == "materialize_orchestrator_config"]
+    assert len(materialise) == 1
     expected_target = str(tmp_path / "data" / "data" / "config.json")
-    assert hooks[0]["target"] == expected_target
+    assert materialise[0]["target"] == expected_target
+
+
+def test_bifrost_setup_token_block(tmp_path: Path) -> None:
+    """The auth block declares bifrost's setup token (ADR-052).
+
+    The block owns the ``BIFROST_SETUP_TOKEN`` env var — the YAML does
+    not declare it in ``env:`` as well.
+    """
+    ctx = service_ctx(tmp_path, name="bifrost")
+    svc = load_service_spec(_DECLARATIVE_DIR / "bifrost.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    auth = svc.config.auth
+    assert auth is not None
+    assert auth.token_env_var == "BIFROST_SETUP_TOKEN"
+    assert auth.token_file == ctx.state_dir / "setup_token"
+    assert auth.token_file_mode == 0o600
+    assert auth.token_generator == "random_hex_32"
+    assert auth.fallback is None
+    assert auth.label == "Setup token"
+    assert "Setup token" in auth.usage
+
+
+def test_bifrost_setup_token_is_persistent_and_private(tmp_path: Path) -> None:
+    """The setup token is generated once, kept at 0600, and reused on the next start."""
+    ctx = service_ctx(tmp_path, name="bifrost")
+    svc = load_service_spec(_DECLARATIVE_DIR / "bifrost.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    hooks = list(svc.config.pre_start_hooks)
+    token_hooks = [h for h in hooks if h["kind"] == "ensure_persistent_token"]
+    assert len(token_hooks) == 1
+    assert token_hooks[0]["target"] == str(ctx.state_dir / "setup_token")
+    assert token_hooks[0]["mode"] == "0o600"
+
+    hook_ctx = PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir)
+    run_hooks(hooks, hook_ctx)
+    token_file = ctx.state_dir / "setup_token"
+    generated = token_file.read_text()
+    assert re.fullmatch(r"[0-9a-f]{64}", generated)
+    assert token_file.stat().st_mode & 0o777 == 0o600
+    assert svc.auth_token() == generated
+
+    # A restart reuses the same token.
+    run_hooks(hooks, hook_ctx)
+    assert token_file.read_text() == generated
+
+
+def test_bifrost_user_supplied_setup_token_wins(tmp_path: Path) -> None:
+    """A user-typed setup_token option beats the generated file."""
+    ctx = service_ctx(tmp_path, name="bifrost", options={"setup_token": "operator-token"})
+    svc = load_service_spec(_DECLARATIVE_DIR / "bifrost.yaml", ctx=ctx)
+    assert isinstance(svc, DockerService)
+    assert svc.config.auth is not None
+    assert svc.config.auth.fallback == "operator-token"
+
+    # The pre-start hook still writes the generated token to the state
+    # file -- the operator's value still wins over it.
+    hooks = list(svc.config.pre_start_hooks)
+    run_hooks(
+        hooks,
+        PreStartHookContext(service=svc, state_dir=ctx.state_dir, data_dir=ctx.data_dir),
+    )
+    generated = (ctx.state_dir / "setup_token").read_text().strip()
+    assert generated
+    assert generated != "operator-token"
+    assert svc.auth_token() == "operator-token"
+
+
+def test_bifrost_ui_panels_include_auth_token(tmp_path: Path) -> None:
+    """The bifrost spec opts in to the ``auth_token`` panel; the framework honours it."""
+    svc = _load_spec("bifrost.yaml", tmp_path)
+    assert "auth_token" in svc.ui_panels
 
 
 def test_sillytavern_ui_panels_additive_to_default(tmp_path: Path) -> None:
@@ -1447,6 +1519,251 @@ def test_paperless_admin_bootstrap_is_off_by_default(tmp_path: Path) -> None:
     rendered = svc._rendered_template()
     assert 'PAPERLESS_ADMIN_USER: ""' in rendered
     assert 'PAPERLESS_ADMIN_PASSWORD: ""' in rendered
+
+
+# --- immich-specific ---------------------------------------------------------
+
+
+def _load_immich(tmp_path: Path, **options: object) -> ComposeService:
+    ctx = service_ctx(tmp_path, name="immich", options=dict(options))
+    svc = load_service_spec(_DECLARATIVE_DIR / "immich.yaml", ctx=ctx)
+    assert isinstance(svc, ComposeService)
+    return svc
+
+
+def test_immich_identity(tmp_path: Path) -> None:
+    """Immich's identity / category / description match the spec's surface."""
+    svc = _load_immich(tmp_path)
+    assert svc.name == "immich"
+    assert svc.display_name == "Immich"
+    assert svc.category.value == "media"
+    assert svc.description == "Self-hosted photo and video library"
+    # Host 8104 — 8100-8103 are taken by other shipped services.
+    assert svc.config.listen_port == 8104
+    assert svc.listen_address == "0.0.0.0:8104"
+    # The web app's root answers 200; it is also the "Open Web UI" target.
+    assert svc.config.health_probe_path == "/"
+
+
+def test_immich_is_compose_service(tmp_path: Path) -> None:
+    """Immich is a compose-kind service, not docker-kind.
+
+    Upstream's stack is four containers: the server (API + workers), the
+    machine-learning container, redis and postgres. The single-container
+    template cannot express the service DNS the server resolves its
+    dependencies by.
+    """
+    svc = _load_immich(tmp_path)
+    assert isinstance(svc, ComposeService)
+    assert not isinstance(svc, DockerService)
+
+
+def test_immich_declares_every_stack_image(tmp_path: Path) -> None:
+    """Every image the stack runs is declared, with its default tag."""
+    svc = _load_immich(tmp_path)
+    declared = {img.name: (img.repo, img.default_tag) for img in svc.config.images}
+    assert declared == {
+        "immich-server": ("ghcr.io/immich-app/immich-server", "v3"),
+        "immich-machine-learning": ("ghcr.io/immich-app/immich-machine-learning", "v3"),
+        "redis": ("valkey/valkey", "9"),
+        "database": ("ghcr.io/immich-app/postgres", "14-vectorchord0.4.3-pgvectors0.2.0"),
+    }
+
+
+def test_immich_compose_template_resolves_placeholders(tmp_path: Path) -> None:
+    """The compose template has had every $placeholder resolved by the loader.
+
+    Only the image markers survive the load pass — they are deliberately
+    kept for render-time substitution (the recorded version selection is
+    not known until the GUI changes it).
+    """
+    svc = _load_immich(tmp_path)
+    template = svc.config.compose_template
+    assert "$state_dir" not in template
+    assert "$data_dir" not in template
+    assert "$options." not in template
+    for marker in (
+        "$images.immich-server",
+        "$images.immich-machine-learning",
+        "$images.redis",
+        "$images.database",
+    ):
+        assert marker in template
+
+    rendered = svc._rendered_template()
+    assert "$images." not in rendered
+    assert "$options." not in rendered
+    assert "image: ghcr.io/immich-app/immich-server:v3" in rendered
+    assert "image: ghcr.io/immich-app/immich-machine-learning:v3" in rendered
+    assert "image: valkey/valkey:9" in rendered
+    assert "image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0" in rendered
+
+
+def test_immich_service_names_match_the_upstream_defaults(tmp_path: Path) -> None:
+    """The compose service names are upstream's — they are the contract.
+
+    immich-server finds its dependencies by compose service name, through
+    upstream's own defaults (DB_HOSTNAME -> "database", REDIS_HOSTNAME ->
+    "redis", the ML URL -> "http://immich-machine-learning:3003"). Renaming
+    a service here breaks the stack silently.
+    """
+    svc = _load_immich(tmp_path)
+    document = yaml.safe_load(svc.config.compose_template)
+    assert set(document["services"]) == {
+        "immich-server",
+        "immich-machine-learning",
+        "redis",
+        "database",
+    }
+    server_env = document["services"]["immich-server"]["environment"]
+    assert server_env["DB_HOSTNAME"] == "database"
+    assert server_env["REDIS_HOSTNAME"] == "redis"
+    assert server_env["DB_PORT"] == "5432"
+    assert server_env["REDIS_PORT"] == "6379"
+
+
+def test_immich_mounts_the_media_vault_read_only(tmp_path: Path) -> None:
+    """The media vault is the external library, mounted read-only.
+
+    Immich has no declarative way to create an external library — it is a
+    database row the operator creates once in the admin UI — so the mount
+    is the whole integration: the photos PhotoPrism indexes are the photos
+    Immich sees.
+    """
+    ctx = service_ctx(tmp_path, name="immich")
+    svc = load_service_spec(_DECLARATIVE_DIR / "immich.yaml", ctx=ctx)
+    assert isinstance(svc, ComposeService)
+    rendered = svc._rendered_template()
+    assert f'"{ctx.media_vault_path}:/external-library:ro"' in rendered
+    assert ":rw" not in rendered
+
+
+def test_immich_owns_its_own_storage_under_the_data_dir(tmp_path: Path) -> None:
+    """Immich's own storage, the ML model cache and the database live in the data dir.
+
+    The vault is the library; the data dir is the service's scratch space —
+    the same split PhotoPrism makes (its state in $data_dir/storage, the
+    indexed source mounted at /photoprism/originals).
+    """
+    ctx = service_ctx(tmp_path, name="immich")
+    svc = load_service_spec(_DECLARATIVE_DIR / "immich.yaml", ctx=ctx)
+    assert isinstance(svc, ComposeService)
+    rendered = svc._rendered_template()
+    assert f"{ctx.data_dir / 'data'}:/data" in rendered
+    assert f"{ctx.data_dir / 'ml-cache'}:/cache" in rendered
+    # The postgres image's PGDATA is /var/lib/postgresql/data, so the
+    # cluster lives at the mount root.
+    assert f"{ctx.data_dir / 'db'}:/var/lib/postgresql/data" in rendered
+
+
+def test_immich_publishes_the_server_port_only(tmp_path: Path) -> None:
+    """Only the server is published; the database and the queue stay internal."""
+    svc = _load_immich(tmp_path)
+    document = yaml.safe_load(svc.config.compose_template)
+    services = document["services"]
+    assert services["immich-server"]["ports"] == ["0.0.0.0:8104:2283"]
+    assert "ports" not in services["immich-machine-learning"]
+    assert "ports" not in services["redis"]
+    assert "ports" not in services["database"]
+
+
+def test_immich_runtime_port_follows_the_option(tmp_path: Path) -> None:
+    """config.listen_port tracks options.listen_port — single source of truth.
+
+    The health probe and the web UI endpoint use config.listen_port; the
+    compose file binds options.listen_port. They must be the same value,
+    including when the user overrides the option.
+    """
+    svc = _load_immich(tmp_path)
+    assert svc.config.listen_port == 8104
+
+    svc2 = _load_immich(tmp_path, listen_port=8105)
+    assert svc2.config.listen_port == 8105
+    assert '"0.0.0.0:8105:2283"' in svc2.config.compose_template
+
+
+def test_immich_db_password_reaches_both_sides(tmp_path: Path) -> None:
+    """The server and the database agree on the password, the user and the name."""
+    svc = _load_immich(tmp_path, db_password="s3cretpass")
+    document = yaml.safe_load(svc.config.compose_template)
+    server_env = document["services"]["immich-server"]["environment"]
+    db_env = document["services"]["database"]["environment"]
+    assert server_env["DB_PASSWORD"] == db_env["POSTGRES_PASSWORD"] == "s3cretpass"
+    assert server_env["DB_USERNAME"] == db_env["POSTGRES_USER"]
+    assert server_env["DB_DATABASE_NAME"] == db_env["POSTGRES_DB"]
+
+
+def test_immich_trusted_proxies_default_is_empty(tmp_path: Path) -> None:
+    """The trusted-proxy list is empty by default — upstream reads "" as unset.
+
+    Upstream's env schema turns an empty string into "not set", so immich
+    falls back to its own default (link-local + unique-local). A set value
+    reaches the template.
+    """
+    svc = _load_immich(tmp_path)
+    assert svc.options.trusted_proxies == ""  # type: ignore[attr-defined]
+    assert 'IMMICH_TRUSTED_PROXIES: ""' in svc._rendered_template()
+
+    svc2 = _load_immich(tmp_path, trusted_proxies="100.64.0.0/10")
+    assert 'IMMICH_TRUSTED_PROXIES: "100.64.0.0/10"' in svc2._rendered_template()
+
+
+def test_immich_images_are_real_installables(tmp_path: Path) -> None:
+    """Every declared image is a real DockerImageInstall — registry tags.
+
+    All four images of the stack are declared, so all four are versionable
+    and the Status page's Install button pulls the whole stack (ADR-049).
+    """
+    from genesis_worker.utils.services.docker_service import DockerImageInstall
+
+    svc = _load_immich(tmp_path)
+    installables = svc.installs()
+    assert len(installables) == 4
+    assert all(isinstance(i, DockerImageInstall) for i in installables)
+    typed_installables = cast(list[DockerImageInstall], installables)
+    refs = {i.image_ref for i in typed_installables}
+    assert refs == {
+        "ghcr.io/immich-app/immich-server:v3",
+        "ghcr.io/immich-app/immich-machine-learning:v3",
+        "valkey/valkey:9",
+        "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0",
+    }
+    for i in typed_installables:
+        assert i.installed_version() in (None, i.image_ref.split(":", 1)[1])
+
+
+def test_immich_options_have_configure_panel(tmp_path: Path) -> None:
+    """Immich declares an ``options:`` block so ``configure`` auto-includes (ADR-036)."""
+    ctx = service_ctx(tmp_path, name="immich")
+    svc = _load_immich(tmp_path)
+    assert svc.options.listen_port == 8104  # type: ignore[attr-defined]
+    # The vault option carries the media-vault marker; the loader resolves
+    # it against the context when the template is rendered.
+    assert svc.options.media_dir == Path("$media_vault_path")  # type: ignore[attr-defined]
+    assert f"{ctx.media_vault_path}:/external-library:ro" in svc._rendered_template()
+    assert svc.options.tz == "UTC"  # type: ignore[attr-defined]
+    assert svc.options.trusted_proxies == ""  # type: ignore[attr-defined]
+    assert svc.options.db_name == "immich"  # type: ignore[attr-defined]
+    assert svc.options.db_user == "postgres"  # type: ignore[attr-defined]
+    assert svc.options.db_password == "changeme"  # type: ignore[attr-defined]
+    assert "configure" in svc.ui_panels
+
+
+def test_immich_is_available_reflects_the_four_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """is_available() reflects whether all images in the compose file are present."""
+    monkeypatch.setattr(
+        "genesis_worker.utils.process.docker.DockerContainer.image_present",
+        staticmethod(lambda image: True),
+    )
+    assert _load_immich(tmp_path).is_available() is True
+
+    monkeypatch.setattr(
+        "genesis_worker.utils.process.docker.DockerContainer.image_present",
+        staticmethod(lambda image: False),
+    )
+    assert _load_immich(tmp_path).is_available() is False
 
 
 # --- the compose load-time guard (ADR-049) ---------------------------------

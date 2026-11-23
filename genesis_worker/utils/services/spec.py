@@ -266,6 +266,11 @@ class AuthSpec(BaseModel):
     validates the spec (ADR-036). The docker config builder then
     coerces these to the right shape (``bool`` for ``enabled``,
     ``str | None`` for ``fallback``).
+
+    The block describes an *operator secret* (ADR-052), not necessarily
+    an HTTP credential: ``label`` and ``usage`` are the wording the
+    status page shows for it. Both default to empty, which means
+    "keep the framework's current wording".
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -276,6 +281,8 @@ class AuthSpec(BaseModel):
     token_file_mode: str = "0o600"
     token_generator: str = "random_hex_32"
     fallback_option: Any | None = None
+    label: str = ""
+    usage: str = ""
 
 
 class UiSpec(BaseModel):

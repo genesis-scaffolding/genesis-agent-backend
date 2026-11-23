@@ -544,6 +544,8 @@ def _build_docker_config(
             token_file=Path(auth["token_file"]),
             token_file_mode=_spec_module._parse_mode(auth["token_file_mode"]),
             token_generator=auth["token_generator"],
+            label=auth.get("label") or "",
+            usage=auth.get("usage") or "",
         )
 
     container = resolved["container"]

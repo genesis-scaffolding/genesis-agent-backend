@@ -496,6 +496,21 @@ def test_auth_disabled_when_no_auth_config(tmp_path: Path) -> None:
     assert svc.auth_enabled() is False
 
 
+def test_auth_config_returns_the_declared_block(tmp_path: Path) -> None:
+    """``auth_config()`` hands the block to the status panel (ADR-052)."""
+    svc = _service(tmp_path, auth=_auth_config(tmp_path))
+    cfg = svc.auth_config()
+    assert cfg is not None
+    assert cfg.token_env_var == "API_TOKEN"
+    assert cfg.label == ""
+    assert cfg.usage == ""
+
+
+def test_auth_config_is_none_without_auth_block(tmp_path: Path) -> None:
+    svc = _service(tmp_path)
+    assert svc.auth_config() is None
+
+
 def test_start_injects_token_env_var(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(DockerContainer, "image_present", staticmethod(lambda image: True))
     captured: dict = {}

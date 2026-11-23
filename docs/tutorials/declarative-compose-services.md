@@ -119,7 +119,8 @@ button depends on.
 
 The Status page's **Install** button installs *the service* — every image
 the stack needs, not just the first one (ADR-049). For a two-image stack
-like ROMM that means two pulls; for paperless-ngx, three.
+like ROMM that means two pulls; for paperless-ngx, three; for immich,
+four.
 
 The install is a single session: the images are pulled in order, each
 one at its recorded version when the operator has pinned one on the

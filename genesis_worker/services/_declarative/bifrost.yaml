@@ -5,6 +5,21 @@
 # Persists ``config.json``, ``config.db``, and ``logs.db`` under
 # ``$data_dir/data`` so configuration and request logs survive container
 # restarts. See https://docs.getbifrost.ai/quickstart/gateway/setting-up.
+#
+# SETUP TOKEN
+#
+# Bifrost v2 refuses to create the first admin account unless a setup
+# token is configured on the server, so a fresh container comes up with
+# "No setup token is configured on this server, so setup cannot continue
+# yet." The token is generated once, persisted under ``$state_dir`` with
+# mode 0o600, injected as ``BIFROST_SETUP_TOKEN`` and shown on the status
+# page with a copy button. The operator pastes it into Bifrost's
+# *Workspace -> Config -> Security -> Setup token* field while creating
+# the admin account; the token stops mattering once that account exists.
+#
+# The orchestrator's config body must not carry a ``setup_token`` key:
+# ``config.json`` belongs to the materialisation hook below, and the env
+# var is the only place the worker writes the secret.
 
 version: 1
 kind: docker
@@ -63,10 +78,36 @@ volumes:
 # ``$data_dir/data`` on the host. bifrost reads ``config.json`` on
 # container start.
 pre_start_hooks:
+  - kind: ensure_persistent_token
+    target: "$state_dir/setup_token"
+    mode: "0o600"
+    generator: random_hex_32
   - kind: materialize_orchestrator_config
     target: "$data_dir/data/config.json"
 
+# The operator secret (ADR-052): bifrost's setup token. The block owns
+# ``BIFROST_SETUP_TOKEN`` — ``start()`` injects it, so it is not
+# declared in ``env:`` as well.
+auth:
+  token_env_var: BIFROST_SETUP_TOKEN
+  token_file: "$state_dir/setup_token"
+  token_file_mode: "0o600"
+  token_generator: random_hex_32
+  fallback_option: "$options.setup_token"
+  label: "Setup token"
+  usage: "Paste into Bifrost's Workspace → Config → Security → Setup token field (the container reads it from BIFROST_SETUP_TOKEN)."
+
+ui:
+  status_panels:
+    - auth_token
+
 options:
+  setup_token:
+    type: string
+    optional: true
+    default: null
+    ui_group: Security
+    ui_help: Leave blank to use the generated token in the state file.
   log_level:
     type: string
     default: "info"
