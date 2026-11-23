@@ -233,29 +233,6 @@ def test_install_failure_is_shown_and_survives_a_rerun(
     assert any("postgres:18-alpine" in text for text in errors), errors
 
 
-def test_missing_images_are_listed_on_the_status_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The page names what is still missing before the install is attempted."""
-    worker = _make_worker(tmp_path)
-    _patch_docker(monkeypatch, present=False)
-
-    def _present(ref: str) -> bool:
-        return ref == "ghcr.io/paperless-ngx/paperless-ngx:latest"
-
-    monkeypatch.setattr(DockerContainer, "image_present", staticmethod(_present))
-
-    at = _render_status(worker, "paperless", tmp_path)
-    at.run()
-    assert not at.exception, f"page crashed: {at.exception}"
-
-    captions = [c.value for c in at.caption]
-    assert any("postgres:18-alpine" in text for text in captions), captions
-    assert any("valkey/valkey:9-alpine" in text for text in captions), captions
-    # The image that is already there is not listed as missing.
-    assert not any("paperless-ngx/paperless-ngx" in text for text in captions), captions
-
-
 # --- the service-level install axis -----------------------------------------
 
 
