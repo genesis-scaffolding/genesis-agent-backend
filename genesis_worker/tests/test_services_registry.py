@@ -56,6 +56,7 @@ def test_registry_all_returns_every_service() -> None:
         "freshrss",
         "genesis-productivity",
         "genesis-agent-context",
+        "immich",
         "kavita",
         "llama_swap",
         "ntfy",
