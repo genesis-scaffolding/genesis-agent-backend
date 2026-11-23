@@ -165,6 +165,24 @@ def test_registry_scopes_paths_by_dir_name() -> None:
     assert svc.config_path == Path("/d/llama-swap/config.yaml")
 
 
+def test_registry_carries_the_base_domain_into_the_declarative_service(tmp_path: Path) -> None:
+    """``Settings.base_domain`` reaches the declarative loader (ADR-056)."""
+    import yaml
+
+    from genesis_worker.utils.services import ComposeService
+
+    s = Settings(
+        paths=PathsSettings(state_dir=tmp_path / "state"),
+        base_domain="cluster.example.com",
+    )
+    svc = ServiceRegistry(s, adopt_published_ports=False).get("genesis-productivity")
+    assert isinstance(svc, ComposeService)
+    template = yaml.safe_load(svc.config.compose_template)
+    assert template["services"]["app"]["environment"]["GENESIS__NTFY__URL"] == (
+        "https://ntfy.cluster.example.com"
+    )
+
+
 # ---------------------------------------------------------------------------
 # LlamaSwapService surface
 # ---------------------------------------------------------------------------

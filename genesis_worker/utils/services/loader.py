@@ -7,7 +7,8 @@ returns a fully-constructed :class:`InferenceService`. Steps:
 2. Validate against the discriminated union on ``kind``.
 3. Build the runtime options pydantic model from the YAML's ``options:`` block.
 4. Resolve placeholder strings (``$state_dir``, ``$data_dir``, ``$vault_path``,
-   ``$options.X``, ``$auth.token``) against the resolved :class:`ServiceContext`.
+   ``$hostname``, ``$base_domain``, ``$options.X``, ``$auth.token``) against
+   the resolved :class:`ServiceContext`.
 5. Construct the matching ``DockerServiceConfig`` or ``UvServiceConfig``.
 6. Instantiate ``DockerService`` or ``UvService``.
 
@@ -52,6 +53,27 @@ _PLACEHOLDER_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z_][a-zA-Z0-
 _AUTO_PORT_IN_TEXT_RE = re.compile(r"\$auto_port\.([a-zA-Z0-9_-]+)")
 _IMAGE_MARKER_RE = re.compile(r"\$images\.([a-zA-Z0-9_-]+)")
 _COMPOSE_IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s]+)['\"]?", re.MULTILINE)
+
+# The host the worker falls back to when its own hostname cannot be
+# sanitised into anything usable.
+_FALLBACK_HOSTNAME = "localhost"
+
+# The domain a rendered URL carries when the cluster has no base domain.
+# A visibly wrong host beats a silently wrong one (ADR-056).
+_FALLBACK_BASE_DOMAIN = "no-base-domain"
+
+
+def _safe_hostname(raw: str) -> str:
+    """The host's first hostname label, lowercased and sanitised.
+
+    The same policy as ``_safe_hostname()`` in ``genesis-productivity``
+    (ADR-027 there): the first dot-separated label, lowercased, every
+    character outside ``[a-z0-9-]`` replaced by ``-``, leading and
+    trailing ``-`` trimmed. ``localhost`` when nothing usable is left.
+    """
+    first = raw.split(".", 1)[0].lower()
+    cleaned = re.sub(r"[^a-z0-9-]", "-", first).strip("-")
+    return cleaned or _FALLBACK_HOSTNAME
 
 
 @dataclass(frozen=True)
@@ -486,6 +508,10 @@ def _resolve_placeholder(
         return ctx.cache_dir
     if key == "config_dir":
         return ctx.config_dir
+    if key == "hostname":
+        return _safe_hostname(ctx.host_info.hostname)
+    if key == "base_domain":
+        return (ctx.base_domain or "").strip() or _FALLBACK_BASE_DOMAIN
     if key.startswith("options."):
         return options.get(key.split(".", 1)[1])
     # Image markers ($images.<name>) resolve when the caller supplies

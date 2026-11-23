@@ -30,6 +30,7 @@ from genesis_worker.contracts import (
     ServiceCategory,
     ServiceResourceEstimate,
 )
+from genesis_worker.contracts.host import HostInfo
 from genesis_worker.registries import ServiceRegistry
 from genesis_worker.sources.huggingface import HuggingFaceSource
 from genesis_worker.tests._factories import service_ctx, source_ctx
@@ -2093,6 +2094,57 @@ def test_genesis_productivity_declares_its_ports_and_canonical_name(tmp_path: Pa
     ]
     # The allocator keeps off both fixed ports.
     assert svc.declared_host_ports() == (3000, 8765)
+
+
+# --- the productivity container's identity (ADR-056) ------------------------
+
+
+def _productivity_template(tmp_path: Path, *, base_domain: str | None) -> dict:
+    """The rendered compose template of the productivity stack."""
+    svc = load_service_spec(
+        _DECLARATIVE_DIR / "genesis-productivity.yaml",
+        ctx=service_ctx(
+            tmp_path,
+            name="genesis-productivity",
+            base_domain=base_domain,
+            host_info=HostInfo(
+                hostname="p3.local",
+                os="Linux",
+                arch="x86_64",
+                python="3.11.7",
+                uptime_s=None,
+                public_ip=None,
+                tailscale_ip=None,
+            ),
+        ),
+    )
+    assert isinstance(svc, ComposeService)
+    document = yaml.safe_load(svc.config.compose_template)
+    assert isinstance(document, dict)
+    return cast(dict, document)
+
+
+def test_genesis_productivity_container_carries_the_host_name(tmp_path: Path) -> None:
+    """The container's hostname is the worker's — a stable ntfy topic (ADR-056)."""
+    document = _productivity_template(tmp_path, base_domain="cluster.example.com")
+    app = document["services"]["app"]
+    assert app["hostname"] == "p3"
+
+
+def test_genesis_productivity_ntfy_url_follows_the_base_domain(tmp_path: Path) -> None:
+    """The ntfy URL points at the cluster's ntfy server."""
+    document = _productivity_template(tmp_path, base_domain="cluster.example.com")
+    app = document["services"]["app"]
+    assert app["environment"]["GENESIS__NTFY__URL"] == "https://ntfy.cluster.example.com"
+
+
+def test_genesis_productivity_ntfy_url_falls_back_when_the_domain_is_unset(
+    tmp_path: Path,
+) -> None:
+    """No base domain — a visibly wrong URL rather than a wrong host (ADR-056)."""
+    document = _productivity_template(tmp_path, base_domain=None)
+    app = document["services"]["app"]
+    assert app["environment"]["GENESIS__NTFY__URL"] == "https://ntfy.no-base-domain"
 
 
 def test_genesis_agent_context_declares_its_ports_and_canonical_name(tmp_path: Path) -> None:

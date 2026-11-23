@@ -214,6 +214,28 @@ XDG base directories come from the framework's settings (`Settings.paths.*`)
 which the registry populates per-service when it walks the YAMLs. None of these
 paths are framework magic — they're the same paths the Python plugins get.
 
+### Host and domain placeholders
+
+| Placeholder | Resolves to | Example (in a YAML) |
+|---|---|---|
+| `$hostname` | the worker host's sanitised hostname | `hostname: "$hostname"` |
+| `$base_domain` | the cluster's public base domain | `URL: "https://ntfy.$base_domain"` |
+
+**`$hostname`** is the worker's own host name — the node knows it, so
+nothing seeds it. The loader takes the first dot-separated label,
+lowercases it, replaces every character outside `[a-z0-9-]` with `-`, and
+trims the `-`s. `Alpha.Example.com` becomes `alpha`; an empty or
+unsanitizable name becomes `localhost`. The policy is the one
+`genesis-productivity` uses for its default ntfy topic, so a containerised
+service and a host install derive the same topic.
+
+**`$base_domain`** comes from the worker's `GENESIS__BASE_DOMAIN`
+environment key (`Settings.base_domain`). The cluster's orchestrator seeds
+it from the fleet's ingress domain; the key is optional. When it is unset
+or blank, `$base_domain` resolves to `no-base-domain` — so a rendered URL
+reads `https://ntfy.no-base-domain`, visibly wrong, instead of silently
+naming an unrelated host.
+
 ### Option placeholders (`$options.<name>`)
 
 ```yaml

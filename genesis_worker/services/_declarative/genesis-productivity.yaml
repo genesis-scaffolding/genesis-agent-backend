@@ -24,6 +24,11 @@
 # server on 8765. Clients hard-code them (the genesis CLI token stores in
 # two working directories point at http://p3:8765; the UI is bookmarked at
 # :3000), so the framework must not be free to move them. ADR-045.
+#
+# The container's hostname is the worker host's ($hostname) and its ntfy
+# URL points at the cluster's ntfy server ($base_domain), so the app's
+# default topic and its push target stay stable across container
+# recreations (ADR-056).
 
 version: 1
 kind: compose
@@ -85,6 +90,10 @@ compose_template: |
     app:
       image: $images.app
       container_name: genesis-productivity
+      # The container's hostname is the worker host's, so the app's
+      # default ntfy topic (genesis-<hostname>-<user>) survives a
+      # container recreation (ADR-056).
+      hostname: "$hostname"
       restart: unless-stopped
       ports:
         - "$options.listen_host:$options.listen_port:3000"   # Streamlit UI
@@ -97,6 +106,10 @@ compose_template: |
         # a runtime concern).
         PUID: "$options.puid"
         PGID: "$options.pgid"
+        # The cluster's ntfy server. An unset base domain renders
+        # https://ntfy.no-base-domain -- visibly wrong rather than
+        # silently pointing at an unrelated host (ADR-056).
+        GENESIS__NTFY__URL: "https://ntfy.$base_domain"
       volumes:
         # The app's four XDG roots, mapped onto the worker's per-service
         # pre-prepared directories (created by the framework pre-start).

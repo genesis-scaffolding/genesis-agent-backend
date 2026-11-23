@@ -60,6 +60,7 @@ def service_ctx(
     secrets: SecretsAccessor | None = None,
     host_info: HostInfo | None = None,
     port_allocator: PortAllocator | None = None,
+    base_domain: str | None = None,
 ) -> ServiceContext:
     return ServiceContext(
         name=name,
@@ -70,6 +71,7 @@ def service_ctx(
         host_info=host_info if host_info is not None else HostInfo.empty(),
         secrets=secrets if secrets is not None else NoSecretsAccessor(),
         port_allocator=port_allocator,
+        base_domain=base_domain,
         **_dirs(root),
     )
 
