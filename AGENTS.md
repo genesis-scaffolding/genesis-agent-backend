@@ -98,6 +98,8 @@ ship. The full how-to is in
 use `kind: compose` with the same one-file approach; see
 [`docs/tutorials/declarative-compose-services.md`](docs/tutorials/declarative-compose-services.md)
 for the `images:` block and the two-phase `$images` placeholder resolution.
+A service that publishes more than one port declares a `ports:` block — see
+the *Declared ports* section of the declarative-services tutorial.
 Drop into Python (subclass `DockerService` or `UvService`) only when the
 YAML can't express what you need: post-install file patches, custom
 installables, `build:`-based stacks, dynamic port discovery. The tutorials
